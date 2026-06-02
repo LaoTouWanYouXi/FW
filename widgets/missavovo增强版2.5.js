@@ -728,34 +728,127 @@ function buildListUrl(endpoint, page = 1, filters = "", sort_by = "") {
 }
 
 
-function buildJavTrailersUrl(title) {
-    const code = buildJavTrailersId(title);
-    if (!code) return "";
-    const first = code[0];
-    const folder = code.slice(0, 3);
-    return `https://media.javtrailers.com/hlsvideo/freepv/${first}/${folder}/${code}/${code}mmb.m3u8`;
+const JAVTRAILERS_URL_CACHE = {};
+const JAVTRAILERS_URL_PROMISE_CACHE = {};
+const JAVTRAILERS_FETCH_TIMEOUT_MS = 1200;
+const JAVTRAILERS_MGSTAGE_PREFIXES = new Set(["ABF", "ABW", "JUFE", "MAAN", "PPT", "SIRO", "LUXU", "GANA"]);
+
+function parseJavCodeParts(title) {
+    const raw = String(title || "").toUpperCase();
+    const match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
+    if (!match) return null;
+    return {
+        prefix: match[1],
+        prefixLower: match[1].toLowerCase(),
+        number: match[2],
+        number3: match[2].padStart(3, "0"),
+        number5: match[2].padStart(5, "0"),
+        code: `${match[1].toLowerCase()}${match[2].padStart(5, "0")}`
+    };
+}
+
+function buildJavTrailersFallbackUrl(title) {
+    const parts = parseJavCodeParts(title);
+    if (!parts) return "";
+    const first = parts.code[0];
+    const folder = parts.code.slice(0, 3);
+    return `https://media.javtrailers.com/hlsvideo/freepv/${first}/${folder}/${parts.code}/playlist.m3u8`;
+}
+
+function isJavTrailersMgstageTitle(title) {
+    const parts = parseJavCodeParts(title);
+    return !!parts && JAVTRAILERS_MGSTAGE_PREFIXES.has(parts.prefix);
+}
+
+function shouldFetchJavTrailersPage(title) {
+    const parts = parseJavCodeParts(title);
+    if (!parts) return false;
+    return isJavTrailersMgstageTitle(title) || parts.prefix.includes("VR");
+}
+
+function buildJavTrailersPageIds(title) {
+    const parts = parseJavCodeParts(title);
+    if (!parts) return [];
+
+    const ids = [];
+    if (JAVTRAILERS_MGSTAGE_PREFIXES.has(parts.prefix)) {
+        ids.push(`118${parts.prefixLower}${parts.number5}`);
+    }
+    ids.push(parts.code);
+
+    return ids.filter((id, index, arr) => id && arr.indexOf(id) === index);
+}
+
+function extractJavTrailersMediaUrl(html) {
+    if (!html || html.includes("Just a moment")) return "";
+    const source = String(html);
+    const mediaMatches = source.match(/https:\/\/media\.javtrailers\.com\/[^"'\\\s<]+?(?:\.m3u8|\.mp4)/g);
+    if (mediaMatches && mediaMatches.length > 0) return mediaMatches[0];
+    const mgstageMatches = source.match(/https:\/\/sample\.mgstage\.com\/[^"'\\\s<]+?\.mp4/g);
+    if (mgstageMatches && mgstageMatches.length > 0) return mgstageMatches[0];
+    const dmmMatches = source.match(/https:\/\/cc3001\.dmm\.co\.jp\/[^"'\\\s<]+?(?:\.m3u8|\.mp4)/g);
+    return dmmMatches && dmmMatches.length > 0 ? dmmMatches[0] : "";
+}
+
+function fetchJavTrailersPageUrl(pageId) {
+    return Widget.http.get(`https://javtrailers.com/video/${pageId}`, { headers: HEADERS })
+        .then((res) => extractJavTrailersMediaUrl(res.data))
+        .catch(() => "");
+}
+
+async function buildJavTrailersUrl(title) {
+    const parts = parseJavCodeParts(title);
+    if (!parts) return "";
+    if (Object.prototype.hasOwnProperty.call(JAVTRAILERS_URL_CACHE, parts.code)) return JAVTRAILERS_URL_CACHE[parts.code];
+
+    const fallbackUrl = buildJavTrailersFallbackUrl(title);
+    const isMgstage = isJavTrailersMgstageTitle(title);
+    if (!shouldFetchJavTrailersPage(title)) {
+        JAVTRAILERS_URL_CACHE[parts.code] = fallbackUrl;
+        return fallbackUrl;
+    }
+
+    if (!JAVTRAILERS_URL_PROMISE_CACHE[parts.code]) {
+        const pageIds = buildJavTrailersPageIds(title);
+        JAVTRAILERS_URL_PROMISE_CACHE[parts.code] = Promise.all(pageIds.map((pageId) => fetchJavTrailersPageUrl(pageId)))
+            .then((urls) => urls.find(Boolean) || (isMgstage ? "" : fallbackUrl))
+            .then((url) => {
+                if (url || !isMgstage) JAVTRAILERS_URL_CACHE[parts.code] = url;
+                return url;
+            });
+    }
+
+    try {
+        if (isMgstage) return await JAVTRAILERS_URL_PROMISE_CACHE[parts.code];
+        return await Promise.race([
+            JAVTRAILERS_URL_PROMISE_CACHE[parts.code],
+            new Promise((resolve) => setTimeout(() => resolve(fallbackUrl), JAVTRAILERS_FETCH_TIMEOUT_MS))
+        ]);
+    } catch (e) {
+        return isMgstage ? "" : fallbackUrl;
+    }
 }
 
 function buildTrailerCoverUrl(title) {
-    const raw = String(title || "").toUpperCase();
-    const match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
-    if (!match) return "";
+    const parts = parseJavCodeParts(title);
+    if (!parts) return "";
 
-    const prefix = match[1].toLowerCase();
-    const number = match[2].padStart(3, "0");
-    const code = `${prefix}${match[2].padStart(5, "0")}`;
-
-    const mgstagePrefixes = new Set(["ABF", "ABW", "IPX", "JUFE", "MEYD", "SSNI", "STARS", "PPPD", "WANZ", "EBOD", "JUL", "SHKD", "MIDE", "S1", "SQTE", "SNOS", "OFJE"]);
-    if (mgstagePrefixes.has(match[1])) {
-        return `https://image.mgstage.com/images/prestige/${prefix}/${number}/pb_e_${prefix}-${number}.jpg`;
+    const mgstageCoverPrefixes = new Set(["ABF", "ABW", "IPX", "JUFE", "MEYD", "SSNI", "STARS", "PPPD", "WANZ", "EBOD", "JUL", "SHKD", "MIDE", "S1", "SQTE", "SNOS", "OFJE"]);
+    if (mgstageCoverPrefixes.has(parts.prefix)) {
+        return `https://image.mgstage.com/images/prestige/${parts.prefixLower}/${parts.number3}/pb_e_${parts.prefixLower}-${parts.number3}.jpg`;
     }
 
-    return `https://pics.dmm.co.jp/digital/video/${code}/${code}pl.jpg`;
+    return `https://pics.dmm.co.jp/digital/video/${parts.code}/${parts.code}pl.jpg`;
 }
 
 function extractVideoId(href) {
     const slug = href.split('/').pop() || "";
     return slug.replace(/-(uncensored-leak|chinese-subtitle)$/, "").toUpperCase();
+}
+
+function buildMissavListCoverUrl(link) {
+    const videoId = extractVideoId(link || "");
+    return videoId ? `https://fourhoi.com/${videoId.toLowerCase()}/cover-t.jpg` : "";
 }
 
 function resolveUrl(path) {
@@ -1060,11 +1153,19 @@ async function loadDetail(link) {
         }
 
         const trailerTitle = title || $('meta[property="og:title"]').attr('content') || "";
-        const trailerUrl = buildJavTrailersUrl(trailerTitle);
+        const trailerUrl = await buildJavTrailersUrl(trailerTitle);
+        const missavListCoverUrl = buildMissavListCoverUrl(link);
+        const officialTrailerCoverUrl = buildTrailerCoverUrl(trailerTitle);
+        const trailerCoverUrl = missavListCoverUrl || officialTrailerCoverUrl;
         const trailers = [];
         if (trailerUrl) {
             trailers.push({
-                coverUrl: buildTrailerCoverUrl(trailerTitle),
+                coverUrl: trailerCoverUrl,
+                posterPath: trailerCoverUrl,
+                backdropPath: trailerCoverUrl,
+                image: trailerCoverUrl,
+                thumbnail: trailerCoverUrl,
+                officialCoverUrl: officialTrailerCoverUrl,
                 url: trailerUrl
             });
         }
