@@ -205,7 +205,7 @@ async function search(params = {}) {
   return items;
 }
 
-// ==================== 详情页（重点修复视频地址）===================
+// ==================== 详情页 - 重点优化视频地址获取 ====================
 async function loadDetail(link) {
   try {
     const html = await fetchPage(link);
@@ -213,63 +213,66 @@ async function loadDetail(link) {
 
     let playUrl = "";
 
-    // 方案1：原始 player_aaaa 方式（加强容错）
-    let playerScript = $('script:contains(player_aaaa)').text() || 
-                       $('script').text().match(/player_aaaa[\s\S]*?}/)?.[0] || "";
+    // 核心优化：更鲁棒地提取 player_aaaa
+    let playerText = "";
+    
+    // 方法1：精确匹配
+    const scriptMatch = html.match(/var\s+player_aaaa\s*=\s*(\{[\s\S]*?\});?/i);
+    if (scriptMatch && scriptMatch[1]) {
+      playerText = scriptMatch[1];
+    } 
+    // 方法2：包含关键字搜索
+    else {
+      playerText = $('script:contains(player_aaaa)').text()
+                    .replace('var player_aaaa=', '')
+                    .trim();
+    }
 
-    if (playerScript) {
+    if (playerText) {
       try {
-        // 清理并提取 JSON
-        let cleanStr = playerScript.replace('var player_aaaa=', '')
-                                  .replace(/;$/,'')
-                                  .trim();
-        
-        const playerData = JSON.parse(cleanStr);
-        
+        // 清理字符串并解析 JSON
+        let cleanJson = playerText.replace(/;+$/, '').trim();
+        const playerData = JSON.parse(cleanJson);
+
         if (playerData.url) {
-          // 常见解码流程：Base64 → URL解码
-          let decoded = atob(playerData.url);
-          playUrl = decodeURIComponent(decoded);
+          let encoded = playerData.url;
           
-          // 如果还有额外编码，再尝试一次
+          // 常见解码流程
+          let decoded = atob(encoded);                    // Base64 解码
+          playUrl = decodeURIComponent(decoded);          // URL 解码
+
+          // 部分站点可能有多重编码
           if (playUrl.includes('%')) {
             playUrl = decodeURIComponent(playUrl);
           }
+
+          console.log("✅ 成功提取真实播放地址:", playUrl.substring(0, 100) + "...");
         }
-      } catch (e) {
-        console.error("player_aaaa 解析失败:", e);
+      } catch (parseErr) {
+        console.error("JSON 解析失败:", parseErr);
       }
     }
 
-    // 方案2：备用 - 直接搜索页面中的 m3u8 / mp4 链接
+    // 备用方案：直接搜索页面中的 m3u8 / mp4 链接
     if (!playUrl) {
-      const urlMatch = html.match(/(https?:\/\/[^\s'"]+\.(m3u8|mp4)[^\s'"]*)/i);
-      if (urlMatch) {
-        playUrl = urlMatch[1];
+      const directMatch = html.match(/(https?:\/\/[^\s'"]+\.(m3u8|mp4)([^\s'"]*))/i);
+      if (directMatch) {
+        playUrl = directMatch[1];
+        console.log("✅ 使用备用直链:", playUrl);
       }
     }
 
-    // 方案3：查找 video 标签 src
-    if (!playUrl) {
-      const videoSrc = $('video source, video').attr('src') || 
-                       html.match(/src=["'](.*?\.(m3u8|mp4))["']/i);
-      if (videoSrc) {
-        playUrl = typeof videoSrc === 'string' ? videoSrc : videoSrc[1];
-      }
-    }
+    // 海报图和预告片
+    const poster = $('meta[property="og:image"]').attr('content') ||
+                   $('.entry-content img, .featured-image img').first().attr('src');
 
-    // 海报图 & 预告片
-    let poster = $('meta[property="og:image"]').attr('content') ||
-                 $('.entry-content img, .featured-image img').first().attr('src');
-
-    let previewUrl = $('video').attr('src') || "";
-
-    console.log("提取到的播放地址:", playUrl ? "成功" : "失败");
+    const previewUrl = $('video').attr('src') || "";
 
     return {
       id: link,
       type: "detail",
       videoUrl: playUrl,
+      playerType: "forward",
       customHeaders: {
         'User-Agent': UA,
         'Referer': BASE_URL + '/',
@@ -277,14 +280,15 @@ async function loadDetail(link) {
       },
       backdropPath: poster,
       previewUrl: previewUrl,
-      description: playUrl ? "播放地址获取成功" : "⚠️ 播放地址获取失败，请反馈"
+      description: playUrl ? "✅ 播放地址获取成功" : "❌ 未能获取播放地址"
     };
   } catch (e) {
-    console.error("loadDetail 错误:", e.message);
+    console.error("loadDetail 异常:", e.message);
     return {
       id: link,
       type: "detail",
       videoUrl: "",
+      playerType: "forward",
       description: "加载失败: " + e.message
     };
   }
