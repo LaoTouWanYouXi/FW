@@ -6,7 +6,7 @@ WidgetMetadata = {
   description: "中文字幕 | 日韩有码 | 无码 | 国产AV | 探花等 | 支持Forward播放器",
   author: "夢｜Grok适配",
   site: "https://kanav.info",
-  version: "1.1.3",
+  version: "1.1.4",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -205,79 +205,83 @@ async function search(params = {}) {
   return items;
 }
 
-// ==================== 详情页 - 最终强化版 ====================
 async function loadDetail(link) {
   try {
-    console.log("正在获取详情页:", link);
+    console.log("详情页:", link);
     const html = await fetchPage(link);
     const $ = Widget.html.load(html);
 
     let playUrl = "";
 
-    // 方案1：最强正则 - 匹配所有可能的 player_aaaa 定义
-    const playerRegex = /player_aaaa\s*[=:]\s*(\{[\s\S]*?["']?url["']?\s*:\s*["']([^"']+)["'][^}]*\})/i;
-    const match = html.match(playerRegex);
+    // ====================
+    // ✅ Step1：优先找 iframe
+    // ====================
+    let iframeSrc = $('iframe').attr('src');
 
-    if (match && match[2]) {
-      let encoded = match[2];
-      try {
-        // Base64 解码
-        let decoded = atob(encoded);
-        playUrl = decodeURIComponent(decoded);
-        
-        if (playUrl.includes('%')) {
-          playUrl = decodeURIComponent(playUrl);
+    if (iframeSrc) {
+      if (!iframeSrc.startsWith('http')) {
+        iframeSrc = BASE_URL + iframeSrc;
+      }
+
+      console.log("发现 iframe:", iframeSrc);
+
+      const iframeHtml = await fetchPage(iframeSrc);
+
+      // ====================
+      // ✅ Step2：在 iframe 页面找 m3u8
+      // ====================
+      const m3u8Regex = /(https?:\/\/[^\s'"<>]+\.m3u8[^\s'"<>]*)/i;
+      const m3u8Match = iframeHtml.match(m3u8Regex);
+
+      if (m3u8Match) {
+        playUrl = m3u8Match[1];
+        console.log("✅ iframe解析成功");
+      }
+
+      // ====================
+      // ✅ Step3：解析 js 变量
+      // ====================
+      if (!playUrl) {
+        const jsMatch = iframeHtml.match(/var\s+urls?\s*=\s*["']([^"']+)["']/i);
+        if (jsMatch) {
+          playUrl = jsMatch[1];
         }
-        console.log("✅ 正则匹配成功");
-      } catch (e) {
-        console.error("Base64解码失败", e);
       }
     }
 
-    // 方案2：全局搜索 m3u8 / mp4 真实链接（最可靠备用）
+    // ====================
+    // ✅ Step4：备用（全局扫描）
+    // ====================
     if (!playUrl) {
-      const urlRegex = /(https?:\/\/[^\s'"<>]+\.(m3u8|mp4)[^\s'"<>]*)/gi;
-      const allMatches = html.match(urlRegex);
-      
-      if (allMatches && allMatches.length > 0) {
-        // 优先选择 m3u8
-        playUrl = allMatches.find(u => u.includes('m3u8')) || allMatches[0];
-        console.log("✅ 全局链接匹配成功:", playUrl);
+      const all = html.match(/https?:\/\/[^\s'"<>]+\.(m3u8|mp4)[^\s'"<>]*/gi);
+      if (all) {
+        playUrl = all.find(u => u.includes('m3u8')) || all[0];
+        console.log("✅ 全局匹配成功");
       }
     }
 
-    // 方案3：查找 video 标签
-    if (!playUrl) {
-      const videoSrc = $('video source').attr('src') || $('video').attr('src');
-      if (videoSrc && !videoSrc.startsWith('blob:')) {
-        playUrl = videoSrc;
-      }
-    }
-
-    // 海报图
+    // ====================
+    // ✅ Step5：poster
+    // ====================
     const poster = $('meta[property="og:image"]').attr('content') ||
-                   $('img[data-original], .entry-content img').first().attr('src');
+                   $('img').first().attr('src');
 
-    const result = {
+    return {
       id: link,
       type: "detail",
       videoUrl: playUrl,
       playerType: "forward",
       customHeaders: {
         'User-Agent': UA,
-        'Referer': BASE_URL + '/',
+        'Referer': BASE_URL,
         'Origin': BASE_URL
       },
       backdropPath: poster,
-      previewUrl: "",
-      description: playUrl ? "✅ 播放地址获取成功" : "❌ 仍未能获取（请提供视频链接）"
+      description: playUrl ? "✅ 成功" : "❌ 未获取"
     };
 
-    console.log("最终 videoUrl:", playUrl ? playUrl.substring(0, 100) + "..." : "空");
-    return result;
-
   } catch (e) {
-    console.error("loadDetail 异常:", e.message);
+    console.error("错误:", e.message);
     return {
       id: link,
       type: "detail",
