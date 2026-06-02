@@ -6,7 +6,7 @@ WidgetMetadata = {
   description: "中文字幕 | 日韩有码 | 无码 | 国产AV | 探花等 | 支持Forward播放器",
   author: "夢｜Grok适配",
   site: "https://kanav.info",
-  version: "1.1.11",
+  version: "1.1.12",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -215,61 +215,20 @@ async function search(params = {}) {
 async function loadDetail(link) {
   try {
     const html = await fetchPage(link);
-    const $ = Widget.html.load(html);
 
-    let playUrl = "";
+    // 🔥 直接正则抓 m3u8
+    const match = html.match(/https?:\/\/[^'"]+\.m3u8[^'"]*/);
 
-    // ====================
-    // 🔥 1. 提取 video id
-    // ====================
-    const idMatch = link.match(/id\/(\d+)/);
-    const videoId = idMatch ? idMatch[1] : "";
+    const playUrl = match ? match[0] : "";
 
-    console.log("videoId:", videoId);
-
-    // ====================
-    // 🔥 2. 猜接口（常见套路）
-    // ====================
-    const apiList = [
-      `/api.php?id=${videoId}`,
-      `/index.php/ajax/player?id=${videoId}`,
-      `/player/api.php?id=${videoId}`,
-      `/index.php/vod/play/id/${videoId}.json`
-    ];
-
-    for (let api of apiList) {
-      try {
-        let url = BASE_URL + api;
-
-        const res = await Widget.http.get(url, {
-          headers: {
-            'User-Agent': UA,
-            'Referer': link
-          }
-        });
-
-        if (res.data.includes('m3u8')) {
-          const match = res.data.match(/https?:\/\/[^\s'"]+\.m3u8[^\s'"]*/);
-          if (match) {
-            playUrl = match[0];
-            console.log("✅ API命中:", url);
-            break;
-          }
-        }
-      } catch (e) {}
-    }
+    console.log("m3u8:", playUrl);
 
     return {
       id: link,
       type: "detail",
       videoUrl: playUrl,
       playerType: "system",
-      customHeaders: {
-                    "Referer": "https://kanav.info/",
-                    "User-Agent": HEADERS["User-Agent"],
-                    "Origin": "https://kanav.info"
-                },
-      description: playUrl ? "✅ 成功" : "❌ 需要抓包接口"
+      description: playUrl ? "✅ 抓取成功" : "❌ 页面未找到m3u8"
     };
 
   } catch (e) {
