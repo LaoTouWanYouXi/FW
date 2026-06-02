@@ -1276,45 +1276,194 @@ async function parseHtml(htmlContent) {
   return sections;
 }
 
+// ==================== 新增/修改函数 ====================
+
+async function search(params = {}) {
+  const keyword = encodeURIComponent(params.keyword || "");
+  let url = `https://jable.tv/search/${keyword}/?mode=async&function=get_block&block_id=list_videos_videos_list_search_result&q=${keyword}`;
+  
+  if (params.sort_by) url += `&sort_by=${params.sort_by}`;
+  if (params.from) url += `&from=${params.from}`;
+  
+  return await loadPage({ ...params, url });
+}
+
+async function loadPage(params = {}) {
+  const sections = await loadPageSections(params);
+  const items = sections.flatMap((section) => section.childItems);
+  return items;
+}
+
+async function loadPageSections(params = {}) {
+  try {
+    let url = params.url;
+    if (params.sort_by) url += `&sort_by=${params.sort_by}`;
+    if (params.from) url += `&from=${params.from}`;
+
+    const response = await Widget.http.get(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+      },
+    });
+
+    return parseHtml(response.data);
+  } catch (error) {
+    console.error("加载页面失败:", error.message);
+    throw error;
+  }
+}
+
+// 增强版解析（支持女优列表 + 视频列表）
+async function parseHtml(htmlContent) {
+  const $ = Widget.html.load(htmlContent);
+  const sections = [];
+
+  // 视频列表解析（原有逻辑增强）
+  const itemSelector = ".video-img-box, .model-item";
+  const items = [];
+
+  $(itemSelector).each((i, el) => {
+    const $el = $(el);
+    
+    // 视频
+    const titleEl = $el.find(".title a, .model-name a").first();
+    const title = titleEl.text().trim();
+    const link = titleEl.attr("href") || "";
+
+    if (!link) return;
+
+    const cover = $el.find("img").attr("data-src") || $el.find("img").attr("src");
+    const duration = $el.find(".label, .duration").first().text().trim();
+    const preview = $el.find("img").attr("data-preview");
+
+    const item = {
+      id: link,
+      type: link.includes("/models/") ? "actor" : "url",
+      title: title,
+      backdropPath: cover,
+      previewUrl: preview,
+      link: link,
+      mediaType: link.includes("/models/") ? "person" : "movie",
+      description: duration ? `时长: ${duration}` : "",
+      releaseDate: duration,
+      playerType: "system"
+    };
+    items.push(item);
+  });
+
+  if (items.length > 0) {
+    sections.push({
+      title: "结果",
+      childItems: items
+    });
+  }
+
+  return sections;
+}
+
+// ==================== 增强详情页（核心） ====================
 async function loadDetail(link) {
   const response = await Widget.http.get(link, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
       "Referer": "https://jable.tv/"
     },
   });
-  
-  // 优化了正则匹配，防止报错
-  let hlsUrl = "";
-  const match = response.data.match(/var\s+hlsUrl\s*=\s*['"](.*?)['"]/i);
-  if (match && match[1]) {
-    hlsUrl = match[1];
-  }
 
-  if (!hlsUrl) {
-    throw new Error("无法获取有效的播放地址，可能需要代理验证");
-  }
+  const html = response.data;
+  const $ = Widget.html.load(html);
+
+  // 提取 HLS 播放地址
+  let hlsUrl = "";
+  const hlsMatch = html.match(/var\s+hlsUrl\s*=\s*['"](.*?)['"]/i);
+  if (hlsMatch && hlsMatch[1]) hlsUrl = hlsMatch[1];
+
+  // 提取女优信息
+  const actorName = $(".model-name, .director-name, .title a[href*='/models/']").first().text().trim();
+  const actorLink = $(".model-name a, a[href*='/models/']").first().attr("href");
+
+  // 相关推荐 & 该女优其他作品
+  const relatedItems = [];
   
-  const $ = Widget.html.load(response.data);
-  let videoDuration = null;
-  const durationElements = $('.absolute-bottom-right .label, .duration, [class*="duration"]');
-  if (durationElements.length > 0) {
-    videoDuration = durationElements.first().text().trim();
-  }
-  
+  // 尝试查找相关推荐区块
+  $(".related-video, .video-list, .recommend, .more-from-model").find(".video-img-box").each((i, el) => {
+    if (relatedItems.length >= 12) return false; // 最多12个
+    const $el = $(el);
+    const title = $el.find(".title a").text().trim();
+    const url = $el.find(".title a").attr("href");
+    const cover = $el.find("img").attr("data-src");
+
+    if (url && title) {
+      relatedItems.push({
+        id: url,
+        type: "url",
+        title: title,
+        backdropPath: cover,
+        link: url,
+        mediaType: "movie"
+      });
+    }
+  });
+
   const item = {
     id: link,
     type: "detail",
     videoUrl: hlsUrl,
-    // 👉 核心修复：强制使用 ijk 播放器解决无声问题
-    playerType: "ijk", 
-    // 👉 核心修复：添加防盗链头部
+    playerType: "ijk",
     customHeaders: {
       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
       "Referer": link,
       "Origin": "https://jable.tv"
-    }
+    },
+    // 新增字段：演员信息和推荐
+    actor: actorName ? { name: actorName, link: actorLink } : null,
+    related: relatedItems.length > 0 ? relatedItems : null,
+    description: actorName ? `主演：${actorName}` : ""
   };
-  
+
   return item;
 }
+
+// async function loadDetail(link) {
+//   const response = await Widget.http.get(link, {
+//     headers: {
+//       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+//       "Referer": "https://jable.tv/"
+//     },
+//   });
+  
+//   // 优化了正则匹配，防止报错
+//   let hlsUrl = "";
+//   const match = response.data.match(/var\s+hlsUrl\s*=\s*['"](.*?)['"]/i);
+//   if (match && match[1]) {
+//     hlsUrl = match[1];
+//   }
+
+//   if (!hlsUrl) {
+//     throw new Error("无法获取有效的播放地址，可能需要代理验证");
+//   }
+  
+//   const $ = Widget.html.load(response.data);
+//   let videoDuration = null;
+//   const durationElements = $('.absolute-bottom-right .label, .duration, [class*="duration"]');
+//   if (durationElements.length > 0) {
+//     videoDuration = durationElements.first().text().trim();
+//   }
+  
+//   const item = {
+//     id: link,
+//     type: "detail",
+//     videoUrl: hlsUrl,
+//     // 👉 核心修复：强制使用 ijk 播放器解决无声问题
+//     playerType: "ijk", 
+//     // 👉 核心修复：添加防盗链头部
+//     customHeaders: {
+//       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+//       "Referer": link,
+//       "Origin": "https://jable.tv"
+//     }
+//   };
+  
+//   return item;
+// }
