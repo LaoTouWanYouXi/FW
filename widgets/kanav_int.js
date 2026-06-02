@@ -6,7 +6,7 @@ WidgetMetadata = {
   description: "中文字幕 | 日韩有码 | 无码 | 国产AV | 探花等 | 支持Forward播放器",
   author: "夢｜Grok适配",
   site: "https://kanav.info",
-  version: "1.1.6",
+  version: "1.1.8",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -212,55 +212,94 @@ async function loadDetail(link) {
 
     let playUrl = "";
 
-    // ====================
-    // 1️⃣ 获取 iframe
-    // ====================
-    let iframeSrc = $('iframe').attr('src');
-
-    if (!iframeSrc) {
-      console.log("❌ 没找到 iframe");
-      return {};
+    // =========================
+    // ✅ 通用解密函数（兼容老+新）
+    // =========================
+    function decodeUrl(url, encrypt) {
+      try {
+        if (encrypt == 1) {
+          return decodeURIComponent(url);
+        } else if (encrypt == 2) {
+          let decoded = atob(url);
+          decoded = decodeURIComponent(decoded);
+          decoded = decodeURIComponent(decoded);
+          return decoded;
+        } else {
+          // 老站（无 encrypt）
+          let decoded = atob(url);
+          return decodeURIComponent(decoded);
+        }
+      } catch (e) {
+        return url;
+      }
     }
 
-    if (!iframeSrc.startsWith('http')) {
-      iframeSrc = BASE_URL + iframeSrc;
-    }
-
-    console.log("iframe:", iframeSrc);
-
-    // ====================
-    // 2️⃣ 请求播放器页面
-    // ====================
-    const playerHtml = await fetchPage(iframeSrc);
-
-    // ====================
-    // 3️⃣ 提取 player_data
-    // ====================
-    const match = playerHtml.match(/player_.*?=\s*(\{.*?\})/);
+    // =========================
+    // 🟢 方案1：老逻辑（主页面）
+    // =========================
+    let match = html.match(/player_.*?=\s*(\{.*?\})/);
 
     if (match) {
-      const json = JSON.parse(match[1]);
-
-      let url = json.url;
-
-      if (json.encrypt == 1) {
-        url = unescape(url);
-      } else if (json.encrypt == 2) {
-        url = decodeURIComponent(atob(url));
-        url = decodeURIComponent(url);
-      }
-
-      playUrl = url;
-      console.log("✅ 解密成功:", playUrl);
+      try {
+        const json = JSON.parse(match[1]);
+        playUrl = decodeUrl(json.url, json.encrypt);
+        console.log("✅ 主页面解析成功");
+      } catch (e) {}
     }
 
-    // ====================
-    // 4️⃣ 兜底（再扫一遍）
-    // ====================
+    // =========================
+    // 🟡 方案2：新逻辑（iframe）
+    // =========================
     if (!playUrl) {
-      const m3u8 = playerHtml.match(/https?:\/\/[^\s'"]+\.m3u8[^\s'"]*/);
-      if (m3u8) playUrl = m3u8[0];
+      let iframeSrc = $('iframe').attr('src');
+
+      if (iframeSrc) {
+        if (!iframeSrc.startsWith('http')) {
+          iframeSrc = BASE_URL + iframeSrc;
+        }
+
+        console.log("iframe:", iframeSrc);
+
+        const iframeHtml = await fetchPage(iframeSrc);
+
+        let match2 = iframeHtml.match(/player_.*?=\s*(\{.*?\})/);
+
+        if (match2) {
+          try {
+            const json = JSON.parse(match2[1]);
+            playUrl = decodeUrl(json.url, json.encrypt);
+            console.log("✅ iframe解析成功");
+          } catch (e) {}
+        }
+
+        // 🔥 有些站 m3u8 直接在 iframe
+        if (!playUrl) {
+          const m3u8 = iframeHtml.match(/https?:\/\/[^\s'"]+\.m3u8[^\s'"]*/);
+          if (m3u8) {
+            playUrl = m3u8[0];
+            console.log("✅ iframe直链命中");
+          }
+        }
+      }
     }
+
+    // =========================
+    // 🔴 方案3：终极兜底
+    // =========================
+    if (!playUrl) {
+      const all = html.match(/https?:\/\/[^\s'"]+\.(m3u8|mp4)[^\s'"]*/gi);
+      if (all) {
+        playUrl = all.find(u => u.includes('m3u8')) || all[0];
+        console.log("✅ 全局兜底命中");
+      }
+    }
+
+    // =========================
+    // 海报
+    // =========================
+    const poster =
+      $('meta[property="og:image"]').attr('content') ||
+      $('img').first().attr('src');
 
     return {
       id: link,
@@ -272,7 +311,8 @@ async function loadDetail(link) {
         'Referer': BASE_URL,
         'Origin': BASE_URL
       },
-      description: playUrl ? "✅ 成功" : "❌ 未获取"
+      backdropPath: poster,
+      description: playUrl ? "✅ 获取成功" : "❌ 未获取"
     };
 
   } catch (e) {
