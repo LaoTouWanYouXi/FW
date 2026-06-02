@@ -6,7 +6,7 @@ WidgetMetadata = {
   description: "中文字幕 | 日韩有码 | 无码 | 国产AV | 探花等 | 支持Forward播放器",
   author: "夢｜Grok适配",
   site: "https://kanav.info",
-  version: "1.1.9",
+  version: "1.1.10",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -256,7 +256,7 @@ async function loadDetail(link) {
       id: link,
       type: "detail",
       videoUrl: playUrl,
-      playerType: "forward",
+      playerType: "system",
       description: playUrl ? "✅ 成功" : "❌ 需要抓包接口"
     };
 
@@ -265,7 +265,7 @@ async function loadDetail(link) {
       id: link,
       type: "detail",
       videoUrl: "",
-      playerType: "forward",
+      playerType: "system",
       description: "错误: " + e.message
     };
   }
