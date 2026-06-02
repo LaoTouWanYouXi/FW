@@ -6,7 +6,7 @@ WidgetMetadata = {
   description: "中文字幕 | 日韩有码 | 无码 | 国产AV | 探花等 | 支持Forward播放器",
   author: "夢｜Grok适配",
   site: "https://kanav.info",
-  version: "1.1.10",
+  version: "1.1.11",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -115,6 +115,13 @@ WidgetMetadata = {
 // ==================== 常量 ====================
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_2_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1';
 const BASE_URL = 'https://kanav.info';
+const HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://kanav.info/",
+    "Connection": "keep-alive"
+};
 
 async function fetchPage(url) {
   const response = await Widget.http.get(url, {
