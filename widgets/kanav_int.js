@@ -6,7 +6,7 @@ WidgetMetadata = {
   description: "中文字幕 | 日韩有码 | 无码 | 国产AV | 探花等 | 支持Forward播放器",
   author: "夢｜Grok适配",
   site: "https://kanav.info",
-  version: "1.1.4",
+  version: "1.1.5",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -207,64 +207,60 @@ async function search(params = {}) {
 
 async function loadDetail(link) {
   try {
-    console.log("详情页:", link);
     const html = await fetchPage(link);
     const $ = Widget.html.load(html);
 
     let playUrl = "";
 
     // ====================
-    // ✅ Step1：优先找 iframe
+    // 1️⃣ 获取 iframe
     // ====================
     let iframeSrc = $('iframe').attr('src');
 
-    if (iframeSrc) {
-      if (!iframeSrc.startsWith('http')) {
-        iframeSrc = BASE_URL + iframeSrc;
+    if (!iframeSrc) {
+      console.log("❌ 没找到 iframe");
+      return {};
+    }
+
+    if (!iframeSrc.startsWith('http')) {
+      iframeSrc = BASE_URL + iframeSrc;
+    }
+
+    console.log("iframe:", iframeSrc);
+
+    // ====================
+    // 2️⃣ 请求播放器页面
+    // ====================
+    const playerHtml = await fetchPage(iframeSrc);
+
+    // ====================
+    // 3️⃣ 提取 player_data
+    // ====================
+    const match = playerHtml.match(/player_.*?=\s*(\{.*?\})/);
+
+    if (match) {
+      const json = JSON.parse(match[1]);
+
+      let url = json.url;
+
+      if (json.encrypt == 1) {
+        url = unescape(url);
+      } else if (json.encrypt == 2) {
+        url = decodeURIComponent(atob(url));
+        url = decodeURIComponent(url);
       }
 
-      console.log("发现 iframe:", iframeSrc);
-
-      const iframeHtml = await fetchPage(iframeSrc);
-
-      // ====================
-      // ✅ Step2：在 iframe 页面找 m3u8
-      // ====================
-      const m3u8Regex = /(https?:\/\/[^\s'"<>]+\.m3u8[^\s'"<>]*)/i;
-      const m3u8Match = iframeHtml.match(m3u8Regex);
-
-      if (m3u8Match) {
-        playUrl = m3u8Match[1];
-        console.log("✅ iframe解析成功");
-      }
-
-      // ====================
-      // ✅ Step3：解析 js 变量
-      // ====================
-      if (!playUrl) {
-        const jsMatch = iframeHtml.match(/var\s+urls?\s*=\s*["']([^"']+)["']/i);
-        if (jsMatch) {
-          playUrl = jsMatch[1];
-        }
-      }
+      playUrl = url;
+      console.log("✅ 解密成功:", playUrl);
     }
 
     // ====================
-    // ✅ Step4：备用（全局扫描）
+    // 4️⃣ 兜底（再扫一遍）
     // ====================
     if (!playUrl) {
-      const all = html.match(/https?:\/\/[^\s'"<>]+\.(m3u8|mp4)[^\s'"<>]*/gi);
-      if (all) {
-        playUrl = all.find(u => u.includes('m3u8')) || all[0];
-        console.log("✅ 全局匹配成功");
-      }
+      const m3u8 = playerHtml.match(/https?:\/\/[^\s'"]+\.m3u8[^\s'"]*/);
+      if (m3u8) playUrl = m3u8[0];
     }
-
-    // ====================
-    // ✅ Step5：poster
-    // ====================
-    const poster = $('meta[property="og:image"]').attr('content') ||
-                   $('img').first().attr('src');
 
     return {
       id: link,
@@ -276,12 +272,10 @@ async function loadDetail(link) {
         'Referer': BASE_URL,
         'Origin': BASE_URL
       },
-      backdropPath: poster,
       description: playUrl ? "✅ 成功" : "❌ 未获取"
     };
 
   } catch (e) {
-    console.error("错误:", e.message);
     return {
       id: link,
       type: "detail",
