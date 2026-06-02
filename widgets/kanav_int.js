@@ -205,53 +205,87 @@ async function search(params = {}) {
   return items;
 }
 
-// ==================== 详情页（重点优化）===================
+// ==================== 详情页（重点修复视频地址）===================
 async function loadDetail(link) {
-  const html = await fetchPage(link);
-  const $ = Widget.html.load(html);
+  try {
+    const html = await fetchPage(link);
+    const $ = Widget.html.load(html);
 
-  let playUrl = "";
+    let playUrl = "";
 
-  // 提取播放地址（KanAV加密逻辑）
-  const playerScript = $('script:contains(player_aaaa)').text();
-  if (playerScript) {
-    try {
-      const playerStr = playerScript.replace('var player_aaaa=', '').trim().replace(/;$/, '');
-      const playerData = JSON.parse(playerStr);
-      const encodedUrl = playerData.url;
-      
-      // Base64解码 + URL解码
-      let decoded = atob(encodedUrl);
-      playUrl = decodeURIComponent(decoded);
-    } catch (e) {
-      console.error("播放地址解析失败:", e);
+    // 方案1：原始 player_aaaa 方式（加强容错）
+    let playerScript = $('script:contains(player_aaaa)').text() || 
+                       $('script').text().match(/player_aaaa[\s\S]*?}/)?.[0] || "";
+
+    if (playerScript) {
+      try {
+        // 清理并提取 JSON
+        let cleanStr = playerScript.replace('var player_aaaa=', '')
+                                  .replace(/;$/,'')
+                                  .trim();
+        
+        const playerData = JSON.parse(cleanStr);
+        
+        if (playerData.url) {
+          // 常见解码流程：Base64 → URL解码
+          let decoded = atob(playerData.url);
+          playUrl = decodeURIComponent(decoded);
+          
+          // 如果还有额外编码，再尝试一次
+          if (playUrl.includes('%')) {
+            playUrl = decodeURIComponent(playUrl);
+          }
+        }
+      } catch (e) {
+        console.error("player_aaaa 解析失败:", e);
+      }
     }
+
+    // 方案2：备用 - 直接搜索页面中的 m3u8 / mp4 链接
+    if (!playUrl) {
+      const urlMatch = html.match(/(https?:\/\/[^\s'"]+\.(m3u8|mp4)[^\s'"]*)/i);
+      if (urlMatch) {
+        playUrl = urlMatch[1];
+      }
+    }
+
+    // 方案3：查找 video 标签 src
+    if (!playUrl) {
+      const videoSrc = $('video source, video').attr('src') || 
+                       html.match(/src=["'](.*?\.(m3u8|mp4))["']/i);
+      if (videoSrc) {
+        playUrl = typeof videoSrc === 'string' ? videoSrc : videoSrc[1];
+      }
+    }
+
+    // 海报图 & 预告片
+    let poster = $('meta[property="og:image"]').attr('content') ||
+                 $('.entry-content img, .featured-image img').first().attr('src');
+
+    let previewUrl = $('video').attr('src') || "";
+
+    console.log("提取到的播放地址:", playUrl ? "成功" : "失败");
+
+    return {
+      id: link,
+      type: "detail",
+      videoUrl: playUrl,
+      customHeaders: {
+        'User-Agent': UA,
+        'Referer': BASE_URL + '/',
+        'Origin': BASE_URL
+      },
+      backdropPath: poster,
+      previewUrl: previewUrl,
+      description: playUrl ? "播放地址获取成功" : "⚠️ 播放地址获取失败，请反馈"
+    };
+  } catch (e) {
+    console.error("loadDetail 错误:", e.message);
+    return {
+      id: link,
+      type: "detail",
+      videoUrl: "",
+      description: "加载失败: " + e.message
+    };
   }
-
-  // 尝试提取预告片（trailer）
-  let previewUrl = "";
-  const videoSources = $('video source, video').first();
-  if (videoSources.length > 0) {
-    previewUrl = videoSources.attr('src') || "";
-  }
-
-  // 海报图（优先大图）
-  let poster = $('img.featured-content-image, .entry-content img, meta[property="og:image"]').first().attr('src') ||
-               $('meta[property="og:image"]').attr('content');
-
-  return {
-    id: link,
-    type: "detail",
-    videoUrl: playUrl,
-    playerType: "forward",                    // ← 按要求使用 forward 播放器
-    customHeaders: {
-      'User-Agent': UA,
-      'Referer': BASE_URL + '/',
-      'Origin': BASE_URL
-    },
-    // 新增/增强字段
-    backdropPath: poster,                     // 海报图
-    previewUrl: previewUrl || "",             // 详情预告片
-    description: "KanAV - Forward播放器兼容版"
-  };
 }
