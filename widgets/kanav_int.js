@@ -257,6 +257,11 @@ async function loadDetail(link) {
       type: "detail",
       videoUrl: playUrl,
       playerType: "system",
+      customHeaders: {
+                    "Referer": "https://kanav.info/",
+                    "User-Agent": HEADERS["User-Agent"],
+                    "Origin": "https://kanav.info"
+                },
       description: playUrl ? "✅ 成功" : "❌ 需要抓包接口"
     };
 
