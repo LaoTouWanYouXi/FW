@@ -6,7 +6,7 @@ WidgetMetadata = {
   description: "中文字幕 | 日韩有码 | 无码 | 国产AV | 探花等 | 支持Forward播放器",
   author: "夢｜Grok适配",
   site: "https://kanav.info",
-  version: "1.1.8",
+  version: "1.1.9",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -212,107 +212,52 @@ async function loadDetail(link) {
 
     let playUrl = "";
 
-    // =========================
-    // ✅ 通用解密函数（兼容老+新）
-    // =========================
-    function decodeUrl(url, encrypt) {
+    // ====================
+    // 🔥 1. 提取 video id
+    // ====================
+    const idMatch = link.match(/id\/(\d+)/);
+    const videoId = idMatch ? idMatch[1] : "";
+
+    console.log("videoId:", videoId);
+
+    // ====================
+    // 🔥 2. 猜接口（常见套路）
+    // ====================
+    const apiList = [
+      `/api.php?id=${videoId}`,
+      `/index.php/ajax/player?id=${videoId}`,
+      `/player/api.php?id=${videoId}`,
+      `/index.php/vod/play/id/${videoId}.json`
+    ];
+
+    for (let api of apiList) {
       try {
-        if (encrypt == 1) {
-          return decodeURIComponent(url);
-        } else if (encrypt == 2) {
-          let decoded = atob(url);
-          decoded = decodeURIComponent(decoded);
-          decoded = decodeURIComponent(decoded);
-          return decoded;
-        } else {
-          // 老站（无 encrypt）
-          let decoded = atob(url);
-          return decodeURIComponent(decoded);
-        }
-      } catch (e) {
-        return url;
-      }
-    }
+        let url = BASE_URL + api;
 
-    // =========================
-    // 🟢 方案1：老逻辑（主页面）
-    // =========================
-    let match = html.match(/player_.*?=\s*(\{.*?\})/);
+        const res = await Widget.http.get(url, {
+          headers: {
+            'User-Agent': UA,
+            'Referer': link
+          }
+        });
 
-    if (match) {
-      try {
-        const json = JSON.parse(match[1]);
-        playUrl = decodeUrl(json.url, json.encrypt);
-        console.log("✅ 主页面解析成功");
-      } catch (e) {}
-    }
-
-    // =========================
-    // 🟡 方案2：新逻辑（iframe）
-    // =========================
-    if (!playUrl) {
-      let iframeSrc = $('iframe').attr('src');
-
-      if (iframeSrc) {
-        if (!iframeSrc.startsWith('http')) {
-          iframeSrc = BASE_URL + iframeSrc;
-        }
-
-        console.log("iframe:", iframeSrc);
-
-        const iframeHtml = await fetchPage(iframeSrc);
-
-        let match2 = iframeHtml.match(/player_.*?=\s*(\{.*?\})/);
-
-        if (match2) {
-          try {
-            const json = JSON.parse(match2[1]);
-            playUrl = decodeUrl(json.url, json.encrypt);
-            console.log("✅ iframe解析成功");
-          } catch (e) {}
-        }
-
-        // 🔥 有些站 m3u8 直接在 iframe
-        if (!playUrl) {
-          const m3u8 = iframeHtml.match(/https?:\/\/[^\s'"]+\.m3u8[^\s'"]*/);
-          if (m3u8) {
-            playUrl = m3u8[0];
-            console.log("✅ iframe直链命中");
+        if (res.data.includes('m3u8')) {
+          const match = res.data.match(/https?:\/\/[^\s'"]+\.m3u8[^\s'"]*/);
+          if (match) {
+            playUrl = match[0];
+            console.log("✅ API命中:", url);
+            break;
           }
         }
-      }
+      } catch (e) {}
     }
-
-    // =========================
-    // 🔴 方案3：终极兜底
-    // =========================
-    if (!playUrl) {
-      const all = html.match(/https?:\/\/[^\s'"]+\.(m3u8|mp4)[^\s'"]*/gi);
-      if (all) {
-        playUrl = all.find(u => u.includes('m3u8')) || all[0];
-        console.log("✅ 全局兜底命中");
-      }
-    }
-
-    // =========================
-    // 海报
-    // =========================
-    const poster =
-      $('meta[property="og:image"]').attr('content') ||
-      $('img').first().attr('src');
 
     return {
       id: link,
       type: "detail",
       videoUrl: playUrl,
       playerType: "forward",
-      customHeaders: {
-        'User-Agent': UA,
-        'Referer': BASE_URL,
-        'Origin': BASE_URL
-      },
-      backdropPath: poster,
-      description: playUrl ? "✅ 获取成功" : "❌ 未获取"
+      description: playUrl ? "✅ 成功" : "❌ 需要抓包接口"
     };
 
   } catch (e) {
