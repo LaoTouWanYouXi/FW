@@ -737,13 +737,21 @@ function parseJavCodeParts(title) {
     const raw = String(title || "").toUpperCase();
     const match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
     if (!match) return null;
+    const prefix = match[1];
+    const prefixLower = prefix.toLowerCase();
+    const number5 = match[2].padStart(5, "0");
+    const numericContentPrefixMap = {
+        WSA: "2"
+    };
+    const numericContentPrefix = numericContentPrefixMap[prefix] || "";
     return {
-        prefix: match[1],
-        prefixLower: match[1].toLowerCase(),
+        prefix,
+        prefixLower,
         number: match[2],
         number3: match[2].padStart(3, "0"),
-        number5: match[2].padStart(5, "0"),
-        code: `${match[1].toLowerCase()}${match[2].padStart(5, "0")}`
+        number5,
+        code: `${numericContentPrefix}${prefixLower}${number5}`,
+        plainCode: `${prefixLower}${number5}`
     };
 }
 
