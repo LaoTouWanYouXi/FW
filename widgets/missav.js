@@ -488,7 +488,7 @@ function detectChineseSubtitle(html = "") {
     return lower.includes("chinese-subtitle") || lower.includes("chinese subtitle");
 }
 
-// 🌟【流媒体分轨控制中心】：严格依仗服务器真实物理流数据，不作任何无端的画质猜测伪造！采用“番号+画质后缀”标准格式供应
+// 🌟【流媒体分轨控制中心】：严格依仗服务器真实物理流数据，不作任何无端的画质猜测伪造！采用"番号+画质后缀"标准格式供应
 async function loadResource(params = {}) {
     try {
         const code = extractCodeFromParams(params);
@@ -1154,47 +1154,72 @@ function isInvalidAvatarUrl(url) {
     return /fourhoi\.com\/[^/]+\/(cover|preview|thumbnail)[^/]*\.(jpg|jpeg|png|webp)(?:\?.*)?$/i.test(url);
 }
 
+// ==================== JavTrailers 截图提取所需辅助函数 ====================
+
+function normalizeText(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeLabel(text) {
+    return normalizeText(text).replace(/[：:]/g, "").trim();
+}
+
+function getDetailRowsByLabels($, labels = []) {
+    const normalizedLabels = labels.map(normalizeLabel);
+    const rows = [];
+
+    $('.text-secondary').each((_, el) => {
+        const $row = $(el);
+        const label = normalizeLabel($row.find('span').first().text());
+        if (normalizedLabels.includes(label)) {
+            rows.push($row);
+        }
+    });
+
+    return rows;
+}
+
 // ==================== JavTrailers 元数据增强：剧照 + 预告片 ====================
-const JAVTRAILERS_BASE_URL = “https://javtrailers.com”;
+const JAVTRAILERS_BASE_URL = "https://javtrailers.com";
 
 const JAVTRAILERS_HEADERS = {
-    “User-Agent”: HEADERS[“User-Agent”],
-    “Accept”: HEADERS[“Accept”],
-    “Accept-Language”: “zh-CN,zh;q=0.9,en;q=0.8”,
-    “Referer”: “https://javtrailers.com/”,
-    “Connection”: “keep-alive”
+    "User-Agent": HEADERS["User-Agent"],
+    "Accept": HEADERS["Accept"],
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://javtrailers.com/",
+    "Connection": "keep-alive"
 };
 
 function resolveJavTrailersUrl(path) {
-    if (!path) return “”;
-    if (path.startsWith(“http”)) return path;
-    return `${JAVTRAILERS_BASE_URL}${path.startsWith(“/”) ? path : `/${path}`}`;
+    if (!path) return "";
+    if (path.startsWith("http")) return path;
+    return `${JAVTRAILERS_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 function cleanDvdId(raw) {
     return normalizeText(raw)
-        .replace(/-UNCENSORED-LEAK$/i, “”)
-        .replace(/-CHINESE-SUBTITLE$/i, “”)
-        .replace(/_UNCENSORED_LEAK$/i, “”)
-        .replace(/_CHINESE_SUBTITLE$/i, “”)
-        .replace(/\s+/g, “”)
+        .replace(/-UNCENSORED-LEAK$/i, "")
+        .replace(/-CHINESE-SUBTITLE$/i, "")
+        .replace(/_UNCENSORED_LEAK$/i, "")
+        .replace(/_CHINESE_SUBTITLE$/i, "")
+        .replace(/\s+/g, "")
         .trim();
 }
 
 function extractDvdIdFromMissAv($, link) {
-    let dvdId = “”;
+    let dvdId = "";
 
     // 优先从 MissAV 详情页的「番号」字段取。
-    const rows = getDetailRowsByLabels($, [“番号”, “品番”, “DVD ID”]);
+    const rows = getDetailRowsByLabels($, ["番号", "品番", "DVD ID"]);
     rows.forEach(($row) => {
         if (dvdId) return;
-        const text = normalizeText($row.find(“span.font-medium”).first().text());
+        const text = normalizeText($row.find("span.font-medium").first().text());
         if (text) dvdId = text;
     });
 
     // 兜底：从 URL slug 取。
     if (!dvdId) {
-        const slug = String(link || “”).split(“?”)[0].split(“/”).filter(Boolean).pop() || “”;
+        const slug = String(link || "").split("?")[0].split("/").filter(Boolean).pop() || "";
         dvdId = slug;
     }
 
@@ -1211,8 +1236,8 @@ function normalizeDvdIdForSearch(dvdId) {
     }
 
     return clean
-        .replace(/_/g, “-”)
-        .replace(/\s+/g, “-”)
+        .replace(/_/g, "-")
+        .replace(/\s+/g, "-")
         .toLowerCase();
 }
 
@@ -1225,18 +1250,18 @@ function normalizeDvdIdForCompare(dvdId) {
         return `${m[1]}${parseInt(m[2], 10)}`;
     }
 
-    return clean.replace(/[^A-Z0-9]/g, “”);
+    return clean.replace(/[^A-Z0-9]/g, "");
 }
 
 function extractJavTrailersContentId($, html, detailUrl) {
-    const text = normalizeText($(“body”).text());
+    const text = normalizeText($("body").text());
 
     // JavTrailers 详情页 URL slug 就是高可信 Content ID：
     // FNS-139   -> /video/1fns00139
     // ABF-348   -> /video/118abf00348
     // DLDSS-492 -> /video/1dldss00492
-    // 所以这里优先从 detailUrl 取，不再把 slug 当作”可疑 fallback”。
-    const urlMatch = String(detailUrl || “”).match(/\/video\/([a-z0-9_]+)/i);
+    // 所以这里优先从 detailUrl 取，不再把 slug 当作"可疑 fallback"。
+    const urlMatch = String(detailUrl || "").match(/\/video\/([a-z0-9_]+)/i);
     if (urlMatch && urlMatch[1]) {
         return urlMatch[1].toLowerCase();
     }
@@ -1248,12 +1273,12 @@ function extractJavTrailersContentId($, html, detailUrl) {
     }
 
     // 低优先级补充：仅在页面 URL 与字段都缺失时从 DMM 图片地址反推。
-    const imageMatch = String(html || “”).match(/pics\.dmm\.co\.jp\/digital\/video\/([a-z0-9_]+)\//i);
+    const imageMatch = String(html || "").match(/pics\.dmm\.co\.jp\/digital\/video\/([a-z0-9_]+)\//i);
     if (imageMatch && imageMatch[1]) {
         return imageMatch[1].toLowerCase();
     }
 
-    return “”;
+    return "";
 }
 
 // ==================== JavTrailers Gallery 剧照提取 ====================
@@ -1263,16 +1288,16 @@ function buildDmmContentIdFromDvdId(dvdId) {
 
     // SNOS-233 / SNOS00233 / snos-00233 -> snos00233
     const m = clean.match(/^([a-z]+)[-_ ]*0*(\d+)$/i);
-    if (!m) return clean.replace(/[^a-z0-9]/gi, “”);
+    if (!m) return clean.replace(/[^a-z0-9]/gi, "");
 
     const prefix = m[1].toLowerCase();
-    const number = String(parseInt(m[2], 10)).padStart(5, “0”);
+    const number = String(parseInt(m[2], 10)).padStart(5, "0");
 
     return `${prefix}${number}`;
 }
 
 function buildDmmGallery(contentId, count = 10) {
-    const id = String(contentId || “”).toLowerCase().trim();
+    const id = String(contentId || "").toLowerCase().trim();
     if (!id) return [];
 
     const results = [];
@@ -1304,10 +1329,10 @@ function buildMgstageGalleryFromDvdId(dvdId, count = 10) {
 }
 
 function buildMgstageGalleryFromHtmlOrDvdId(html, dvdId, count = 10) {
-    const raw = String(html || “”)
-        .replace(/\\\//g, “/”)
-        .replace(/&amp;/g, “&”)
-        .replace(/\\u002F/g, “/”);
+    const raw = String(html || "")
+        .replace(/\\\//g, "/")
+        .replace(/&amp;/g, "&")
+        .replace(/\\u002F/g, "/");
 
     const urls = [];
     const seen = new Set();
@@ -1322,7 +1347,7 @@ function buildMgstageGalleryFromHtmlOrDvdId(html, dvdId, count = 10) {
     // 如果页面里已经有 MGStage 主图，例如：
     // image.mgstage.com/images/prestige/abf/350/pf_o1_abf-350.jpg
     // 就直接从它反推 cap_e_N。
-    const coverMatch = raw.match(/https?:\/\/image\.mgstage\.com\/images\/([^”'\\\s<>]+?)\/([a-z]+)\/(\d+)\/pf_o\d+_([a-z]+-\d+)\.(?:jpg|jpeg|webp|png)/i);
+    const coverMatch = raw.match(/https?:\/\/image\.mgstage\.com\/images\/([^"'\\\s<>]+?)\/([a-z]+)\/(\d+)\/pf_o\d+_([a-z]+-\d+)\.(?:jpg|jpeg|webp|png)/i);
 
     if (coverMatch) {
         const maker = coverMatch[1];
@@ -1341,7 +1366,7 @@ function buildMgstageGalleryFromHtmlOrDvdId(html, dvdId, count = 10) {
 }
 
 function extractCompareIdsFromText(text) {
-    const raw = String(text || “”);
+    const raw = String(text || "");
     const ids = [];
     const seen = new Set();
 
@@ -1358,8 +1383,8 @@ function extractCompareIdsFromText(text) {
     patterns.forEach((pattern) => {
         let match;
         while ((match = pattern.exec(raw)) !== null) {
-            let prefix = “”;
-            let num = “”;
+            let prefix = "";
+            let num = "";
 
             if (match.length === 3) {
                 prefix = match[1];
@@ -1402,16 +1427,16 @@ function imageUrlMatchesDvd(url, dvdId, contentId) {
 }
 
 function normalizeImageUrl(url) {
-    if (!url) return “”;
+    if (!url) return "";
 
     let clean = String(url)
-        .replace(/\\\//g, “/”)
-        .replace(/&amp;/g, “&”)
+        .replace(/\\\//g, "/")
+        .replace(/&amp;/g, "&")
         .trim();
 
-    if (!clean || clean.startsWith(“data:”)) return “”;
+    if (!clean || clean.startsWith("data:")) return "";
 
-    if (clean.startsWith(“//”)) clean = `https:${clean}`;
+    if (clean.startsWith("//")) clean = `https:${clean}`;
     return resolveJavTrailersUrl(clean);
 }
 
@@ -1456,13 +1481,13 @@ function extractGalleryImagesFromSwiper($, dvdId, contentId) {
     // JavTrailers Gallery 的真实结构：
     // .swiper-wrapper .swiper-slide.image-container img
     // src 通常是高清图；data-loading 通常是缩略图。
-    $(“.swiper-wrapper .swiper-slide.image-container img, .swiper-wrapper .swiper-slide img”).each((_, el) => {
+    $(".swiper-wrapper .swiper-slide.image-container img, .swiper-wrapper .swiper-slide img").each((_, el) => {
         const $img = $(el);
 
-        const src = $img.attr(“src”) || “”;
-        const dataSrc = $img.attr(“data-src”) || “”;
-        const dataOriginal = $img.attr(“data-original”) || “”;
-        const dataLazy = $img.attr(“data-lazy”) || “”;
+        const src = $img.attr("src") || "";
+        const dataSrc = $img.attr("data-src") || "";
+        const dataOriginal = $img.attr("data-original") || "";
+        const dataLazy = $img.attr("data-lazy") || "";
 
         // 注意：不要优先取 data-loading。
         // ABF 例子里 data-loading=cap_t1 缩略图，src=cap_e 高清图。
@@ -1476,10 +1501,10 @@ function extractGalleryImagesFromSwiper($, dvdId, contentId) {
 }
 
 function extractGalleryImagesFromRawHtml(html, dvdId, contentId) {
-    const normalized = String(html || “”)
-        .replace(/\\\//g, “/”)
-        .replace(/&amp;/g, “&”)
-        .replace(/\\u002F/g, “/”);
+    const normalized = String(html || "")
+        .replace(/\\\//g, "/")
+        .replace(/&amp;/g, "&")
+        .replace(/\\u002F/g, "/");
 
     const urls = [];
     const seen = new Set();
@@ -1499,17 +1524,17 @@ function extractGalleryImagesFromRawHtml(html, dvdId, contentId) {
     // MGStage: cap_e_6_abf-348.jpg
 
     const patterns = [
-    /https?:\/\/pics\.dmm\.co\.jp\/digital\/video\/[^”'\\\s<>]+?\/[^”'\\\s<>]+?jp-\d+\.(?:jpg|jpeg|webp|png)/gi,
+    /https?:\/\/pics\.dmm\.co\.jp\/digital\/video\/[^"'\\\s<>]+?\/[^"'\\\s<>]+?jp-\d+\.(?:jpg|jpeg|webp|png)/gi,
 
     // MGStage 高清剧照。
-    /https?:\/\/image\.mgstage\.com\/images\/[^”'\\\s<>]+?\/cap_e_\d+_[^”'\\\s<>]+?\.(?:jpg|jpeg|webp|png)/gi,
+    /https?:\/\/image\.mgstage\.com\/images\/[^"'\\\s<>]+?\/cap_e_\d+_[^"'\\\s<>]+?\.(?:jpg|jpeg|webp|png)/gi,
 
     // MGStage 主图 / 封面图，用于后续 fallback 反推 cap_e_N。
-    /https?:\/\/image\.mgstage\.com\/images\/[^”'\\\s<>]+?\/pf_o\d+_[^”'\\\s<>]+?\.(?:jpg|jpeg|webp|png)/gi,
+    /https?:\/\/image\.mgstage\.com\/images\/[^"'\\\s<>]+?\/pf_o\d+_[^"'\\\s<>]+?\.(?:jpg|jpeg|webp|png)/gi,
 
-    /src=[“']([^”']*cap_e_\d+_[^”']+\.(?:jpg|jpeg|webp|png))[“']/gi,
-    /src=[“']([^”']*pf_o\d+_[^”']+\.(?:jpg|jpeg|webp|png))[“']/gi,
-    /src=[“']([^”']*jp-\d+\.(?:jpg|jpeg|webp|png))[“']/gi
+    /src=["']([^"']*cap_e_\d+_[^"']+\.(?:jpg|jpeg|webp|png))["']/gi,
+    /src=["']([^"']*pf_o\d+_[^"']+\.(?:jpg|jpeg|webp|png))["']/gi,
+    /src=["']([^"']*jp-\d+\.(?:jpg|jpeg|webp|png))["']/gi
     ];
 
     patterns.forEach((pattern) => {
@@ -1523,14 +1548,14 @@ function extractGalleryImagesFromRawHtml(html, dvdId, contentId) {
 }
 
 function isMgstageCoverOnlyImage(url) {
-    return /image\.mgstage\.com\/images\/.+?\/pf_o\d+_/i.test(String(url || “”));
+    return /image\.mgstage\.com\/images\/.+?\/pf_o\d+_/i.test(String(url || ""));
 }
 
 function extractJavTrailersVideoUrls(html) {
-    const normalized = String(html || “”)
-        .replace(/\\\//g, “/”)
-        .replace(/&amp;/g, “&”)
-        .replace(/\\u002F/g, “/”);
+    const normalized = String(html || "")
+        .replace(/\\\//g, "/")
+        .replace(/&amp;/g, "&")
+        .replace(/\\u002F/g, "/");
 
     const urls = [];
     const seen = new Set();
@@ -1548,17 +1573,17 @@ function extractJavTrailersVideoUrls(html) {
 
     const patterns = [
         // 原有 m3u8。
-        /https?:\/\/[^”'\\\s<>]+?\.m3u8(?:\?[^”'\\\s<>]*)?/gi,
-        /file\s*:\s*[“']([^”']+?\.m3u8(?:\?[^”']*)?)[“']/gi,
-        /src\s*:\s*[“']([^”']+?\.m3u8(?:\?[^”']*)?)[“']/gi,
-        /source\s*:\s*[“']([^”']+?\.m3u8(?:\?[^”']*)?)[“']/gi,
+        /https?:\/\/[^"'\\\s<>]+?\.m3u8(?:\?[^"'\\\s<>]*)?/gi,
+        /file\s*:\s*["']([^"']+?\.m3u8(?:\?[^"']*)?)["']/gi,
+        /src\s*:\s*["']([^"']+?\.m3u8(?:\?[^"']*)?)["']/gi,
+        /source\s*:\s*["']([^"']+?\.m3u8(?:\?[^"']*)?)["']/gi,
 
         // MGStage / 片商官网常见 mp4 sample。
-        /https?:\/\/sample\.mgstage\.com\/sample\/[^”'\\\s<>]+?\.mp4(?:\?[^”'\\\s<>]*)?/gi,
-        /<video[^>]+src=[“']([^”']+?\.mp4(?:\?[^”']*)?)[“']/gi,
-        /src=[“']([^”']+?\.mp4(?:\?[^”']*)?)[“']/gi,
-        /file\s*:\s*[“']([^”']+?\.mp4(?:\?[^”']*)?)[“']/gi,
-        /source\s*:\s*[“']([^”']+?\.mp4(?:\?[^”']*)?)[“']/gi
+        /https?:\/\/sample\.mgstage\.com\/sample\/[^"'\\\s<>]+?\.mp4(?:\?[^"'\\\s<>]*)?/gi,
+        /<video[^>]+src=["']([^"']+?\.mp4(?:\?[^"']*)?)["']/gi,
+        /src=["']([^"']+?\.mp4(?:\?[^"']*)?)["']/gi,
+        /file\s*:\s*["']([^"']+?\.mp4(?:\?[^"']*)?)["']/gi,
+        /source\s*:\s*["']([^"']+?\.mp4(?:\?[^"']*)?)["']/gi
     ];
 
     patterns.forEach((pattern) => {
@@ -1572,7 +1597,7 @@ function extractJavTrailersVideoUrls(html) {
 }
 
 function isLikelyDmmContentId(contentId) {
-    const id = String(contentId || “”).toLowerCase().trim();
+    const id = String(contentId || "").toLowerCase().trim();
 
     // DMM/FANZA 的 digital/video ID 既可能是 snos00233，
     // 也可能是 1dldss00487、1start00521 这种带数字前缀的 Content ID。
@@ -1580,22 +1605,22 @@ function isLikelyDmmContentId(contentId) {
 }
 
 function isDmmSourceHtml(html) {
-    const raw = String(html || “”).toLowerCase();
+    const raw = String(html || "").toLowerCase();
 
     return (
-        raw.includes(“pics.dmm.co.jp”) ||
-        raw.includes(“al.fanza.co.jp”) ||
-        raw.includes(“fanza”)
+        raw.includes("pics.dmm.co.jp") ||
+        raw.includes("al.fanza.co.jp") ||
+        raw.includes("fanza")
     );
 }
 
 function isMgstageSourceHtml(html) {
-    const raw = String(html || “”).toLowerCase();
+    const raw = String(html || "").toLowerCase();
 
     return (
-        raw.includes(“image.mgstage.com”) ||
-        raw.includes(“mgstage.nihonjav.com”) ||
-        raw.includes(“mgstage”)
+        raw.includes("image.mgstage.com") ||
+        raw.includes("mgstage.nihonjav.com") ||
+        raw.includes("mgstage")
     );
 }
 
@@ -1625,7 +1650,7 @@ function extractDmmGalleryFromHtml(html, contentId, dvdId) {
     // 3. DMM/FANZA 来源 fallback。
     // DLDSS / START 这类 Content ID 是 1dldss00487、1start00521，
     // 虽然前面带数字，但仍然可以用于 pics.dmm.co.jp/digital/video/{contentId}/ 构造。
-    const finalId = String(contentId || “”).toLowerCase().trim();
+    const finalId = String(contentId || "").toLowerCase().trim();
     if (isDmmSourceHtml(html) && isLikelyDmmContentId(finalId)) {
         return buildDmmGallery(finalId, 10);
     }
@@ -1641,15 +1666,15 @@ function extractDmmGalleryFromHtml(html, contentId, dvdId) {
 }
 
 function extractJavTrailersCover($, contentId, backdropPaths) {
-    const ogImage = $('meta[property=”og:image”]').attr(“content”) || “”;
+    const ogImage = $('meta[property="og:image"]').attr("content") || "";
     if (ogImage) return resolveJavTrailersUrl(ogImage);
 
     const firstImg =
-        $(“img”).first().attr(“data-src”) ||
-        $(“img”).first().attr(“src”) ||
-        “”;
+        $("img").first().attr("data-src") ||
+        $("img").first().attr("src") ||
+        "";
 
-    if (firstImg && !firstImg.startsWith(“data:”)) {
+    if (firstImg && !firstImg.startsWith("data:")) {
         return resolveJavTrailersUrl(firstImg);
     }
 
@@ -1658,7 +1683,7 @@ function extractJavTrailersCover($, contentId, backdropPaths) {
     }
 
     const gallery = buildDmmGallery(contentId, 1);
-    return gallery[0] || “”;
+    return gallery[0] || "";
 }
 
 function extractJavTrailersTrailers($, html, contentId, backdropPaths) {
@@ -1679,7 +1704,7 @@ function extractJavTrailersTrailers($, html, contentId, backdropPaths) {
 
     return [{
         id: bestUrl,
-        title: “预告片”,
+        title: "预告片",
         coverUrl,
         url: bestUrl,
         customHeaders: JAVTRAILERS_HEADERS
@@ -1687,10 +1712,10 @@ function extractJavTrailersTrailers($, html, contentId, backdropPaths) {
 }
 
 function scoreJavTrailersSearchResult($, $a, targetCompareId) {
-    const href = resolveJavTrailersUrl($a.attr(“href”) || “”);
+    const href = resolveJavTrailersUrl($a.attr("href") || "");
     const text = normalizeText($a.text());
-    const nearbyText = normalizeText($a.closest(“div,li,article,section”).text());
-    const slug = href.split(“/”).filter(Boolean).pop() || “”;
+    const nearbyText = normalizeText($a.closest("div,li,article,section").text());
+    const slug = href.split("/").filter(Boolean).pop() || "";
 
     const candidates = [text, nearbyText, slug];
     let bestScore = 0;
@@ -1707,7 +1732,7 @@ function scoreJavTrailersSearchResult($, $a, targetCompareId) {
     });
 
     // /video/{slug} 是 JavTrailers Content ID。搜索结果里的 slug 可直接参与高可信匹配。
-    if (href.includes(“/video/”)) {
+    if (href.includes("/video/")) {
         bestScore += 10;
     }
 
@@ -1722,7 +1747,7 @@ function scoreJavTrailersSearchResult($, $a, targetCompareId) {
 async function findJavTrailersDetailUrl(dvdId) {
     const searchKeyword = normalizeDvdIdForSearch(dvdId);
     const targetCompareId = normalizeDvdIdForCompare(dvdId);
-    if (!searchKeyword || !targetCompareId) return “”;
+    if (!searchKeyword || !targetCompareId) return "";
 
     const searchUrl = `${JAVTRAILERS_BASE_URL}/search/${encodeURIComponent(searchKeyword)}`;
 
@@ -1732,11 +1757,11 @@ async function findJavTrailersDetailUrl(dvdId) {
             timeout: 5000
         });
 
-        const html = res.data || “”;
+        const html = res.data || "";
         const $ = Widget.html.load(html);
         const candidates = [];
 
-        $('a[href*=”/video/”]').each((_, el) => {
+        $('a[href*="/video/"]').each((_, el) => {
             const $a = $(el);
             const result = scoreJavTrailersSearchResult($, $a, targetCompareId);
             if (result.href) candidates.push(result);
@@ -1749,27 +1774,27 @@ async function findJavTrailersDetailUrl(dvdId) {
         }
 
         // 兜底：从 HTML 里直接找 /video/slug，并用 slug 比较。
-        const directPattern = /href=[“']([^”']*\/video\/([a-z0-9_]+)[^”']*)[“']/gi;
+        const directPattern = /href=["']([^"']*\/video\/([a-z0-9_]+)[^"']*)["']/gi;
         let match;
         while ((match = directPattern.exec(html)) !== null) {
             const href = resolveJavTrailersUrl(match[1]);
-            const slug = match[2] || “”;
+            const slug = match[2] || "";
             if (normalizeDvdIdForCompare(slug) === targetCompareId) {
                 return href;
             }
         }
 
-        return “”;
+        return "";
     } catch (e) {
         console.log(`[JavTrailers] search failed: ${e.message}`);
-        return “”;
+        return "";
     }
 }
 
 async function fetchJavTrailersMeta(dvdId) {
     const empty = {
-        detailUrl: “”,
-        contentId: “”,
+        detailUrl: "",
+        contentId: "",
         backdropPaths: [],
         trailers: []
     };
@@ -1783,12 +1808,12 @@ async function fetchJavTrailersMeta(dvdId) {
         const res = await Widget.http.get(detailUrl, {
             headers: {
                 ...JAVTRAILERS_HEADERS,
-                “Referer”: `${JAVTRAILERS_BASE_URL}/`
+                "Referer": `${JAVTRAILERS_BASE_URL}/`
             },
             timeout: 5000
         });
 
-        const html = res.data || “”;
+        const html = res.data || "";
         const $ = Widget.html.load(html);
 
         const contentId = extractJavTrailersContentId($, html, detailUrl);
@@ -1807,7 +1832,7 @@ async function fetchJavTrailersMeta(dvdId) {
     }
 }
 
-// 🌟【简介全维反漏提纯层】：全面重写清洗顺序，多标题协同拦截，完美斩断类似”SSIS-698 三上悠亚...”的网页原生标题垃圾
+// 🌟【简介全维反漏提纯层】：全面重写清洗顺序，多标题协同拦截，完美斩断类似"SSIS-698 三上悠亚..."的网页原生标题垃圾
 async function parseAndBuildDetail(html, finalLink) {
     const $ = Widget.html.load(html);
     const title = $('meta[property="og:title"]').attr('content') || $('h1').text().trim();
@@ -1845,7 +1870,7 @@ async function parseAndBuildDetail(html, finalLink) {
             if (jpTitle) officialDescription = officialDescription.split(jpTitle).join("");
             if (h1Text) officialDescription = officialDescription.split(h1Text).join("");
 
-            // C. 核心突破：将标题中去除番号后的“纯标题文字主体”（如 “ 三上悠亚，新有菜及相泽南”）提取出来做孤立清除
+            // C. 核心突破：将标题中去除番号后的"纯标题文字主体"（如 " 三上悠亚，新有菜及相泽南"）提取出来做孤立清除
             if (title && code) {
                 const pureTitleText = title.replace(code, "").replace(code.toUpperCase(), "").replace(code.toLowerCase(), "").trim();
                 if (pureTitleText && pureTitleText.length > 2) {
