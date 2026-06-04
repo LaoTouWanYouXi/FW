@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.kanav",
   title: "KanAV",
-  version: "1.0.2",
+  version: "1.0.3",
   requiredVersion: "0.0.1",
   description: "KanAV \u89c6\u9891\u6e90",
   author: "\u8001\u5934",
@@ -60,6 +60,75 @@ function b64Decode(str) {
   return result;
 }
 
+function safeUriDecode(str) {
+  try {
+    const decoded = decodeURIComponent(str);
+    if (decoded.startsWith("http")) return decoded;
+  } catch (e) {}
+  return str;
+}
+
+function isDirectStreamUrl(url) {
+  return /\.(m3u8|mp4|flv|mkv|avi|ts|mov)(\?|$)/i.test(url);
+}
+
+function extractVideoUrlFromHtml(html) {
+  // Strategy 1: Direct m3u8/mp4 URL in HTML (broadest match)
+  let m = html.match(/https?:\/\/[^\s"'<>\\,;)}\]]+?\.(m3u8|mp4)[^\s"'<>\\,;){\[]*/);
+  if (m) return m[0];
+
+  // Strategy 2: DPlayer / XGPlayer / CKPlayer / ArtPlayer config
+  // Matches: url:"...", url:'...', url: "...", video:{url:"..."}
+  m = html.match(/["']?url["']?\s*[:=]\s*["']([^"']*(?:\.m3u8|\.mp4)[^"']*)["']/i);
+  if (m) return m[1];
+
+  // Strategy 3: JavaScript variable assignment
+  // Matches: var playurl = "...", const videoUrl = '...', let src = "..."
+  m = html.match(/(?:var|let|const)\s+\w*(?:url|src|video|play|file|path)\w*\s*=\s*["']([^"']*(?:\.m3u8|\.mp4)[^"']*)["']/i);
+  if (m) return m[1];
+
+  // Strategy 4: JSON key with video URL
+  // Matches: "url":"https://...m3u8"
+  m = html.match(/"url"\s*:\s*"([^"]*(?:\.m3u8|\.mp4)[^"]*)"/i);
+  if (m) return m[1];
+
+  // Strategy 5: HTML5 video/source tags
+  const $ = Widget.html.load(html);
+  const src = $("video source").attr("src") || $("video").attr("src");
+  if (src) return src;
+
+  // Strategy 6: iframe src (nested embed player)
+  const iframeSrc = $("iframe").attr("src");
+  if (iframeSrc && iframeSrc.startsWith("http")) return iframeSrc;
+
+  return null;
+}
+
+function extractVideoUrlFromQuery(url) {
+  // Parse query parameters manually (no URLSearchParams in Forward runtime)
+  const qIndex = url.indexOf("?");
+  if (qIndex < 0) return null;
+  const query = url.substring(qIndex + 1);
+  const pairs = query.split("&");
+  for (const pair of pairs) {
+    const eqIndex = pair.indexOf("=");
+    if (eqIndex < 0) continue;
+    const key = pair.substring(0, eqIndex);
+    const val = pair.substring(eqIndex + 1);
+    if (key === "url" || key === "video" || key === "vid" || key === "playurl" || key === "v") {
+      let decoded = safeUriDecode(val);
+      if (isDirectStreamUrl(decoded)) return decoded;
+      // Try base64 decode
+      try {
+        const b64 = b64Decode(val);
+        const b64Uri = safeUriDecode(b64);
+        if (isDirectStreamUrl(b64Uri)) return b64Uri;
+      } catch (e) {}
+    }
+  }
+  return null;
+}
+
 function parseVideoList(html) {
   const $ = Widget.html.load(html);
   const items = [];
@@ -107,32 +176,69 @@ async function loadAnime(params)     { return loadCategory("20", params); }
 
 async function loadDetail(link) {
   const res = await Widget.http.get(String(link), { headers: { "User-Agent": UA } });
-  const $ = Widget.html.load(res.data);
-  const script = $("script:contains(player_aaaa)").text().replace("var player_aaaa=", "");
-  const encodedUrl = JSON.parse(script).url;
+  const html = typeof res.data === "string" ? res.data : String(res.data);
+
+  // --- Fix #1: Robust player_aaaa extraction using regex on raw HTML ---
+  // Handles: var player_aaaa={...}; / var player_aaaa = {...} / trailing semicolons
+  const playerMatch = html.match(/var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*;?\s*(?:<\/script>|$)/);
+  let playerData;
+  if (playerMatch) {
+    try {
+      playerData = JSON.parse(playerMatch[1]);
+    } catch (e) {
+      // Fallback: try extracting JSON object from the matched region
+      const jsonMatch = playerMatch[1].match(/\{[\s\S]*\}/);
+      if (jsonMatch) playerData = JSON.parse(jsonMatch[0]);
+    }
+  }
+  if (!playerData) {
+    // Fallback: cheerio :contains approach
+    const $ = Widget.html.load(html);
+    const scriptText = $("script:contains(player_aaaa)").text() || "";
+    const jsonMatch = scriptText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) playerData = JSON.parse(jsonMatch[0]);
+  }
+  if (!playerData || !playerData.url) return null;
+
+  // --- Fix #2: Decode URL with encrypt/server awareness ---
+  const encodedUrl = playerData.url;
   let videoUrl = b64Decode(encodedUrl);
+  videoUrl = safeUriDecode(videoUrl);
 
-  try {
-    const decoded = decodeURIComponent(videoUrl);
-    if (decoded.startsWith("http")) videoUrl = decoded;
-  } catch (e) {}
+  // If direct stream URL, return immediately
+  if (isDirectStreamUrl(videoUrl)) {
+    return { id: link, type: "url", link, videoUrl, playerType: "system" };
+  }
 
-  if (videoUrl && !/\.(m3u8|mp4|flv|mkv|avi|ts|mov)(\?|$)/i.test(videoUrl)) {
+  // --- Fix #3: Try to extract video URL from query parameters (parse API pattern) ---
+  // e.g. https://jx.example.com/?url=ENCODED_M3U8
+  const queryVideo = extractVideoUrlFromQuery(videoUrl);
+  if (queryVideo) {
+    return { id: link, type: "url", link, videoUrl: queryVideo, playerType: "system" };
+  }
+
+  // --- Fix #4: Fetch embed page and try multi-strategy extraction ---
+  if (videoUrl && videoUrl.startsWith("http")) {
     try {
       const embedRes = await Widget.http.get(videoUrl, {
         headers: { "User-Agent": UA, "Referer": BASE + "/" },
       });
-      const html = typeof embedRes.data === "string" ? embedRes.data : JSON.stringify(embedRes.data);
-
-      const urlMatch = html.match(/https?:\/\/[^\s"'<>\\]+?\.(m3u8|mp4)[^\s"'<>\\]*/);
-      if (urlMatch) {
-        videoUrl = urlMatch[0];
-      } else {
-        const $embed = Widget.html.load(html);
-        const src = $embed("video source").attr("src") || $embed("video").attr("src");
-        if (src) videoUrl = src;
-      }
+      const embedHtml = typeof embedRes.data === "string" ? embedRes.data : JSON.stringify(embedRes.data);
+      const extracted = extractVideoUrlFromHtml(embedHtml);
+      if (extracted) videoUrl = extracted;
     } catch (e) {}
+
+    // If the extracted URL is still an iframe embed, try one more level
+    if (videoUrl && !isDirectStreamUrl(videoUrl) && videoUrl.startsWith("http")) {
+      try {
+        const embedRes2 = await Widget.http.get(videoUrl, {
+          headers: { "User-Agent": UA, "Referer": BASE + "/" },
+        });
+        const embedHtml2 = typeof embedRes2.data === "string" ? embedRes2.data : JSON.stringify(embedRes2.data);
+        const extracted2 = extractVideoUrlFromHtml(embedHtml2);
+        if (extracted2 && isDirectStreamUrl(extracted2)) videoUrl = extracted2;
+      } catch (e) {}
+    }
   }
 
   return {
