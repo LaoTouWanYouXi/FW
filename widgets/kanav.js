@@ -1,28 +1,28 @@
 WidgetMetadata = {
   id: "forward.kanav",
   title: "KanAV",
-  version: "1.0.1",
+  version: "1.0.2",
   requiredVersion: "0.0.1",
-  description: "KanAV 视频源",
-  author: "老头",
+  description: "KanAV \u89c6\u9891\u6e90",
+  author: "\u8001\u5934",
   site: "https://kanav.info",
   detailCacheDuration: 300,
   modules: [
-    { id: "cnSub",     title: "中文字幕", functionName: "loadCnSub",    cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
-    { id: "jpKrCen",   title: "日韩有码", functionName: "loadJpKrCen",  cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
-    { id: "jpKrUncen", title: "日韩无码", functionName: "loadJpKrUncen",cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
-    { id: "cnAv",      title: "国产AV",   functionName: "loadCnAv",     cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
-    { id: "selfie",    title: "自拍泄密", functionName: "loadSelfie",   cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
-    { id: "hookup",    title: "探花约炮", functionName: "loadHookup",   cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
-    { id: "streamer",  title: "主播录制", functionName: "loadStreamer", cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
-    { id: "anime",     title: "动漫番剧", functionName: "loadAnime",    cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
+    { id: "cnSub",     title: "\u4e2d\u6587\u5b57\u5e55", functionName: "loadCnSub",    cacheDuration: 3600, params: [{ name: "page", title: "\u9875\u7801", type: "page" }] },
+    { id: "jpKrCen",   title: "\u65e5\u97e9\u6709\u7801", functionName: "loadJpKrCen",  cacheDuration: 3600, params: [{ name: "page", title: "\u9875\u7801", type: "page" }] },
+    { id: "jpKrUncen", title: "\u65e5\u97e9\u65e0\u7801", functionName: "loadJpKrUncen",cacheDuration: 3600, params: [{ name: "page", title: "\u9875\u7801", type: "page" }] },
+    { id: "cnAv",      title: "\u56fd\u4ea7AV",           functionName: "loadCnAv",     cacheDuration: 3600, params: [{ name: "page", title: "\u9875\u7801", type: "page" }] },
+    { id: "selfie",    title: "\u81ea\u62cd\u6cc4\u5bc6", functionName: "loadSelfie",   cacheDuration: 3600, params: [{ name: "page", title: "\u9875\u7801", type: "page" }] },
+    { id: "hookup",    title: "\u63a2\u82b1\u7ea6\u70ae", functionName: "loadHookup",   cacheDuration: 3600, params: [{ name: "page", title: "\u9875\u7801", type: "page" }] },
+    { id: "streamer",  title: "\u4e3b\u64ad\u5f55\u5236", functionName: "loadStreamer", cacheDuration: 3600, params: [{ name: "page", title: "\u9875\u7801", type: "page" }] },
+    { id: "anime",     title: "\u52a8\u6f2b\u756a\u5267", functionName: "loadAnime",    cacheDuration: 3600, params: [{ name: "page", title: "\u9875\u7801", type: "page" }] },
   ],
   search: {
-    title: "搜索",
+    title: "\u641c\u7d22",
     functionName: "search",
     params: [
-      { name: "keyword", title: "关键词", type: "input" },
-      { name: "page", title: "页码", type: "page" },
+      { name: "keyword", title: "\u5173\u952e\u8bcd", type: "input" },
+      { name: "page", title: "\u9875\u7801", type: "page" },
     ],
   },
 };
@@ -31,6 +31,7 @@ const BASE = "https://kanav.info";
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1";
 
 function b64Decode(str) {
+  str = str.replace(/-/g, "+").replace(/_/g, "/");
   const map = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   const bytes = [];
   let i = 0;
@@ -109,7 +110,31 @@ async function loadDetail(link) {
   const $ = Widget.html.load(res.data);
   const script = $("script:contains(player_aaaa)").text().replace("var player_aaaa=", "");
   const encodedUrl = JSON.parse(script).url;
-  const videoUrl = decodeURIComponent(b64Decode(encodedUrl));
+  let videoUrl = b64Decode(encodedUrl);
+
+  try {
+    const decoded = decodeURIComponent(videoUrl);
+    if (decoded.startsWith("http")) videoUrl = decoded;
+  } catch (e) {}
+
+  if (videoUrl && !/\.(m3u8|mp4|flv|mkv|avi|ts|mov)(\?|$)/i.test(videoUrl)) {
+    try {
+      const embedRes = await Widget.http.get(videoUrl, {
+        headers: { "User-Agent": UA, "Referer": BASE + "/" },
+      });
+      const html = typeof embedRes.data === "string" ? embedRes.data : JSON.stringify(embedRes.data);
+
+      const urlMatch = html.match(/https?:\/\/[^\s"'<>\\]+?\.(m3u8|mp4)[^\s"'<>\\]*/);
+      if (urlMatch) {
+        videoUrl = urlMatch[0];
+      } else {
+        const $embed = Widget.html.load(html);
+        const src = $embed("video source").attr("src") || $embed("video").attr("src");
+        if (src) videoUrl = src;
+      }
+    } catch (e) {}
+  }
+
   return {
     id: link,
     type: "url",
