@@ -1,38 +1,21 @@
 WidgetMetadata = {
   id: "forward.kanav",
   title: "KanAV",
-  version: "1.0.0",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   description: "KanAV 视频源",
-  author: "夢",
+  author: "老头",
   site: "https://kanav.info",
   detailCacheDuration: 300,
   modules: [
-    {
-      id: "loadList",
-      title: "视频列表",
-      functionName: "loadList",
-      cacheDuration: 3600,
-      params: [
-        {
-          name: "category",
-          title: "分类",
-          type: "enumeration",
-          enumOptions: [
-            { title: "中文字幕", value: "1" },
-            { title: "日韩有码", value: "2" },
-            { title: "日韩无码", value: "3" },
-            { title: "国产AV", value: "4" },
-            { title: "自拍泄密", value: "30" },
-            { title: "探花约炮", value: "31" },
-            { title: "主播录制", value: "32" },
-            { title: "动漫番剧", value: "20" },
-          ],
-          value: "1",
-        },
-        { name: "page", title: "页码", type: "page" },
-      ],
-    },
+    { id: "cnSub",     title: "中文字幕", functionName: "loadCnSub",    cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
+    { id: "jpKrCen",   title: "日韩有码", functionName: "loadJpKrCen",  cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
+    { id: "jpKrUncen", title: "日韩无码", functionName: "loadJpKrUncen",cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
+    { id: "cnAv",      title: "国产AV",   functionName: "loadCnAv",     cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
+    { id: "selfie",    title: "自拍泄密", functionName: "loadSelfie",   cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
+    { id: "hookup",    title: "探花约炮", functionName: "loadHookup",   cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
+    { id: "streamer",  title: "主播录制", functionName: "loadStreamer", cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
+    { id: "anime",     title: "动漫番剧", functionName: "loadAnime",    cacheDuration: 3600, params: [{ name: "page", title: "页码", type: "page" }] },
   ],
   search: {
     title: "搜索",
@@ -103,15 +86,23 @@ function parseVideoList(html) {
   return items;
 }
 
-async function loadList(params = {}) {
-  const category = params.category || "1";
+async function loadCategory(categoryId, params) {
   const page = Number(params.page || 1);
   const res = await Widget.http.get(
-    `${BASE}/index.php/vod/type/id/${category}/page/${page}.html`,
+    `${BASE}/index.php/vod/type/id/${categoryId}/page/${page}.html`,
     { headers: { "User-Agent": UA } }
   );
   return parseVideoList(res.data);
 }
+
+async function loadCnSub(params)     { return loadCategory("1",  params); }
+async function loadJpKrCen(params)   { return loadCategory("2",  params); }
+async function loadJpKrUncen(params) { return loadCategory("3",  params); }
+async function loadCnAv(params)      { return loadCategory("4",  params); }
+async function loadSelfie(params)    { return loadCategory("30", params); }
+async function loadHookup(params)    { return loadCategory("31", params); }
+async function loadStreamer(params)  { return loadCategory("32", params); }
+async function loadAnime(params)     { return loadCategory("20", params); }
 
 async function loadDetail(link) {
   const res = await Widget.http.get(String(link), { headers: { "User-Agent": UA } });
