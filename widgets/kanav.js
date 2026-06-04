@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.kanav",
   title: "KanAV",
-  version: "1.0.1",
+  version: "1.0.0",
   requiredVersion: "0.0.1",
   description: "KanAV 视频源",
   author: "夢",
