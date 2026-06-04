@@ -76,7 +76,7 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/Jable%20Stream.js"
     },
     {
-      "id": "missav_makka_play",
+      "id": "missav_makka_play_fused",
       "title": "MissAV_ovo_Fused",
       "description": "MissAV 视频模块融合版：保留完整分类入口，增强封面/演员信息，并加入 1080p 检测 + 720p fallback 播放逻辑",
       "requiredVersion": "0.0.1",
@@ -85,8 +85,8 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/MissAV_ovo_Fused_v12.js"
     },
     {
-      "id": "Bitch",
-      "title": "Bitch Lives",
+      "id": "Bitch_nsfw_live",
+      "title": "Bitch Lives (NSFW-LIVE)",
       "description": "Bitch Lives",
       "requiredVersion": "0.0.1",
       "version": "1.0.0",
@@ -148,27 +148,24 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/kanav_int.js"
     },
     {
-      "id": "missav_makka_play",
-      "title": "MissAV_ovo",
-      "description": "MissAV 终极至尊完美版，锁定 1080P 兼容视频流，自适应分类推荐填补，完美修复历史记录演员/大分类跳转空白",
+      "id": "missav_makka_play_pro",
+      "title": "MissAV_ovo Pro",
       "requiredVersion": "0.0.1",
       "version": "3.7.4",
       "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|CC|EL",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/missav.js"
     },
     {
-      "id": "missav_makka_play",
-      "title": "MissAV_ovo",
-      "description": "简易的missav模块",
+      "id": "missav_makka_play_lite",
+      "title": "MissAV_ovo Lite",
       "requiredVersion": "0.0.1",
       "version": "2.1.1",
       "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/missavovo.js"
     },
     {
-      "id": "missav_makka_play",
-      "title": "MissAV_ovo",
-      "description": "MissAV 视频聚合模块，支持中文字幕、日本AV、素人、无码影片、亚洲AV、女优、类型、发行商与搜索",
+      "id": "missav_makka_play_enhanced",
+      "title": "MissAV_ovo Enhanced",
       "requiredVersion": "0.0.1",
       "version": "2.5.0",
       "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|CC|EL",
