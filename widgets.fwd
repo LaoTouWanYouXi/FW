@@ -4,130 +4,166 @@
   "icon": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/3211.jpeg",
   "widgets": [
     {
-      "id": "anime_omni_fix",
-      "title": "91porn_int",
-      "description": "91你懂的",
+      "id": "91porn_makka",
+      "title": "91Porn",
+      "description": "91Porn 分类浏览与全局搜索模块",
       "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/91porn_int.js"
+      "version": "2.3.0",
+      "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|EL",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/91porn.js"
     },
     {
-      "id": " global_series_makka",
-      "title": "91porny_int",
-      "description": "91porny_int",
+      "id": "91porny_int",
+      "title": "91Porny",
+      "description": "91Porny",
       "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
+      "version": "0.9.6",
+      "author": "網路",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/91porny_int.js"
     },
     {
-      "id": "movie_ultimate_makka_v2",
-      "title": "Bitcch Lives",
-      "description": "碧池直播",
+      "id": "Bitch",
+      "title": "Bitch Lives",
+      "description": "Bitch Lives",
       "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/Bitcch Lives.js"
+      "version": "1.0.0",
+      "author": "Discount Code：VEUS",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/Bitch Lives.js"
     },
     {
-      "id": "trakt_personal_key",
+      "id": "hanimel_me_style",
       "title": "Hanime1",
-      "description": "动漫",
-      "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
+      "description": "Tips：需要纯净度较高ip，获取 Hanime1 动画，原作者 skywazzle，更新 @ios151",
+      "requiredVersion": "0.0.2",
+      "version": "2.5.0",
+      "author": "ios151",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/Hanime1.js"
     },
     {
-      "id": "tmdb_upcoming_center_makka",
-      "title": "NSFW-LIVE",
-      "description": "直播",
-      "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/NSFW-LIVE.js"
+      "id": "hanime1Tao",
+      "title": "hanime1",
+      "description": "搜索·标签·分类·推荐·预告·作者",
+      "requiredVersion": "0.0.2",
+      "version": "1.9.6",
+      "author": "廿二日",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/hanime1.js"
     },
     {
-      "id": "western_trends_hub",
-      "title": "jable",
-      "description": "jable",
+      "id": "home_stream",
+      "title": "Home Stream",
+      "description": "获取聚合VOD影片资源",
       "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
+      "version": "1.2.1",
+      "author": "yuwang",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/Home Stream.js"
+    },
+    {
+      "id": "jable_stream",
+      "title": "Jable Stream",
+      "description": "通过番号匹配 Jable 播放源，并聚合到当前视频详情页",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "Eric",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/Jable Stream.js"
+    },
+    {
+      "id": "jable_int",
+      "title": "Jable",
+      "description": "修复声音&恢复大量分类",
+      "requiredVersion": "0.0.2",
+      "version": "1.3.0",
+      "author": "nibiru｜MakkaPakka｜蝴蝶",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/jable.js"
     },
     {
-      "id": "global_tv_calendar_ultimate",
-      "title": "javday_int",
-      "description": "javday_int",
+      "id": "missav_makka_play_fused",
+      "title": "MissAV_ovo_Fused",
+      "description": "MissAV 视频模块融合版：保留完整分类入口，增强封面/演员信息，并加入 1080p 检测 + 720p fallback 播放逻辑",
       "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javday_int.js"
+      "version": "2.4.12-fused",
+      "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖 / EL / Eric",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/MissAV_ovo_Fused_v12.js"
     },
     {
-      "id": "cinephile_hub_ultimate",
-      "title": "javdayovo",
-      "description": "javdayovo",
+      "id": "missav_makka_play_pro",
+      "title": "MissAV_ovo",
+      "description": "MissAV 终极至尊完美版，锁定 1080P 兼容视频流，自适应分类推荐填补，完美修复历史记录演员/大分类跳转空白",
       "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javdayovo.js"
+      "version": "3.7.4",
+      "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|CC|EL",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/missav.js"
     },
     {
-      "id": "discover_hub_ultimate",
-      "title": "missavovo",
-      "description": "missavovo",
+      "id": "missav_makka_play_lite",
+      "title": "MissAV_ovo",
+      "description": "简易的missav模块",
       "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
+      "version": "2.1.1",
+      "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/missavovo.js"
     },
     {
-      "id": "ultimate_media_hub_pro_ui",
-      "title": "pornhub_int",
-      "description": "pornhub_int",
+      "id": "Bitch_nsfw_live",
+      "title": "NSFW-LIVE",
+      "description": "Bitch Lives",
       "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
+      "version": "1.0.0",
+      "author": "Discount Code：VEUS",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/NSFW-LIVE.js"
+    },
+    {
+      "id": "javday_int",
+      "title": "JAVDay",
+      "description": "網路收集到的模塊",
+      "requiredVersion": "0.0.1",
+      "version": "1.2.0",
+      "author": "Ti",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javday_int.js"
+    },
+    {
+      "id": "javday_pro_final_mak",
+      "title": "JAVDay_ovo",
+      "description": "简易的javday模块",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.2",
+      "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javdayovo.js"
+    },
+    {
+      "id": "Pornhub_int",
+      "title": "Pornhub",
+      "description": "網路收集到的模塊",
+      "requiredVersion": "0.0.1",
+      "version": "1.1.5",
+      "author": "海带",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/pornhub_int.js"
     },
     {
-      "id": "ultimate_media_repair_ui",
-      "title": "xvideos_int",
-      "description": "xvideos_int",
+      "id": "xvideos_int",
+      "title": "XVideos",
+      "description": "網路收集到的模塊",
       "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
+      "version": "0.9.6",
+      "author": "網路",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/xvideos_int.js"
     },
     {
-      "id": "makka.platform.originals",
+      "id": "bilibili.official",
+      "title": "哔哩影视",
+      "description": "哔哩官方番剧、国创、纪录片、综艺（Widget版）",
+      "requiredVersion": "0.0.1",
+      "version": "1.0",
+      "author": "Converted",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/哔哩哔哩.js"
+    },
+    {
+      "id": "makkapakka_hub_list_2.0",
       "title": "平台剧场",
-      "description": "平台剧场",
+      "description": "各個平臺劇場和豆瓣熱榜",
       "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
+      "version": "1.0.9",
+      "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/平台剧场.js"
-    },
-    {
-      "id": "variety_hub_ultimate_v4_fix",
-      "title": "VOD 播放源",
-      "description": "vod源",
-      "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/VOD 播放源.js"
-    },
-    {
-      "id": "trakt_personal_mixed",
-      "title": "Home Stream",
-      "description": "vod资源",
-      "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTouWanYouXi",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/Home Stream.js"
     }
   ]
 }
