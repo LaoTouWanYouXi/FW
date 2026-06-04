@@ -1,5 +1,5 @@
 WidgetMetadata = {
-    id: "missav_makka_play",
+    id: "missav_makka_play_enhanced",
     title: "MissAV_ovo",
     author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|CC|EL",
     description: "MissAV 视频聚合模块，支持中文字幕、日本AV、素人、无码影片、亚洲AV、女优、类型、发行商与搜索",

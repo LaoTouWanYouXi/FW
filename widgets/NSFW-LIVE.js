@@ -1,5 +1,5 @@
 var WidgetMetadata = {
-  id: "Bitch",
+  id: "Bitch_nsfw_live",
   title: "Bitch Lives",
   description: "Bitch Lives",
   author: "Discount Code：VEUS",

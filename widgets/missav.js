@@ -3,7 +3,7 @@
 // =================================================================
 
 WidgetMetadata = {
-    id: "missav_makka_play",
+    id: "missav_makka_play_pro",
     title: "MissAV_ovo",
     author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|CC|EL",
     description: "MissAV 终极至尊完美版，锁定 1080P 兼容视频流，自适应分类推荐填补，完美修复历史记录演员/大分类跳转空白",

@@ -1,5 +1,5 @@
 WidgetMetadata = {
-    id: "missav_makka_play",
+    id: "missav_makka_play_lite",
     title: "MissAV_ovo",
     author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
     description: "简易的missav模块",

@@ -1,5 +1,5 @@
 WidgetMetadata = {
-    id: "missav_makka_play",
+    id: "missav_makka_play_fused",
     title: "MissAV_ovo_Fused",
     author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖 / EL / Eric",
     description: "MissAV 视频模块融合版：保留完整分类入口，增强封面/演员信息，并加入 1080p 检测 + 720p fallback 播放逻辑",
