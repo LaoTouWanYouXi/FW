@@ -4,7 +4,7 @@ WidgetMetadata = {
     description: "搜索·标签·分类·推荐·预告·作者",
     author: "廿二日",
     site: "https://hanime1.me",
-    version: "1.9.6",
+    version: "2.0.2",
     requiredVersion: "0.0.2",
     detailCacheDuration: 300,
     search: {
@@ -348,12 +348,8 @@ WidgetMetadata = {
     ]
 };
 
-// ─── 常量 ────────────────────────────────────────────────────────────────────
-
 const BASE_URL = "https://hanime1.me";
 const REQUEST_TIMEOUT = 12000;
-
-// ─── 简繁转换表 ───────────────────────────────────────────────────────────────
 
 const S2T_MAP = {
     "无码": "無碼", "AI解码": "AI解碼", "中文字幕": "中文字幕", "中文配音": "中文配音",
@@ -406,8 +402,6 @@ const S2T_MAP = {
     "打屁股": "打屁股", "肉棒打脸": "肉棒打臉", "阴道外翻": "陰道外翻",
     "男乳首责": "男乳首責", "接吻": "接吻", "舌吻": "舌吻", "POV": "POV"
 };
-
-// ─── 工具函数 ─────────────────────────────────────────────────────────────────
 
 function convertToTraditional(text) {
     if (!text) return "";
@@ -470,19 +464,15 @@ function assignImagePaths(imgUrl) {
     const normUrl = normalizeImageUrl(imgUrl);
     if (!normUrl) return { posterPath: undefined, backdropPath: undefined };
     
-    // 【核心更新】严格区分 16:9 与 2:3 的比例字段
     if (normUrl.includes('/thumbnail/')) {
-        return { posterPath: undefined, backdropPath: normUrl }; // 仅允许横图渲染
+        return { posterPath: undefined, backdropPath: normUrl };
     }
     if (normUrl.includes('/cover/')) {
-        return { posterPath: normUrl, backdropPath: undefined }; // 仅允许竖图渲染
+        return { posterPath: normUrl, backdropPath: undefined };
     }
-    return { posterPath: normUrl, backdropPath: normUrl }; // 兜底
+    return { posterPath: normUrl, backdropPath: normUrl };
 }
 
-// ─── 列表解析 ───────────────────────────────────────────────────────────────
-
-// 通用卡片数据提取（不含图片赋值，供两个 parse 函数共用）
 function extractCardData($card, seen) {
     const href = $card.attr('href') || $card.find('a.overlay').attr('href') || $card.find('a.video-link').attr('href') || '';
     const link = normalizeWatchUrl(href);
@@ -517,7 +507,6 @@ function buildCards($) {
     return cards;
 }
 
-// 16:9 横图列表（搜索、排行、标签、大部分分类）→ 只赋 backdropPath
 function parseListHtml(html) {
     if (!html || !html.trim()) return [];
     const $ = Widget.html.load(html);
@@ -546,7 +535,6 @@ function parseListHtml(html) {
     return items;
 }
 
-// 2:3 纵图列表（裏番、泡麵番专用）→ 只赋 posterPath
 function parseListHtmlPortrait(html) {
     if (!html || !html.trim()) return [];
     const $ = Widget.html.load(html);
@@ -575,6 +563,36 @@ function parseListHtmlPortrait(html) {
     return items;
 }
 
+function parseListHtmlSearch(html) {
+    if (!html || !html.trim()) return [];
+    const $ = Widget.html.load(html);
+    const items = [];
+    const seen = new Set();
+
+    buildCards($).forEach($card => {
+        const data = extractCardData($card, seen);
+        if (!data) return;
+        const { link, title, poster, durationText, releaseDate } = data;
+        const normUrl = normalizeImageUrl(poster);
+        const posterPath = normUrl || undefined;
+        const backdropPath = normUrl || undefined;
+        items.push({
+            id: link,
+            type: "url",
+            title: convertToTraditional(title),
+            posterPath,
+            backdropPath,
+            durationText,
+            releaseDate,
+            link,
+            mediaType: "movie",
+            playerType: "system"
+        });
+    });
+
+    return items;
+}
+
 async function fetchAndParse(url, referer, parser = parseListHtml) {
     try {
         const response = await httpGetWithTimeout(url, referer);
@@ -583,8 +601,6 @@ async function fetchAndParse(url, referer, parser = parseListHtml) {
         return [];
     }
 }
-
-// ─── URL 映射函数 ─────────────────────────────────────────────────────────────
 
 function mapSortToApi(v) {
     const m = {
@@ -660,8 +676,6 @@ function appendTagsToQuery(params, queryParts) {
     });
 }
 
-// ─── 列表模块函数 ─────────────────────────────────────────────────────────────
-
 async function searchVideos(params) {
     const page = parseInt(params.page) || 1;
     const rawKeyword = params.keyword || "";
@@ -677,7 +691,7 @@ async function searchVideos(params) {
     const referer = page > 1
         ? buildSiteUrl('/search', queryParts.map(p => p.startsWith('page=') ? `page=${page - 1}` : p))
         : BASE_URL + '/';
-    return fetchAndParse(url, referer);
+    return fetchAndParse(url, referer, parseListHtmlSearch);
 }
 
 async function loadAdvancedGenre(params) {
@@ -700,8 +714,6 @@ async function loadAdvancedGenre(params) {
         ? buildSiteUrl('/search', queryParts.map(p => p.startsWith('page=') ? `page=${page - 1}` : p))
         : BASE_URL + '/';
 
-    // 裏番、泡麵番的列表页封面是 2:3 纵图 → 用 portrait 解析器
-    // 其他分类封面是 16:9 横图 → 用默认解析器
     const isPortrait = ['rifan', 'paomian'].includes(params.genre);
     return fetchAndParse(url, referer, isPortrait ? parseListHtmlPortrait : parseListHtml);
 }
@@ -746,9 +758,6 @@ async function loadByTagLoc(params) { const { url, referer } = buildTagModuleUrl
 async function loadByTagPlot(params) { const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
 async function loadByTagPos(params) { const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
 
-
-// ─── 详情页解析 ───────────────────────────────────────────────────────────────
-
 async function loadDetail(link) {
     try {
         const response = await httpGetWithTimeout(link, link);
@@ -786,7 +795,6 @@ async function loadDetail(link) {
         }
         if (!trailerUrl && videoUrl) trailerUrl = videoUrl;
 
-        // ── 标题与标语 ────────────────────────────────────────────────────────
         const origTitle = safeText($('#shareBtn-title').text());
         let transTitle = "";
         $('div.video-description-panel').children('div[style*="margin-bottom"]')
@@ -801,13 +809,11 @@ async function loadDetail(link) {
                 return false;
             });
 
-        // 基础初始化（多集视频会在下方被覆盖）
         let title = convertToTraditional(transTitle || origTitle || '标题未知');
         let tagline = (transTitle && origTitle && transTitle !== origTitle)
             ? convertToTraditional(origTitle)
             : undefined;
 
-        // ── 标签与演员制作商（genreItems, peoples）──────────────────────────────
         const genreItems = [];
         $('.single-video-tag a').each((_, el) => {
             const tagText = $(el).text().replace(/\(\d+\)/g, '').replace(/&nbsp;/g, '').trim();
@@ -816,21 +822,43 @@ async function loadDetail(link) {
             }
         });
 
-        // 【核心更新】提取演员/制作商，构建联动数组
         const peoples = [];
-        const artistName = safeText($('#video-artist-name').text());
-        if (artistName) {
-            peoples.push({ id: artistName, title: convertToTraditional(artistName) });
+        const seenPeoples = new Set();
+        $('.video-details-wrapper a[href*="/user/"]').each((_, el) => {
+            const $a = $(el);
+            const href = $a.attr('href') || '';
+            const userId = href.split('/user/')[1]?.split(/[?#]/)[0] || '';
+            const $imgs = $a.find('img');
+            const $realAvatar = $imgs.length >= 2 ? $imgs.eq(1) : $imgs.first();
+            const avatar = normalizeImageUrl(
+                $realAvatar.attr('src') || $realAvatar.attr('data-src') || ''
+            );
+            const name = convertToTraditional(
+                safeText($realAvatar.attr('alt') || $a.text())
+            );
+            if (!name || seenPeoples.has(name)) return;
+            seenPeoples.add(name);
+            peoples.push({
+                id: userId || name,
+                title: name,
+                avatar: avatar || 'https://iili.io/KtHNnQS.png',
+            });
+        });
+        if (!peoples.length) {
+            const artistName = convertToTraditional(safeText($('#video-artist-name').text()));
+            if (artistName) peoples.push({
+                id: artistName,
+                title: artistName,
+                avatar: 'https://iili.io/KtHNnQS.png',
+            });
         }
 
-        // ── 发布日期 ──────────────────────────────────────────────────────────
         let releaseDate = "";
         const hiddenXsText = $('.hidden-xs').first().text() || "";
         const detailsText = $('.video-details-wrapper').text() || "";
         const dateMatch = (hiddenXsText + " " + detailsText).match(/\d{4}-\d{2}-\d{2}/);
         if (dateMatch) releaseDate = dateMatch[0];
 
-        // ── 简介 ──────────────────────────────────────────────────────────────
         let description = "";
         const $caption = $('.video-caption-text');
         if ($caption.length) {
@@ -853,15 +881,10 @@ async function loadDetail(link) {
             }
         }
 
-        // ── 封面图 ────────────────────────────────────────────────────────────
-        // 详情页背景大图统一用 16:9 横图
-        // og:image 在 hanime1 详情页是 /thumbnail/ 横图，直接给 backdropPath
-        // posterPath 不强制赋值，保持 undefined（详情页不需要纵图）
         const ogImage = normalizeImageUrl($('meta[property="og:image"]').attr('content') || '');
         let finalPosterPath = undefined;
         let finalBackdropPath = ogImage || undefined;
 
-        // ── 相关推荐（relatedItems）──────────────────────────────────────────
         const relatedItems = [];
         const seenRelated = new Set([link]);
 
@@ -887,13 +910,22 @@ async function loadDetail(link) {
             }
             const recPosterRaw = $recImg.attr('data-src') || $recImg.attr('data-original') || $recImg.attr('src') || '';
             const recBackdrop = normalizeImageUrl(recPosterRaw) || undefined;
-
+            const rawDurText = $card.find('.card-mobile-duration').text();
+            const durMatch = rawDurText.match(/\d+:\d{2}/);
+            const recDuration = durMatch ? durMatch[0] : undefined;
+            const vidMatch = recLink.match(/v=(\d+)/);
+            const vid = vidMatch ? vidMatch[1] : undefined;
+            const recDesc = [
+                recDuration ? `时长: ${recDuration}` : null,
+                vid ? `ID: ${vid}` : null
+            ].filter(Boolean).join(' | ') || undefined;
             relatedItems.push({
                 id: recLink,
                 type: 'url',
                 title: convertToTraditional(recTitle),
                 posterPath: undefined,
                 backdropPath: recBackdrop,
+                description: recDesc,
                 mediaType: 'movie',
                 link: recLink
             });
