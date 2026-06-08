@@ -155,6 +155,42 @@
       "version": "1.0.0",
       "author": "nibiru/makka/el",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/KoreaPornMovie.js"
+    },
+    {
+      "id": "forward.javmove",
+      "title": "JavMove",
+      "description": "JavMove 视频聚合模块，支持最新影片、即将上映、搜索",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "Forward",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/h/javmove.js"
+    },
+    {
+      "id": "forward.javxx",
+      "title": "JavXX",
+      "description": "JavXX 视频聚合模块，支持热门影片、最新影片、最近更新、有码影片、无码影片、搜索",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "Forward",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/h/javxx.js"
+    },
+    {
+      "id": "forward.pppporn",
+      "title": "PppPorn",
+      "description": "PppPorn 视频聚合模块，支持分类浏览、搜索",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "Forward",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/h/ppp.js"
+    },
+    {
+      "id": "forward.rouvideo",
+      "title": "肉视频",
+      "description": "肉视频聚合模块，支持国产AV、探花、自拍流出、OnlyFans、日本、搜索",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "Forward",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/h/rou.js"
     }
   ]
 }
