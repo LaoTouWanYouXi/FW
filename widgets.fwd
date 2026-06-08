@@ -146,6 +146,15 @@
       "version": "1.0.9",
       "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/平台剧场.js"
+    },
+    {
+      "id": "forward.koreanpornmovie",
+      "title": "KoreaPornMovie",
+      "description": "KoreaPornMovie 韩国影视聚合模块",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "nibiru/makka/el",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/KoreaPornMovie.js"
     }
   ]
 }
