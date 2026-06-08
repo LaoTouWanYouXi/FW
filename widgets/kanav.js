@@ -28,6 +28,7 @@ WidgetMetadata = {
 };
 
 const BASE = "https://kanav.info";
+const CDN_REFERER = "https://kanav.ad/";  // CDN防盗链要求Referer为kanav.ad，而非kanav.info
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1";
 
 function b64Decode(str) {
@@ -273,8 +274,8 @@ async function loadDetail(link) {
       playerType: "system",
       customHeaders: {
         "User-Agent": UA,
-        "Referer": String(link),
-        "Origin": BASE,
+        "Referer": CDN_REFERER,
+        "Origin": "https://kanav.ad",
       },
     };
   }
@@ -290,8 +291,8 @@ async function loadDetail(link) {
       playerType: "system",
       customHeaders: {
         "User-Agent": UA,
-        "Referer": String(link),
-        "Origin": BASE,
+        "Referer": CDN_REFERER,
+        "Origin": "https://kanav.ad",
       },
     };
   }
@@ -300,7 +301,7 @@ async function loadDetail(link) {
   if (videoUrl && videoUrl.startsWith("http")) {
     try {
       const embedRes = await Widget.http.get(videoUrl, {
-        headers: { "User-Agent": UA, "Referer": BASE + "/" },
+        headers: { "User-Agent": UA, "Referer": CDN_REFERER },
       });
       const embedHtml = typeof embedRes.data === "string" ? embedRes.data : JSON.stringify(embedRes.data);
       const extracted = extractVideoUrlFromHtml(embedHtml);
@@ -311,7 +312,7 @@ async function loadDetail(link) {
     if (videoUrl && !isDirectStreamUrl(videoUrl) && videoUrl.startsWith("http")) {
       try {
         const embedRes2 = await Widget.http.get(videoUrl, {
-          headers: { "User-Agent": UA, "Referer": BASE + "/" },
+          headers: { "User-Agent": UA, "Referer": CDN_REFERER },
         });
         const embedHtml2 = typeof embedRes2.data === "string" ? embedRes2.data : JSON.stringify(embedRes2.data);
         const extracted2 = extractVideoUrlFromHtml(embedHtml2);
@@ -328,8 +329,8 @@ async function loadDetail(link) {
     playerType: "system",
     customHeaders: {
       "User-Agent": UA,
-      "Referer": String(link),
-      "Origin": BASE,
+      "Referer": CDN_REFERER,
+      "Origin": "https://kanav.ad",
     },
   };
 }
