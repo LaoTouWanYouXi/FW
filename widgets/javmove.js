@@ -76,7 +76,8 @@ function parseVideoList(html) {
       posterPath: cover,
       backdropPath: cover,
       releaseDate: pubdate ? pubdate.split("T")[0] : "",
-      link: detailLink
+      link: detailLink,
+      mediaType: "movie",
     });
   });
 

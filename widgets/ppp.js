@@ -9,50 +9,332 @@ WidgetMetadata = {
   detailCacheDuration: 300,
   modules: [
     {
-      id: "categories",
-      title: "分类浏览",
+      id: "china",
+      title: "中国",
       functionName: "loadCategory",
       cacheDuration: 3600,
       params: [
-        {
-          name: "category",
-          title: "选择分类",
-          type: "enumeration",
-          value: "https://ppp.porn/categories/amateur/",
-          enumOptions: [
-            { title: "素人", value: "https://ppp.porn/categories/amateur/" },
-            { title: "肛交", value: "https://ppp.porn/categories/anal/" },
-            { title: "亚洲", value: "https://ppp.porn/categories/asian/" },
-            { title: "尤物", value: "https://ppp.porn/categories/babe/" },
-            { title: "丰满", value: "https://ppp.porn/categories/bbw/" },
-            { title: "调教", value: "https://ppp.porn/categories/bdsm/" },
-            { title: "美臀", value: "https://ppp.porn/categories/big-ass/" },
-            { title: "巨乳", value: "https://ppp.porn/categories/big-tits/" },
-            { title: "金发", value: "https://ppp.porn/categories/blonde/" },
-            { title: "口交", value: "https://ppp.porn/categories/blowjob/" },
-            { title: "褐发", value: "https://ppp.porn/categories/brunette/" },
-            { title: "中出", value: "https://ppp.porn/categories/creampie/" },
-            { title: "射精", value: "https://ppp.porn/categories/cumshot/" },
-            { title: "癖好", value: "https://ppp.porn/categories/fetish/" },
-            { title: "群交", value: "https://ppp.porn/categories/group/" },
-            { title: "手交", value: "https://ppp.porn/categories/handjob/" },
-            { title: "硬核", value: "https://ppp.porn/categories/hardcore/" },
-            { title: "跨种族", value: "https://ppp.porn/categories/interracial/" },
-            { title: "拉丁", value: "https://ppp.porn/categories/latina/" },
-            { title: "女同", value: "https://ppp.porn/categories/lesbian/" },
-            { title: "熟女", value: "https://ppp.porn/categories/mature/" },
-            { title: "人妻", value: "https://ppp.porn/categories/milf/" },
-            { title: "露出", value: "https://ppp.porn/categories/outdoor/" },
-            { title: "第一视角", value: "https://ppp.porn/categories/pov/" },
-            { title: "公共场所", value: "https://ppp.porn/categories/public/" },
-            { title: "红发", value: "https://ppp.porn/categories/redhead/" },
-            { title: "潮吹", value: "https://ppp.porn/categories/squirting/" },
-            { title: "纹身", value: "https://ppp.porn/categories/tattoo/" },
-            { title: "少女", value: "https://ppp.porn/categories/teen/" },
-            { title: "三人行", value: "https://ppp.porn/categories/threesome/" },
-            { title: "玩具", value: "https://ppp.porn/categories/toys/" }
-          ]
-        },
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/china/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "china-av",
+      title: "中国AV",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/china-av/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "taiwan",
+      title: "台湾",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/taiwan/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "japan",
+      title: "日本",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/japan/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "japan-producer",
+      title: "日本片商",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/japan-producer/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "korea",
+      title: "韩国",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/korea/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "hongkong",
+      title: "香港",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/hongkong/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "se-asia",
+      title: "东南亚",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/se-asia/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "amateur",
+      title: "素人自拍",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/amateur/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "drama",
+      title: "剧情",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/drama/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "uncensored",
+      title: "无码",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/uncensored/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "91-tanhua",
+      title: "探花",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/91-tanhua/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "threesome",
+      title: "多P",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/threesome/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "bdsm",
+      title: "凌辱",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/bdsm/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "cosplay",
+      title: "Cosplay",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/cosplay/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "streamer",
+      title: "主播",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/streamer/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "student",
+      title: "学生",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/student/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "office-lady",
+      title: "OL",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/office-lady/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "pantyhose",
+      title: "丝袜",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/pantyhose/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "knee-socks",
+      title: "过膝袜",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/knee-socks/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "maid",
+      title: "女仆",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/maid/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "nurse",
+      title: "护士",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/nurse/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "cheongsam",
+      title: "旗袍",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/cheongsam/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "costume",
+      title: "古装",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/costume/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "kemonomimi",
+      title: "兽耳",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/kemonomimi/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "acg",
+      title: "动漫",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/acg/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "yoga-pants",
+      title: "瑜伽裤",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/yoga-pants/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "dolfin-shorts",
+      title: "真理裤",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/dolfin-shorts/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "flight-attendant",
+      title: "空姐",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/flight-attendant/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "exhibitionists",
+      title: "野外露出",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/exhibitionists/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "first-person-pov",
+      title: "主观视角",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/first-person-pov/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "lesbian",
+      title: "百合",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/lesbian/" },
+        { name: "page", title: "页码", type: "page" }
+      ]
+    },
+    {
+      id: "released",
+      title: "流出",
+      functionName: "loadCategory",
+      cacheDuration: 3600,
+      params: [
+        { name: "category", title: "分类", type: "constant", value: "https://ppp.porn/categories/released/" },
         { name: "page", title: "页码", type: "page" }
       ]
     }
@@ -87,16 +369,21 @@ function parseVideoList(html) {
   const $ = Widget.html.load(html);
   const items = [];
 
+  // 分类列表用 common_videos_list，搜索结果用 search_result
   const selector = $("#list_videos_common_videos_list_items .item").length > 0
     ? "#list_videos_common_videos_list_items .item"
-    : "#list_videos_videos_list_search_result_items .item";
+    : $("#list_videos_videos_list_search_result_items .item").length > 0
+      ? "#list_videos_videos_list_search_result_items .item"
+      : ".item";
 
   $(selector).each((_, el) => {
     const $el = $(el);
-    const title = $el.find("h4 a").text().trim();
-    const cover = $el.find("img").attr("data-src") || $el.find("img").attr("src") || "";
-    const href = $el.find("h4 a").attr("href") || "";
-    const duration = $el.find(".card-video__duration").text().trim();
+    const $titleLink = $el.find("h4 a, .card-video__title a").first();
+    const title = $titleLink.text().trim();
+    const href = $titleLink.attr("href") || "";
+    const $img = $el.find("img").first();
+    const cover = $img.attr("data-src") || $img.attr("src") || "";
+    const duration = $el.find(".card-video__duration, .duration").first().text().trim();
 
     if (!title || !href) return;
 
@@ -106,8 +393,9 @@ function parseVideoList(html) {
       title,
       posterPath: cover,
       backdropPath: cover,
-      durationText: duration,
-      link: resolveUrl(href)
+      durationText: duration || undefined,
+      link: resolveUrl(href),
+      mediaType: "movie",
     });
   });
 
@@ -120,10 +408,32 @@ async function loadCategory(params = {}) {
 
   try {
     let url = `${categoryUrl}?mode=async&function=get_block&block_id=list_videos_common_videos_list&sort_by=post_date&from=${page}`;
-    const res = await Widget.http.get(url, { headers: HEADERS });
-    return parseVideoList(res.data);
+    let res = await Widget.http.get(url, { headers: HEADERS });
+    let items = parseVideoList(res.data);
+
+    // 异步API返回空时，回退到普通页面抓取
+    if (items.length === 0) {
+      const fallbackUrl = page > 1
+        ? `${categoryUrl}page/${page}/`
+        : categoryUrl;
+      try {
+        const fbRes = await Widget.http.get(fallbackUrl, { headers: HEADERS });
+        items = parseVideoList(fbRes.data);
+      } catch (e) {}
+    }
+
+    return items;
   } catch (e) {
-    return [];
+    // 异步API请求失败时，回退到普通页面
+    try {
+      const fallbackUrl = page > 1
+        ? `${categoryUrl}page/${page}/`
+        : categoryUrl;
+      const fbRes = await Widget.http.get(fallbackUrl, { headers: HEADERS });
+      return parseVideoList(fbRes.data);
+    } catch (e2) {
+      return [];
+    }
   }
 }
 
@@ -138,10 +448,12 @@ async function loadDetail(link) {
     const cover = $('meta[property="og:image"]').attr("content") || $(".video-cover img").attr("src") || "";
 
     let videoUrl = "";
+
+    // 1) script 中的 .m3u8
     $("script").each((_, el) => {
       const content = $(el).html() || "";
       if (content.includes(".m3u8")) {
-        const match = content.match(/https?:\/\/[\w./-]+\.m3u8/);
+        const match = content.match(/https?:\/\/[\w./-]+\.m3u8[\w./-]*/);
         if (match) {
           videoUrl = match[0];
           return false;
@@ -149,12 +461,40 @@ async function loadDetail(link) {
       }
     });
 
+    // 2) script 中的 .mp4
+    if (!videoUrl) {
+      $("script").each((_, el) => {
+        const content = $(el).html() || "";
+        if (content.includes(".mp4")) {
+          const match = content.match(/https?:\/\/[\w./-]+\.mp4[\w./-]*/);
+          if (match) {
+            videoUrl = match[0];
+            return false;
+          }
+        }
+      });
+    }
+
+    // 3) video/source 标签
+    if (!videoUrl) {
+      videoUrl = $('video source[type="video/mp4"]').attr("src")
+        || $("video source").attr("src")
+        || $("video").attr("src")
+        || "";
+    }
+
+    if (videoUrl && videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+
     const genreItems = [];
+    const seenGenres = new Set();
     $("a[href*='/categories/'], a[href*='/tags/']").each((_, el) => {
       const $a = $(el);
       const href = resolveUrl($a.attr("href") || "");
       const text = $a.text().trim();
-      if (text && href) genreItems.push({ id: href, title: text });
+      if (text && href && !seenGenres.has(href)) {
+        seenGenres.add(href);
+        genreItems.push({ id: href, title: text });
+      }
     });
 
     const relatedItems = [];
@@ -162,14 +502,15 @@ async function loadDetail(link) {
     $(".related-videos .item, #list_videos_common_videos_list_items .item").each((_, el) => {
       if (relatedItems.length >= 8) return false;
       const $el = $(el);
-      const $rLink = $el.find("h4 a");
+      const $rLink = $el.find("h4 a, .card-video__title a").first();
       const rHref = $rLink.attr("href") || "";
       const rDetailLink = resolveUrl(rHref);
       if (!rDetailLink || seenRelated.has(rDetailLink)) return;
       seenRelated.add(rDetailLink);
 
       const rTitle = $rLink.text().trim() || "相关影片";
-      const rCover = $el.find("img").attr("data-src") || $el.find("img").attr("src") || "";
+      const $rImg = $el.find("img").first();
+      const rCover = $rImg.attr("data-src") || $rImg.attr("src") || "";
 
       relatedItems.push({
         id: rHref,
@@ -209,7 +550,20 @@ async function search(params = {}) {
     const text = encodeURIComponent(keyword);
     const url = `${BASE_URL}/search/${text}/?mode=async&function=get_block&block_id=list_videos_videos_list_search_result&q=${text}&category_ids=&sort_by=&from_videos=${page}&from_albums=${page}`;
     const res = await Widget.http.get(url, { headers: HEADERS });
-    return parseVideoList(res.data);
+    let items = parseVideoList(res.data);
+
+    // 搜索异步API无结果时，回退到普通搜索页面
+    if (items.length === 0) {
+      try {
+        const fbUrl = page > 1
+          ? `${BASE_URL}/search/${text}/page/${page}/`
+          : `${BASE_URL}/search/${text}/`;
+        const fbRes = await Widget.http.get(fbUrl, { headers: HEADERS });
+        items = parseVideoList(fbRes.data);
+      } catch (e) {}
+    }
+
+    return items;
   } catch (e) {
     return [];
   }

@@ -187,7 +187,8 @@ function parseVideoList(html) {
       posterPath: cover,
       backdropPath: cover,
       description: subTitle || hdInfo,
-      link: resolveUrl(href)
+      link: resolveUrl(href),
+      mediaType: "movie",
     });
   });
 
