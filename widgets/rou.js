@@ -14,42 +14,93 @@ WidgetMetadata = {
       functionName: "loadCategory",
       cacheDuration: 3600,
       params: [
+        {
+          name: "category",
+          title: "选择片商",
+          type: "enumeration",
+          value: "/t/麻豆傳媒",
+          enumOptions: [
+            { title: "麻豆传媒", value: "/t/麻豆傳媒" },
+            { title: "糖心Vlog", value: "/t/糖心Vlog" },
+            { title: "蜜桃影像传媒", value: "/t/蜜桃影像傳媒" },
+            { title: "香蕉视频传媒", value: "/t/香蕉視頻傳媒" },
+            { title: "星空无限传媒", value: "/t/星空無限傳媒" },
+            { title: "天美传媒", value: "/t/天美傳媒" },
+            { title: "精东影业", value: "/t/精東影業" },
+            { title: "杏吧传媒", value: "/t/杏吧傳媒" },
+            { title: "91制片厂", value: "/t/91製片廠" },
+            { title: "皇家华人", value: "/t/皇家華人" },
+            { title: "起点传媒", value: "/t/起點傳媒" },
+            { title: "大象传媒", value: "/t/大象傳媒" },
+            { title: "果冻传媒", value: "/t/果凍傳媒" },
+            { title: "萝莉社", value: "/t/蘿莉社" },
+            { title: "ED Mosaic", value: "/t/ED Mosaic" },
+            { title: "兔子先生", value: "/t/兔子先生" },
+            { title: "扣扣传媒", value: "/t/扣扣傳媒" },
+            { title: "SA国际传媒", value: "/t/SA國際傳媒" },
+            { title: "爱神传媒", value: "/t/愛神傳媒" },
+            { title: "性视界传媒", value: "/t/性視界傳媒" },
+            { title: "PsychopornTW", value: "/t/PsychopornTW" },
+            { title: "拍摄花絮", value: "/t/拍攝花絮" },
+            { title: "抖阴", value: "/t/抖陰" },
+            { title: "91茄子", value: "/t/91茄子" },
+            { title: "绝对领域传媒", value: "/t/絕對領域傳媒" },
+            { title: "乌托邦传媒", value: "/t/烏托邦傳媒" },
+            { title: "红斯灯影像", value: "/t/紅斯燈影像" },
+            { title: "草莓视频", value: "/t/草莓視頻" },
+            { title: "渡边传媒", value: "/t/渡邊傳媒" },
+            { title: "乐播传媒", value: "/t/樂播傳媒" },
+            { title: "葫芦影业", value: "/t/葫蘆影業" },
+            { title: "Pussy Hunter", value: "/t/Pussy Hunter" },
+            { title: "麻麻传媒", value: "/t/麻麻傳媒" },
+            { title: "三只狼传媒", value: "/t/三只狼傳媒" },
+            { title: "辣椒原创", value: "/t/辣椒原創" },
+            { title: "萝莉原创", value: "/t/萝莉原创" },
+            { title: "MisAV", value: "/t/MisAV" },
+            { title: "SWAG@daisybaby", value: "/t/SWAG@daisybaby" },
+            { title: "冠希传媒", value: "/t/冠希傳媒" }
+          ]
+        },
         { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "hookup",
       title: "探花",
-      functionName: "loadHookup",
+      functionName: "loadCategory",
       cacheDuration: 3600,
       params: [
+        { name: "category", title: "分类", type: "constant", value: "/t/探花" },
         { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "leaked",
       title: "自拍流出",
-      functionName: "loadLeaked",
+      functionName: "loadCategory",
       cacheDuration: 3600,
       params: [
+        { name: "category", title: "分类", type: "constant", value: "/t/自拍流出" },
         { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "onlyfans",
       title: "OnlyFans",
-      functionName: "loadOnlyFans",
+      functionName: "loadCategory",
       cacheDuration: 3600,
       params: [
+        { name: "category", title: "分类", type: "constant", value: "/t/OnlyFans" },
         { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "japanese",
       title: "日本",
-      functionName: "loadJapanese",
+      functionName: "loadCategory",
       cacheDuration: 3600,
       params: [
+        { name: "category", title: "分类", type: "constant", value: "/t/日本" },
         { name: "page", title: "页码", type: "page" }
       ]
     }
@@ -70,14 +121,6 @@ const HEADERS = {
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
   "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
   "Referer": "https://rou.video/"
-};
-
-const CATEGORY_MAP = {
-  cnAv: "/t/国产AV",
-  hookup: "/t/探花",
-  leaked: "/t/自拍流出",
-  onlyfans: "/t/OnlyFans",
-  japanese: "/t/日本"
 };
 
 function resolveUrl(href) {
@@ -152,62 +195,12 @@ function parseVideoList(html) {
 }
 
 async function loadCategory(params = {}) {
+  const category = params.category || "/t/麻豆傳媒";
   const page = Number(params.page || 1);
-  const categoryPath = CATEGORY_MAP.cnAv;
-  let url = `${BASE_URL}${categoryPath}`;
-  if (page > 1) url += `?order=createdAt&page=${page}`;
-
-  try {
-    const res = await Widget.http.get(url, { headers: HEADERS });
-    return parseVideoList(res.data);
-  } catch (e) {
-    return [];
+  let url = `${BASE_URL}${category}`;
+  if (page > 1) {
+    url += `?order=createdAt&page=${page}`;
   }
-}
-
-async function loadHookup(params = {}) {
-  const page = Number(params.page || 1);
-  let url = `${BASE_URL}${CATEGORY_MAP.hookup}`;
-  if (page > 1) url += `?order=createdAt&page=${page}`;
-
-  try {
-    const res = await Widget.http.get(url, { headers: HEADERS });
-    return parseVideoList(res.data);
-  } catch (e) {
-    return [];
-  }
-}
-
-async function loadLeaked(params = {}) {
-  const page = Number(params.page || 1);
-  let url = `${BASE_URL}${CATEGORY_MAP.leaked}`;
-  if (page > 1) url += `?order=createdAt&page=${page}`;
-
-  try {
-    const res = await Widget.http.get(url, { headers: HEADERS });
-    return parseVideoList(res.data);
-  } catch (e) {
-    return [];
-  }
-}
-
-async function loadOnlyFans(params = {}) {
-  const page = Number(params.page || 1);
-  let url = `${BASE_URL}${CATEGORY_MAP.onlyfans}`;
-  if (page > 1) url += `?order=createdAt&page=${page}`;
-
-  try {
-    const res = await Widget.http.get(url, { headers: HEADERS });
-    return parseVideoList(res.data);
-  } catch (e) {
-    return [];
-  }
-}
-
-async function loadJapanese(params = {}) {
-  const page = Number(params.page || 1);
-  let url = `${BASE_URL}${CATEGORY_MAP.japanese}`;
-  if (page > 1) url += `?order=createdAt&page=${page}`;
 
   try {
     const res = await Widget.http.get(url, { headers: HEADERS });
