@@ -4,7 +4,7 @@ WidgetMetadata = {
   description: "jable网站聚合.标签.女优.预告.推荐(脚本结构紧跟官网)",
   author: "nibiru/makka/el/廿二日",
   site: "https://jable.tv",
-  version: "2.0.0",
+  version: "2.1.0",
   requiredVersion: "0.0.2",
   detailCacheDuration: 300,
   modules: [
@@ -610,72 +610,6 @@ async function resolvePeopleAvatar(peopleHref) {
   }
 }
 
-// ==================== 剧照截图 ====================
-
-const CDN_SCREENSHOT_BASE = "https://assets-cdn.jable.tv/contents/videos_screenshots";
-
-function buildScreenshotPaths(videoNumId, count) {
-  if (!videoNumId) return [];
-  const n = count || 20;
-  const prefix = Math.floor(parseInt(videoNumId, 10) / 1000) * 1000;
-  const paths = [];
-  for (let i = 1; i <= n; i++) {
-    paths.push(`${CDN_SCREENSHOT_BASE}/${prefix}/${videoNumId}/${videoNumId}_${i}.jpg`);
-  }
-  return paths;
-}
-
-function extractPageScreenshots($, html, videoNumId) {
-  const screenshots = [];
-  const seen = new Set();
-
-  const pushUrl = (raw) => {
-    if (!raw) return;
-    const clean = raw.startsWith("//") ? "https:" + raw
-      : raw.startsWith("http") ? raw
-      : "";
-    if (!clean || seen.has(clean)) return;
-    seen.add(clean);
-    screenshots.push(clean);
-  };
-
-  // 1) 页面截图容器中的 <img>
-  const selectors = [
-    "a[data-fancybox='gallery'] img",
-    "a[data-fancybox] img",
-    ".screenshots img",
-    ".video-screenshots img",
-    "[class*='screenshot'] img",
-    ".detail-screenshots img",
-  ];
-  for (const sel of selectors) {
-    $(sel).each((_, el) => {
-      const $img = $(el);
-      const src = $img.attr("data-src") || $img.attr("src") || "";
-      if (src && (src.includes("videos_screenshots") || src.includes("jable"))) pushUrl(src);
-    });
-    if (screenshots.length > 0) break;
-  }
-
-  // 2) 从页面 JS / HTML 中正则提取截图 URL
-  if (screenshots.length === 0) {
-    const raw = String(html || "").replace(/\\\//g, "/");
-    const pattern = /https?:\/\/[^"'\s<>]+?videos_screenshots[^"'\s<>]+?\.jpg/gi;
-    const matches = raw.match(pattern);
-    if (matches) {
-      for (const url of matches) pushUrl(url);
-    }
-  }
-
-  // 3) 回退：基于 CDN URL 模式构建
-  if (screenshots.length === 0) {
-    return buildScreenshotPaths(videoNumId);
-  }
-
-  return screenshots;
-}
-
-
 function parseListHtml(html) {
   if (!html || !html.trim()) return [];
   const $ = Widget.html.load(html);
@@ -798,18 +732,8 @@ async function loadDetail(link) {
 
     const description = safeText($("h5.desc").first().text()) || undefined;
 
-    // === 3. 预告片 & videoNumId ===
+    // === 3. 预告片 ===
     let trailers = undefined;
-    const posterUrl = cover;
-    const pageCtxMatch = html.match(/videoId\s*:\s*['"](\d+)['"]/);
-    const ogImgMatch = posterUrl.match(/videos_screenshots\/\d+\/(\d+)\/preview\.jpg/);
-    const videoNumId = pageCtxMatch?.[1] || ogImgMatch?.[1] || "";
-    if (videoNumId) {
-      const prefix = Math.floor(parseInt(videoNumId, 10) / 1000) * 1000;
-      const previewMp4 = `${CDN_SCREENSHOT_BASE}/${prefix}/${videoNumId}/${videoNumId}_preview.mp4`;
-      const previewCover = posterUrl || `${CDN_SCREENSHOT_BASE}/${prefix}/${videoNumId}/preview.jpg`;
-      trailers = [{ coverUrl: previewCover, url: previewMp4 }];
-    }
 
     // === 4. 分类 & 标签（纯 DOM） ===
     const genreItems = [];
@@ -910,10 +834,7 @@ async function loadDetail(link) {
       });
     });
 
-    // === 7. 剧照截图（DOM 提取 + CDN 回退） ===
-    const backdropPaths = extractPageScreenshots($, html, videoNumId);
-
-    // === 8. 并行网络请求：缺失头像补全 ===
+    // === 7. 并行网络请求：缺失头像补全 ===
     if (missingAvatarItems.length > 0) {
       const avatarResults = await Promise.all(
         missingAvatarItems.map(item => resolvePeopleAvatar(item.href))
@@ -926,7 +847,7 @@ async function loadDetail(link) {
       }
     }
 
-    // === 9. 组装结果 ===
+    // === 8. 组装结果 ===
     return {
       id: link,
       type: "url",
@@ -937,7 +858,6 @@ async function loadDetail(link) {
       trailers,
       backdropPath: cover || undefined,
       posterPath: cover || undefined,
-      backdropPaths: backdropPaths.length > 0 ? backdropPaths : undefined,
       genreItems: allGenres.length > 0 ? allGenres : undefined,
       peoples: peoples.length > 0 ? peoples : undefined,
       relatedItems,

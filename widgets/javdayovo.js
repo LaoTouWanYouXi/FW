@@ -4,7 +4,7 @@ var WidgetMetadata = {
   description: "简易的javday模块",
   author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
   site: "https://javday.app",
-  version: "1.0.2",
+  version: "1.1.0",
   requiredVersion: "0.0.1",
   detailCacheDuration: 60,
   modules: [
@@ -229,18 +229,113 @@ function getCoverImgSrc($item) {
 
 function extractVideoUrlFromDPlayerScript(scriptContent) {
   if (!scriptContent) return null;
-  
+
   const regexes = [
     /video\s*:\s*{\s*[^}]*url\s*:\s*['"]([^'"]+)['"]/,
     /url\s*:\s*['"]([^'"]+\.m3u8[^'"]*)['"]/
   ];
-  
+
   for (const regex of regexes) {
     const match = scriptContent.match(regex);
     if (match && match[1]) return match[1];
   }
-  
+
   return null;
+}
+
+// ==================== 演员头像缓存 & 异步补全 ====================
+
+const PEOPLE_AVATAR_CACHE = {};
+
+async function resolvePeopleAvatar(peopleHref) {
+  if (!peopleHref) return "";
+  if (Object.prototype.hasOwnProperty.call(PEOPLE_AVATAR_CACHE, peopleHref)) {
+    return PEOPLE_AVATAR_CACHE[peopleHref];
+  }
+  try {
+    const response = await Widget.http.get(peopleHref, {
+      headers: { "User-Agent": JAVDAY_USER_AGENT, Referer: "https://javday.app/" },
+    });
+    if (!response?.data) { PEOPLE_AVATAR_CACHE[peopleHref] = ""; return ""; }
+    const $ = Widget.html.load(response.data);
+    const $img = $(".model-avatar img, .avatar img, .model-img, .model-img-container img, [class*='avatar'] img").first();
+    const src = $img.attr("data-src") || $img.attr("src") || "";
+    const avatar = src.startsWith("//") ? "https:" + src
+      : src.startsWith("http") ? src
+      : "";
+    PEOPLE_AVATAR_CACHE[peopleHref] = avatar;
+    return avatar;
+  } catch (e) {
+    PEOPLE_AVATAR_CACHE[peopleHref] = "";
+    return "";
+  }
+}
+
+// ==================== 剧照截图 ====================
+
+function extractPageScreenshots($, html) {
+  const screenshots = [];
+  const seen = new Set();
+
+  const pushUrl = (raw) => {
+    if (!raw) return;
+    const clean = raw.startsWith("//") ? "https:" + raw
+      : raw.startsWith("http") ? raw
+      : "";
+    if (!clean || seen.has(clean)) return;
+    seen.add(clean);
+    screenshots.push(clean);
+  };
+
+  // 1) 页面截图容器中的 <img>
+  const selectors = [
+    "a[data-fancybox='gallery'] img",
+    "a[data-fancybox] img",
+    ".screenshots img",
+    ".video-screenshots img",
+    "[class*='screenshot'] img",
+    ".detail-screenshots img",
+    ".gallery-item img",
+    "a[data-lightbox] img",
+  ];
+  for (const sel of selectors) {
+    $(sel).each((_, el) => {
+      const $img = $(el);
+      const src = $img.attr("data-src") || $img.attr("src") || "";
+      if (src) pushUrl(src);
+    });
+    if (screenshots.length > 0) break;
+  }
+
+  // 2) 从页面 JS / HTML 中正则提取截图 URL
+  if (screenshots.length === 0) {
+    const raw = String(html || "").replace(/\\\//g, "/");
+    const patterns = [
+      /https?:\/\/[^"'\s<>]+?(?:screenshot|preview|gallery)[^"'\s<>]+?\.(?:jpg|jpeg|webp|png)/gi,
+      /https?:\/\/[^"'\s<>]+?\/contents\/[^"'\s<>]+?\.jpg/gi,
+    ];
+    for (const pattern of patterns) {
+      const matches = raw.match(pattern);
+      if (matches) {
+        for (const url of matches) pushUrl(url);
+      }
+    }
+  }
+
+  return screenshots;
+}
+
+// ==================== 工具函数 ====================
+
+function safeText(str) {
+  return (str || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeUrl(href) {
+  if (!href) return "";
+  if (href.startsWith("http")) return href.replace(/([^:]\/)\/+/g, '$1');
+  if (href.startsWith("//")) return "https:" + href;
+  return `https://javday.app${href.startsWith("/") ? "" : "/"}${href}`;
 }
 
 async function loadPage(params = {}) {
@@ -367,96 +462,180 @@ async function search(params = {}) {
 }
 
 async function loadDetail(link) {
-  
   try {
     const response = await Widget.http.get(link, {
-      headers: {
-        "User-Agent": JAVDAY_USER_AGENT,
-        Referer: link,
-      },
+      headers: { "User-Agent": JAVDAY_USER_AGENT, Referer: link },
     });
 
     if (!response?.data) {
       throw new Error("无法获取详情页内容");
     }
 
-    const $ = Widget.html.load(response.data);
-    
+    const html = response.data;
+    const $ = Widget.html.load(html);
+
+    // === 1. 视频地址提取 ===
+    let videoUrl = "";
+
+    // 1a) DPlayer 脚本
     const dplayerScript = Array.from($("script"))
       .find(el => {
-        const scriptContent = $(el).html();
-        return scriptContent && scriptContent.includes("new DPlayer");
+        const sc = $(el).html();
+        return sc && sc.includes("new DPlayer");
       });
-    
     if (dplayerScript) {
-      const scriptContent = $(dplayerScript).html();
-      const videoUrl = extractVideoUrlFromDPlayerScript(scriptContent);
-      if (videoUrl) {
-        return {
-          id: link,
-          type: "url",
-          videoUrl: videoUrl,
-          customHeaders: {
-            Referer: link,
-            "User-Agent": JAVDAY_USER_AGENT,
-          },
-        };
-      }
+      videoUrl = extractVideoUrlFromDPlayerScript($(dplayerScript).html()) || "";
     }
-    
-    const videoSrc = $("video#J_prismPlayer").attr("src") || 
-                   $("source[src*='.m3u8']").attr("src") ||
-                   $("video source").attr("src");
-    
-    if (videoSrc) {
-      return {
-        id: link,
-        type: "url",
-        videoUrl: videoSrc,
-        customHeaders: {
-          Referer: link,
-            "User-Agent": JAVDAY_USER_AGENT,
-          },
-        };
-      }
-      
+
+    // 1b) video/source 标签
+    if (!videoUrl) {
+      videoUrl = $("video#J_prismPlayer").attr("src")
+        || $("source[src*='.m3u8']").attr("src")
+        || $("video source").attr("src")
+        || "";
+    }
+
+    // 1c) script 中的 m3u8
+    if (!videoUrl) {
       const scriptSources = Array.from($("script"))
-      .map(el => $(el).html())
-      .find(content => content && content.includes(".m3u8"));
-    
-    if (scriptSources) {
-      const m3u8Match = scriptSources.match(/['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/);
-      if (m3u8Match && m3u8Match[1]) {
-        return {
-          id: link,
-          type: "url",
-          videoUrl: m3u8Match[1],
-          customHeaders: {
-            Referer: link,
-            "User-Agent": JAVDAY_USER_AGENT,
-          },
-        };
+        .map(el => $(el).html())
+        .find(content => content && content.includes(".m3u8"));
+      if (scriptSources) {
+        const m3u8Match = scriptSources.match(/['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/);
+        if (m3u8Match?.[1]) videoUrl = m3u8Match[1];
       }
     }
 
-    const playerVideo = $("video[src]").attr("src") || 
-                      $("iframe[src*='player']").attr("src");
-    
-    if (playerVideo) {
-      return {
-        id: link,
-        type: "url",
-        videoUrl: playerVideo,
-        customHeaders: {
-          Referer: link,
-          "User-Agent": JAVDAY_USER_AGENT,
-        },
-      };
+    // 1d) video[src] / iframe player
+    if (!videoUrl) {
+      videoUrl = $("video[src]").attr("src")
+        || $("iframe[src*='player']").attr("src")
+        || "";
     }
 
-    throw new Error("无法找到视频源");
+    if (!videoUrl) throw new Error("无法找到视频源");
+    if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+
+    // === 2. 基础信息（纯 DOM，无网络） ===
+    const title = safeText($(".video-info h1, .video-info .title, h1.title").first().text())
+      || safeText($('meta[property="og:title"]').attr("content"))
+      || "未知标题";
+
+    const cover = $("video").attr("poster")
+      || $('meta[property="og:image"]').attr("content")
+      || "";
+
+    const description = safeText($(".video-info .desc, .video-info p, .description").first().text()) || undefined;
+
+    // === 3. 分类 & 标签（纯 DOM） ===
+    const genreItems = [];
+    const seenGenres = new Set();
+    $(".video-info a[href*='/category/'], .video-info a[href*='/label/'], .tags a, .tag-list a").each((_, el) => {
+      const $a = $(el);
+      const href = normalizeUrl($a.attr("href") || "");
+      const text = safeText($a.text());
+      if (!text || !href || seenGenres.has(href)) return;
+      seenGenres.add(href);
+      genreItems.push({ id: href, title: text });
+    });
+
+    // === 4. 演员信息（纯 DOM + 记录缺失头像） ===
+    const peoples = [];
+    const seenPeoples = new Set();
+    const missingAvatarItems = [];
+    $(".video-info a[href*='/actors/'], .video-info a[href*='/actresses/'], .actors a, .model-list a").each((_, el) => {
+      const $a = $(el);
+      const modelHref = normalizeUrl($a.attr("href") || "");
+      const name = safeText($a.text());
+      if (!name || seenPeoples.has(name)) return;
+      seenPeoples.add(name);
+      const $img = $a.find("img").first();
+      const avatarSrc = $img.attr("data-src") || $img.attr("src") || "";
+      const avatar = avatarSrc.startsWith("//") ? "https:" + avatarSrc
+        : avatarSrc.startsWith("http") ? avatarSrc
+        : "";
+      if (!avatar && modelHref) {
+        missingAvatarItems.push({ index: peoples.length, href: modelHref });
+      }
+      peoples.push({
+        id: modelHref || name,
+        title: name,
+        avatar: avatar || "https://iili.io/KtHNnQS.png",
+      });
+    });
+
+    // === 5. 推荐视频（纯 DOM） ===
+    const relatedItems = [];
+    const seenRelated = new Set([link]);
+    $(".video-wrapper .videoBox, .related-videos .videoBox, .recommend .videoBox").each((_, el) => {
+      if (relatedItems.length >= 12) return false;
+      const $item = $(el);
+      let recHref = $item.attr("href") || "";
+      const recLink = normalizeUrl(recHref);
+      if (!recLink || seenRelated.has(recLink)) return;
+      seenRelated.add(recLink);
+
+      const recTitle = safeText($item.find(".videoBox-info .title, .title").first().text()) || "相关视频";
+      const recCover = getCoverImgSrc($item);
+
+      relatedItems.push({
+        id: recLink,
+        type: "url",
+        title: recTitle,
+        backdropPath: recCover || undefined,
+        posterPath: recCover || undefined,
+        mediaType: "movie",
+        link: recLink,
+      });
+    });
+
+    // === 6. 剧照截图（DOM 提取 + 正则回退） ===
+    const backdropPaths = extractPageScreenshots($, html);
+
+    // === 7. 并行网络请求：缺失头像补全 ===
+    if (missingAvatarItems.length > 0) {
+      const avatarResults = await Promise.all(
+        missingAvatarItems.map(item => resolvePeopleAvatar(item.href))
+      );
+      for (let i = 0; i < missingAvatarItems.length; i++) {
+        const { index } = missingAvatarItems[i];
+        if (avatarResults[i]) {
+          peoples[index].avatar = avatarResults[i];
+        }
+      }
+    }
+
+    // === 8. 组装结果 ===
+    return {
+      id: link,
+      type: "url",
+      videoUrl,
+      playerType: "ijk",
+      title,
+      description,
+      backdropPath: cover || undefined,
+      posterPath: cover || undefined,
+      backdropPaths: backdropPaths.length > 0 ? backdropPaths : undefined,
+      genreItems: genreItems.length > 0 ? genreItems : undefined,
+      peoples: peoples.length > 0 ? peoples : undefined,
+      relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
+      mediaType: "movie",
+      link,
+      customHeaders: {
+        Referer: link,
+        "User-Agent": JAVDAY_USER_AGENT,
+      },
+    };
   } catch (error) {
     console.error(`${JAVDAY_LOG_PREFIX} 加载详情失败: ${error.message}`);
-    throw error;
+    return {
+      id: link,
+      type: "url",
+      videoUrl: link,
+      title: "加载失败",
+      description: error.message || "详情请求失败",
+      mediaType: "movie",
+      link,
+    };
   }
 }
