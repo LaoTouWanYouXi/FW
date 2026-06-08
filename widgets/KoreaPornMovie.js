@@ -253,20 +253,44 @@ async function loadDetail(link) {
     const html = data || "";
     const $ = Widget.html.load(html);
 
-    // === 1. \u89c6\u9891\u5730\u5740\u63d0\u53d6 ===
+    // === 1. \u89c6\u9891\u5730\u5740\u63d0\u53d6\uff08\u591a\u7b56\u7565\uff09 ===
     let videoUrl = "";
 
-    // 1a) meta[itemprop="contentURL"]
-    videoUrl = $(".video-player").find('meta[itemprop="contentURL"]').attr("content") || "";
+    // 1a) meta[itemprop="contentURL"] \u2014 \u6ce8\u610f\uff1a\u8be5 meta \u5728 article \u4e0b\uff0c\u4e0d\u5728 .video-player \u5185
+    videoUrl = $('meta[itemprop="contentURL"]').attr("content") || "";
 
-    // 1b) video source mp4
+    // 1b) \u89e3\u6790 iframe base64 \u53c2\u6570\uff08player-x.php?q=...\uff09
+    if (!videoUrl) {
+      const $iframe = $(".video-player iframe, .responsive-player iframe").first();
+      const iframeSrc = $iframe.attr("src") || "";
+      const qMatch = iframeSrc.match(/[?&]q=([A-Za-z0-9+/=]+)/);
+      if (qMatch && qMatch[1]) {
+        try {
+          const decoded = Widget.base64
+            ? Widget.base64.decode(qMatch[1])
+            : (typeof atob === "function" ? decodeURIComponent(atob(qMatch[1])) : "");
+          if (decoded) {
+            // \u89e3\u7801\u5185\u5bb9\u4e2d\u53ef\u80fd\u5305\u542b <source src="...mp4"> \u6216\u7eaf mp4 URL
+            const srcMatch = decoded.match(/src\s*=\s*["']?(https?:\/\/[^"'\s>]+\.mp4[^"'\s>]*)/i);
+            if (srcMatch && srcMatch[1]) videoUrl = srcMatch[1];
+            // \u4e5f\u53ef\u80fd\u4ee5 URL \u7f16\u7801\u5f62\u5f0f\u5b58\u5728
+            if (!videoUrl) {
+              const encMatch = decoded.match(/src%3D%22(https?%3A[^%"]+\.mp4[^%"]*)/i);
+              if (encMatch && encMatch[1]) videoUrl = decodeURIComponent(encMatch[1]);
+            }
+          }
+        } catch (e) { /* base64 \u89e3\u7801\u5931\u8d25\uff0c\u8df3\u8fc7 */ }
+      }
+    }
+
+    // 1c) video source mp4
     if (!videoUrl) {
       videoUrl = $('video source[type="video/mp4"]').attr("src")
         || $("video source").attr("src")
         || "";
     }
 
-    // 1c) script \u4e2d\u7684 .mp4
+    // 1d) script \u4e2d\u7684 .mp4
     if (!videoUrl) {
       const scriptSources = Array.from($("script"))
         .map(el => $(el).html())
@@ -277,9 +301,19 @@ async function loadDetail(link) {
       }
     }
 
-    // 1d) video[src]
+    // 1e) video[src]
     if (!videoUrl) {
       videoUrl = $("video[src]").attr("src") || "";
+    }
+
+    // 1f) \u6b63\u5219\u4ece\u539f\u59cb HTML \u63d0\u53d6 itemprop contentURL \u6216 .mp4 \u5730\u5740\uff08\u515c\u5e95\uff09
+    if (!videoUrl) {
+      const metaMatch = html.match(/itemprop\s*=\s*["']contentURL["']\s+content\s*=\s*["'](https?:\/\/[^"']+)["']/i);
+      if (metaMatch && metaMatch[1]) videoUrl = metaMatch[1];
+    }
+    if (!videoUrl) {
+      const mp4FromHtml = html.match(/https?:\/\/[^"'\s<>]+?\.mp4(?:[^"'\s<>]*)?/i);
+      if (mp4FromHtml) videoUrl = mp4FromHtml[0];
     }
 
     if (!videoUrl) throw new Error("\u65e0\u6cd5\u83b7\u53d6\u89c6\u9891\u5730\u5740");
