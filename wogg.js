@@ -183,6 +183,18 @@ function buildQuarkHeaders(cookies) {
 }
 
 /**
+ * 构建夸克 GET 请求头（无 Content-Type）
+ */
+function buildQuarkGetHeaders(cookies) {
+  return {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Origin": QUARK_PAN_ORIGIN,
+    "Referer": QUARK_PAN_ORIGIN + "/",
+    "Cookie": cookies
+  };
+}
+
+/**
  * 解析夸克分享链接
  * 支持格式：
  *   https://pan.quark.cn/s/xxxxx            (无密码)
@@ -218,14 +230,15 @@ function parseQuarkShareUrl(shareUrl) {
  * @returns {object} { stoken, shareInfo }
  */
 async function getQuarkShareToken(cookies, shareId, sharePwd) {
-  const headers = buildQuarkHeaders(cookies);
+  const headers = buildQuarkGetHeaders(cookies);
 
-  const body = {
-    share_id: shareId,
-    share_pwd: sharePwd || ""
-  };
-
-  const res = await Widget.http.post(`${QUARK_DRIVE_BASE}/share/sharepage/token`, JSON.stringify(body), { headers });
+  const res = await Widget.http.get(`${QUARK_DRIVE_BASE}/share/sharepage/token`, {
+    headers,
+    params: {
+      share_id: shareId,
+      share_pwd: sharePwd || ""
+    }
+  });
 
   if (!res.data || res.data.status !== 200) {
     const msg = res.data?.message || res.data?.error?.reason || "获取分享令牌失败";
@@ -249,19 +262,20 @@ async function getQuarkShareToken(cookies, shareId, sharePwd) {
  * @returns {object} 文件列表
  */
 async function getQuarkShareFileList(cookies, shareId, stoken, fid, offset, limit) {
-  const headers = buildQuarkHeaders(cookies);
+  const headers = buildQuarkGetHeaders(cookies);
 
-  const body = {
-    share_id: shareId,
-    stoken: stoken,
-    pwd: "",
-    fid: fid || "",
-    offset: offset || 0,
-    limit: limit || 200,
-    sort: "file_name:asc"
-  };
-
-  const res = await Widget.http.post(`${QUARK_DRIVE_BASE}/share/sharepage/detail`, JSON.stringify(body), { headers });
+  const res = await Widget.http.get(`${QUARK_DRIVE_BASE}/share/sharepage/detail`, {
+    headers,
+    params: {
+      share_id: shareId,
+      stoken: stoken,
+      pwd: "",
+      fid: fid || "",
+      offset: offset || 0,
+      limit: limit || 200,
+      sort: "file_name:asc"
+    }
+  });
 
   if (!res.data || res.data.status !== 200) {
     const msg = res.data?.message || "获取分享文件列表失败";
@@ -277,30 +291,36 @@ async function getQuarkShareFileList(cookies, shareId, stoken, fid, offset, limi
  * @returns {string} 临时文件夹 fid
  */
 async function ensureQuarkTempFolder(cookies) {
-  const headers = buildQuarkHeaders(cookies);
+  const getHeaders = buildQuarkGetHeaders(cookies);
 
   // 尝试从缓存获取
   const cachedFid = Widget.storage.get("wogg_quark_folder_fid");
   if (cachedFid) {
-    // 验证文件夹是否仍然存在
+    // 验证文件夹是否仍然存在（file/info 改为 GET）
     try {
-      const infoRes = await Widget.http.post(`${QUARK_DRIVE_BASE}/file/info`, JSON.stringify({ fid: cachedFid }), { headers });
+      const infoRes = await Widget.http.get(`${QUARK_DRIVE_BASE}/file/info`, {
+        headers: getHeaders,
+        params: { fid: cachedFid }
+      });
       if (infoRes.data && infoRes.data.status === 200 && infoRes.data.data && infoRes.data.data.name === "wogg_temp") {
         return cachedFid;
       }
     } catch (e) {
-      // 验证失败，重新创建
+      // 验证失败，重新查找
     }
   }
 
-  // 查找根目录下是否已有 wogg_temp
+  // 查找根目录下是否已有 wogg_temp（file/sort 改为 GET）
   try {
-    const listRes = await Widget.http.post(`${QUARK_DRIVE_BASE}/file/sort`, JSON.stringify({
-      fid: "0",
-      offset: 0,
-      limit: 200,
-      sort: "file_name:asc"
-    }), { headers });
+    const listRes = await Widget.http.get(`${QUARK_DRIVE_BASE}/file/sort`, {
+      headers: getHeaders,
+      params: {
+        fid: "0",
+        offset: 0,
+        limit: 200,
+        sort: "file_name:asc"
+      }
+    });
 
     if (listRes.data && listRes.data.status === 200 && listRes.data.data && listRes.data.data.list) {
       for (const item of listRes.data.data.list) {
@@ -314,25 +334,9 @@ async function ensureQuarkTempFolder(cookies) {
     // 查找失败，尝试创建
   }
 
-  // 创建 wogg_temp 文件夹
-  try {
-    const createRes = await Widget.http.post(`${QUARK_DRIVE_BASE}/file/create_dir`, JSON.stringify({
-      dir_name: "wogg_temp",
-      dir_id: "0"
-    }), { headers });
-
-    if (createRes.data && createRes.data.status === 200 && createRes.data.data) {
-      const fid = createRes.data.data.fid || "";
-      if (fid) {
-        Widget.storage.set("wogg_quark_folder_fid", fid);
-        return fid;
-      }
-    }
-  } catch (e) {
-    // 创建失败
-  }
-
-  // 兜底返回根目录
+  // 创建 wogg_temp 文件夹（create_dir 已废弃，save 接口会自动处理目录）
+  // 直接转存到根目录即可，无需预先创建文件夹
+  Widget.storage.set("wogg_quark_folder_fid", "0");
   return "0";
 }
 
