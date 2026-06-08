@@ -553,7 +553,7 @@ function parseVideoList(html) {
   // Cloudflare 检测
   const title = $("title").text();
   if (title === "Just a moment...") {
-    return [{ id: "cf_blocked", type: "text", title: "被 Cloudflare 拦截", description: "请稍后重试或在浏览器中先访问 wogg.net" }];
+    return [];
   }
 
   const items = [];
@@ -738,7 +738,7 @@ async function loadList(params = {}) {
     return parseVideoList(res.data);
   } catch (e) {
     console.error("[wogg] loadList 失败:", e.message || e);
-    return [{ id: "err", type: "text", title: "加载失败", description: e.message }];
+    return [];
   }
 }
 
@@ -753,7 +753,7 @@ async function loadDetail(link) {
     const parsed = parseDetailPage(html);
 
     if (!parsed) {
-      return { id: "err", type: "text", title: "解析失败", description: "无法解析详情页" };
+      return null;
     }
 
     const item = {
@@ -762,6 +762,7 @@ async function loadDetail(link) {
       title: parsed.title,
       posterPath: parsed.cover || "",
       backdropPath: parsed.cover || "",
+      backdropPaths: parsed.cover ? [parsed.cover] : [],
       description: parsed.description,
       link: link,
       mediaType: "movie",
@@ -782,7 +783,7 @@ async function loadDetail(link) {
     return item;
   } catch (e) {
     console.error("[wogg] loadDetail 失败:", e.message || e);
-    return { id: "err", type: "text", title: "加载详情失败", description: e.message }];
+    return null;
   }
 }
 
@@ -988,7 +989,7 @@ async function search(params = {}) {
   const page = Number(params.page || 1);
 
   if (!keyword) {
-    return [{ id: "tip", type: "text", title: "请输入关键词开始搜索" }];
+    return [];
   }
 
   const url = `${BASE_URL}/vodsearch/${encodeURIComponent(keyword)}----------${page}---.html`;
@@ -1004,7 +1005,7 @@ async function search(params = {}) {
     // Cloudflare 检测
     const pageTitle = $("title").text();
     if (pageTitle === "Just a moment...") {
-      return [{ id: "cf_blocked", type: "text", title: "被 Cloudflare 拦截", description: "请稍后重试" }];
+      return [];
     }
 
     const items = [];
@@ -1030,9 +1031,9 @@ async function search(params = {}) {
       });
     });
 
-    return items.length > 0 ? items : [{ id: "empty", type: "text", title: "没有找到相关视频" }];
+    return items.length > 0 ? items : [];
   } catch (e) {
     console.error("[wogg] search 失败:", e.message || e);
-    return [{ id: "err", type: "text", title: "搜索失败", description: e.message }];
+    return [];
   }
 }
