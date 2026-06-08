@@ -3,36 +3,36 @@ WidgetMetadata = {
   title: "JavMove",
   version: "1.0.0",
   requiredVersion: "0.0.1",
-  description: "JavMove \\u89c6\\u9891\\u805a\\u5408\\u6a21\\u5757\\uff0c\\u652f\\u6301\\u6700\\u65b0\\u5f71\\u7247\\u3001\\u5373\\u5c06\\u4e0a\\u6620\\u3001\\u641c\\u7d22",
+  description: "JavMove 视频聚合模块，支持最新影片、即将上映、搜索",
   author: "Forward",
   site: "https://javmove.com",
   detailCacheDuration: 300,
   modules: [
     {
       id: "latest",
-      title: "\\u6700\\u65b0\\u5f71\\u7247",
+      title: "最新影片",
       functionName: "loadLatest",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "upcoming",
-      title: "\\u5373\\u5c06\\u4e0a\\u6620",
+      title: "即将上映",
       functionName: "loadUpcoming",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     }
   ],
   search: {
-    title: "\\u641c\\u7d22",
+    title: "搜索",
     functionName: "search",
     params: [
-      { name: "keyword", title: "\\u5173\\u952e\\u8bcd", type: "input" },
-      { name: "page", title: "\\u9875\\u7801", type: "page" }
+      { name: "keyword", title: "关键词", type: "input" },
+      { name: "page", title: "页码", type: "page" }
     ]
   }
 };
@@ -180,7 +180,7 @@ async function loadDetail(link) {
       if (!rDetailLink || seenRelated.has(rDetailLink)) return;
       seenRelated.add(rDetailLink);
 
-      const rTitle = ($el.find("h2").attr("title") || "").split(" ")[0] || "\\u76f8\\u5173\\u5f71\\u7247";
+      const rTitle = ($el.find("h2").attr("title") || "").split(" ")[0] || "相关影片";
       const rCover = $el.find(".movie-image").attr("data-srcset") || $el.find(".movie-image").attr("src") || $el.find("img").attr("src") || "";
 
       relatedItems.push({

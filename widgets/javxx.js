@@ -3,63 +3,63 @@ WidgetMetadata = {
   title: "JavXX",
   version: "1.0.0",
   requiredVersion: "0.0.1",
-  description: "JavXX \\u89c6\\u9891\\u805a\\u5408\\u6a21\\u5757\\uff0c\\u652f\\u6301\\u70ed\\u95e8\\u5f71\\u7247\\u3001\\u6700\\u65b0\\u5f71\\u7247\\u3001\\u6700\\u8fd1\\u66f4\\u65b0\\u3001\\u6709\\u7801\\u5f71\\u7247\\u3001\\u65e0\\u7801\\u5f71\\u7247\\u3001\\u641c\\u7d22",
+  description: "JavXX 视频聚合模块，支持热门影片、最新影片、最近更新、有码影片、无码影片、搜索",
   author: "Forward",
   site: "https://javxx.com",
   detailCacheDuration: 300,
   modules: [
     {
       id: "hot",
-      title: "\\u70ed\\u95e8\\u5f71\\u7247",
+      title: "热门影片",
       functionName: "loadHot",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "new",
-      title: "\\u6700\\u65b0\\u5f71\\u7247",
+      title: "最新影片",
       functionName: "loadNew",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "recent",
-      title: "\\u6700\\u8fd1\\u66f4\\u65b0",
+      title: "最近更新",
       functionName: "loadRecent",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "censored",
-      title: "\\u6709\\u7801\\u5f71\\u7247",
+      title: "有码影片",
       functionName: "loadCensored",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "uncensored",
-      title: "\\u65e0\\u7801\\u5f71\\u7247",
+      title: "无码影片",
       functionName: "loadUncensored",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     }
   ],
   search: {
-    title: "\\u641c\\u7d22",
+    title: "搜索",
     functionName: "search",
     params: [
-      { name: "keyword", title: "\\u5173\\u952e\\u8bcd", type: "input" },
-      { name: "page", title: "\\u9875\\u7801", type: "page" }
+      { name: "keyword", title: "关键词", type: "input" },
+      { name: "page", title: "页码", type: "page" }
     ]
   }
 };
@@ -228,7 +228,7 @@ async function loadDetail(link) {
       if (!rDetailLink || seenRelated.has(rDetailLink)) return;
       seenRelated.add(rDetailLink);
 
-      const rTitle = $rLink.text().trim() || "\\u76f8\\u5173\\u5f71\\u7247";
+      const rTitle = $rLink.text().trim() || "相关影片";
       const rCover = $el.find(".image > img").attr("src") || $el.find("img").attr("src") || "";
 
       relatedItems.push({

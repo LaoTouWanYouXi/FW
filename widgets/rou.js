@@ -1,38 +1,38 @@
 WidgetMetadata = {
   id: "forward.rouvideo",
-  title: "\\u8089\\u89c6\\u9891",
+  title: "肉视频",
   version: "1.0.0",
   requiredVersion: "0.0.1",
-  description: "\\u8089\\u89c6\\u9891\\u805a\\u5408\\u6a21\\u5757\\uff0c\\u652f\\u6301\\u56fd\\u4ea7AV\\u3001\\u63a2\\u82b1\\u3001\\u81ea\\u62cd\\u6d41\\u51fa\\u3001OnlyFans\\u3001\\u65e5\\u672c\\u3001\\u641c\\u7d22",
+  description: "肉视频聚合模块，支持国产AV、探花、自拍流出、OnlyFans、日本、搜索",
   author: "Forward",
   site: "https://rou.video",
   detailCacheDuration: 300,
   modules: [
     {
       id: "cnAv",
-      title: "\\u56fd\\u4ea7AV",
+      title: "国产AV",
       functionName: "loadCategory",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "hookup",
-      title: "\\u63a2\\u82b1",
+      title: "探花",
       functionName: "loadHookup",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "leaked",
-      title: "\\u81ea\\u62cd\\u6d41\\u51fa",
+      title: "自拍流出",
       functionName: "loadLeaked",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     },
     {
@@ -41,25 +41,25 @@ WidgetMetadata = {
       functionName: "loadOnlyFans",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     },
     {
       id: "japanese",
-      title: "\\u65e5\\u672c",
+      title: "日本",
       functionName: "loadJapanese",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     }
   ],
   search: {
-    title: "\\u641c\\u7d22",
+    title: "搜索",
     functionName: "search",
     params: [
-      { name: "keyword", title: "\\u5173\\u952e\\u8bcd", type: "input" },
-      { name: "page", title: "\\u9875\\u7801", type: "page" }
+      { name: "keyword", title: "关键词", type: "input" },
+      { name: "page", title: "页码", type: "page" }
     ]
   }
 };
@@ -73,11 +73,11 @@ const HEADERS = {
 };
 
 const CATEGORY_MAP = {
-  cnAv: "/t/\\u56fd\\u4ea7AV",
-  hookup: "/t/\\u63a2\\u82b1",
-  leaked: "/t/\\u81ea\\u62cd\\u6d41\\u51fa",
+  cnAv: "/t/国产AV",
+  hookup: "/t/探花",
+  leaked: "/t/自拍流出",
   onlyfans: "/t/OnlyFans",
-  japanese: "/t/\\u65e5\\u672c"
+  japanese: "/t/日本"
 };
 
 function resolveUrl(href) {
@@ -263,7 +263,7 @@ async function loadDetail(link) {
       if (!rDetailLink || seenRelated.has(rDetailLink)) return;
       seenRelated.add(rDetailLink);
 
-      const rTitle = $el.find("img:last").attr("alt") || "\\u76f8\\u5173\\u5f71\\u7247";
+      const rTitle = $el.find("img:last").attr("alt") || "相关影片";
       const rCover = $el.find("img").attr("src") || "";
 
       relatedItems.push({

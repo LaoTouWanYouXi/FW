@@ -3,66 +3,66 @@ WidgetMetadata = {
   title: "PppPorn",
   version: "1.0.0",
   requiredVersion: "0.0.1",
-  description: "PppPorn \\u89c6\\u9891\\u805a\\u5408\\u6a21\\u5757\\uff0c\\u652f\\u6301\\u5206\\u7c7b\\u6d4f\\u89c8\\u3001\\u641c\\u7d22",
+  description: "PppPorn 视频聚合模块，支持分类浏览、搜索",
   author: "Forward",
   site: "https://ppp.porn",
   detailCacheDuration: 300,
   modules: [
     {
       id: "categories",
-      title: "\\u5206\\u7c7b\\u6d4f\\u89c8",
+      title: "分类浏览",
       functionName: "loadCategory",
       cacheDuration: 3600,
       params: [
         {
           name: "category",
-          title: "\\u9009\\u62e9\\u5206\\u7c7b",
+          title: "选择分类",
           type: "enumeration",
           value: "https://ppp.porn/categories/amateur/",
           enumOptions: [
-            { title: "\\u7d20\\u4eba", value: "https://ppp.porn/categories/amateur/" },
-            { title: "\\u809b\\u4ea4", value: "https://ppp.porn/categories/anal/" },
-            { title: "\\u4e9a\\u6d32", value: "https://ppp.porn/categories/asian/" },
-            { title: "\\u5c24\\u7269", value: "https://ppp.porn/categories/babe/" },
-            { title: "\\u4e30\\u6ee1", value: "https://ppp.porn/categories/bbw/" },
-            { title: "\\u8c03\\u6559", value: "https://ppp.porn/categories/bdsm/" },
-            { title: "\\u7f8e\\u81c0", value: "https://ppp.porn/categories/big-ass/" },
-            { title: "\\u5de8\\u4e73", value: "https://ppp.porn/categories/big-tits/" },
-            { title: "\\u91d1\\u53d1", value: "https://ppp.porn/categories/blonde/" },
-            { title: "\\u53e3\\u4ea4", value: "https://ppp.porn/categories/blowjob/" },
-            { title: "\\u8910\\u53d1", value: "https://ppp.porn/categories/brunette/" },
-            { title: "\\u4e2d\\u51fa", value: "https://ppp.porn/categories/creampie/" },
-            { title: "\\u5c04\\u7cbe", value: "https://ppp.porn/categories/cumshot/" },
-            { title: "\\u7656\\u597d", value: "https://ppp.porn/categories/fetish/" },
-            { title: "\\u7fa4\\u4ea4", value: "https://ppp.porn/categories/group/" },
-            { title: "\\u624b\\u4ea4", value: "https://ppp.porn/categories/handjob/" },
-            { title: "\\u786c\\u6838", value: "https://ppp.porn/categories/hardcore/" },
-            { title: "\\u8de8\\u79cd\\u65cf", value: "https://ppp.porn/categories/interracial/" },
-            { title: "\\u62c9\\u4e01", value: "https://ppp.porn/categories/latina/" },
-            { title: "\\u5973\\u540c", value: "https://ppp.porn/categories/lesbian/" },
-            { title: "\\u719f\\u5973", value: "https://ppp.porn/categories/mature/" },
-            { title: "\\u4eba\\u59bb", value: "https://ppp.porn/categories/milf/" },
-            { title: "\\u9732\\u51fa", value: "https://ppp.porn/categories/outdoor/" },
-            { title: "\\u7b2c\\u4e00\\u89c6\\u89d2", value: "https://ppp.porn/categories/pov/" },
-            { title: "\\u516c\\u5171\\u573a\\u6240", value: "https://ppp.porn/categories/public/" },
-            { title: "\\u7ea2\\u53d1", value: "https://ppp.porn/categories/redhead/" },
-            { title: "\\u6f6e\\u5439", value: "https://ppp.porn/categories/squirting/" },
-            { title: "\\u7eb9\\u8eab", value: "https://ppp.porn/categories/tattoo/" },
-            { title: "\\u5c11\\u5973", value: "https://ppp.porn/categories/teen/" },
-            { title: "\\u4e09\\u4eba\\u884c", value: "https://ppp.porn/categories/threesome/" },
-            { title: "\\u73a9\\u5177", value: "https://ppp.porn/categories/toys/" }
+            { title: "素人", value: "https://ppp.porn/categories/amateur/" },
+            { title: "肛交", value: "https://ppp.porn/categories/anal/" },
+            { title: "亚洲", value: "https://ppp.porn/categories/asian/" },
+            { title: "尤物", value: "https://ppp.porn/categories/babe/" },
+            { title: "丰满", value: "https://ppp.porn/categories/bbw/" },
+            { title: "调教", value: "https://ppp.porn/categories/bdsm/" },
+            { title: "美臀", value: "https://ppp.porn/categories/big-ass/" },
+            { title: "巨乳", value: "https://ppp.porn/categories/big-tits/" },
+            { title: "金发", value: "https://ppp.porn/categories/blonde/" },
+            { title: "口交", value: "https://ppp.porn/categories/blowjob/" },
+            { title: "褐发", value: "https://ppp.porn/categories/brunette/" },
+            { title: "中出", value: "https://ppp.porn/categories/creampie/" },
+            { title: "射精", value: "https://ppp.porn/categories/cumshot/" },
+            { title: "癖好", value: "https://ppp.porn/categories/fetish/" },
+            { title: "群交", value: "https://ppp.porn/categories/group/" },
+            { title: "手交", value: "https://ppp.porn/categories/handjob/" },
+            { title: "硬核", value: "https://ppp.porn/categories/hardcore/" },
+            { title: "跨种族", value: "https://ppp.porn/categories/interracial/" },
+            { title: "拉丁", value: "https://ppp.porn/categories/latina/" },
+            { title: "女同", value: "https://ppp.porn/categories/lesbian/" },
+            { title: "熟女", value: "https://ppp.porn/categories/mature/" },
+            { title: "人妻", value: "https://ppp.porn/categories/milf/" },
+            { title: "露出", value: "https://ppp.porn/categories/outdoor/" },
+            { title: "第一视角", value: "https://ppp.porn/categories/pov/" },
+            { title: "公共场所", value: "https://ppp.porn/categories/public/" },
+            { title: "红发", value: "https://ppp.porn/categories/redhead/" },
+            { title: "潮吹", value: "https://ppp.porn/categories/squirting/" },
+            { title: "纹身", value: "https://ppp.porn/categories/tattoo/" },
+            { title: "少女", value: "https://ppp.porn/categories/teen/" },
+            { title: "三人行", value: "https://ppp.porn/categories/threesome/" },
+            { title: "玩具", value: "https://ppp.porn/categories/toys/" }
           ]
         },
-        { name: "page", title: "\\u9875\\u7801", type: "page" }
+        { name: "page", title: "页码", type: "page" }
       ]
     }
   ],
   search: {
-    title: "\\u641c\\u7d22",
+    title: "搜索",
     functionName: "search",
     params: [
-      { name: "keyword", title: "\\u5173\\u952e\\u8bcd", type: "input" },
-      { name: "page", title: "\\u9875\\u7801", type: "page" }
+      { name: "keyword", title: "关键词", type: "input" },
+      { name: "page", title: "页码", type: "page" }
     ]
   }
 };
@@ -168,7 +168,7 @@ async function loadDetail(link) {
       if (!rDetailLink || seenRelated.has(rDetailLink)) return;
       seenRelated.add(rDetailLink);
 
-      const rTitle = $rLink.text().trim() || "\\u76f8\\u5173\\u5f71\\u7247";
+      const rTitle = $rLink.text().trim() || "相关影片";
       const rCover = $el.find("img").attr("data-src") || $el.find("img").attr("src") || "";
 
       relatedItems.push({
