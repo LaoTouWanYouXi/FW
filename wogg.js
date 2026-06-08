@@ -753,6 +753,9 @@ function parseDetailPage(html) {
  * 加载视频列表
  */
 async function loadList(params = {}) {
+  // 提前保存 cookies 到 storage，供 loadDetail（无 params）读取
+  if (params.cookies) saveQuarkCookies(params.cookies);
+
   const categoryId = params.categoryId || "1";
   const page = Number(params.page || 1);
   const url = `${BASE_URL}/vodshow/${categoryId}--------${page}---.html`;
@@ -956,6 +959,9 @@ async function transferAndGetPlayUrl(cookies, shareId, stoken, fid) {
  * @param {object} params - 包含全局参数(cookies, autoClean)和上下文信息
  */
 async function loadStream(params = {}) {
+  // 保存 cookies 到 storage（确保后续读取一致）
+  if (params.cookies) saveQuarkCookies(params.cookies);
+
   const cookies = getQuarkCookies(params);
 
   if (!cookies) {
@@ -964,11 +970,6 @@ async function loadStream(params = {}) {
       description: "请在模块设置中填写夸克网盘Cookies后再试（登录 pan.quark.cn 后从浏览器获取）",
       url: ""
     }];
-  }
-
-  // 保存 cookies 到 storage（如果通过 globalParams 传入）
-  if (params.cookies) {
-    saveQuarkCookies(params.cookies);
   }
 
   // 自动清理过期转存
@@ -1143,6 +1144,9 @@ async function loadStream(params = {}) {
  * 搜索
  */
 async function search(params = {}) {
+  // 提前保存 cookies 到 storage，供 loadDetail（无 params）读取
+  if (params.cookies) saveQuarkCookies(params.cookies);
+
   const keyword = params.keyword || "";
   const page = Number(params.page || 1);
 
