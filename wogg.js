@@ -129,6 +129,9 @@ WidgetMetadata = {
 
 const BASE_URL = "https://www.wogg.net";
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/604.1.14 (KHTML, like Gecko)";
+// 分享相关 API 使用 pan.quark.cn（drive-h.quark.cn 的分享接口已返回 404）
+const QUARK_SHARE_BASE = "https://pan.quark.cn/1/clouddrive";
+// 文件操作 API 使用 drive-h.quark.cn（播放/下载/删除等）
 const QUARK_DRIVE_BASE = "https://drive-h.quark.cn/1/clouddrive";
 const QUARK_PAN_ORIGIN = "https://pan.quark.cn";
 
@@ -203,9 +206,11 @@ async function quarkPost(url, body, headers) {
     const res = await Widget.http.post(url, JSON.stringify(body), { headers });
     return res.data;
   } catch (e) {
-    // Widget.http 抛异常时，尝试从错误信息中提取业务错误
+    // Widget.http 抛异常时，从错误信息中提取详情
     const msg = e.message || String(e);
-    throw new Error(msg);
+    // 提取接口名便于调试
+    const apiName = url.replace(/.*\/clouddrive\//, "").replace(/\?.*/, "");
+    throw new Error(`[${apiName}] ${msg}`);
   }
 }
 
@@ -226,7 +231,8 @@ async function quarkGet(url, params, headers) {
     return res.data;
   } catch (e) {
     const msg = e.message || String(e);
-    throw new Error(msg);
+    const apiName = url.replace(/.*\/clouddrive\//, "").replace(/\?.*/, "");
+    throw new Error(`[${apiName}] ${msg}`);
   }
 }
 
@@ -273,7 +279,7 @@ async function getQuarkShareToken(cookies, shareId, sharePwd) {
     share_pwd: sharePwd || ""
   };
 
-  const data = await quarkPost(`${QUARK_DRIVE_BASE}/share/sharepage/token`, body, headers);
+  const data = await quarkPost(`${QUARK_SHARE_BASE}/share/sharepage/token?fr=pc`, body, headers);
 
   if (!data || data.status !== 200) {
     throw new Error((data && data.message) || "获取分享令牌失败");
@@ -298,7 +304,8 @@ async function getQuarkShareToken(cookies, shareId, sharePwd) {
 async function getQuarkShareFileList(cookies, shareId, stoken, fid, offset, limit) {
   const headers = buildQuarkGetHeaders(cookies);
 
-  const data = await quarkGet(`${QUARK_DRIVE_BASE}/share/sharepage/detail`, {
+  const data = await quarkGet(`${QUARK_SHARE_BASE}/share/sharepage/detail`, {
+    fr: "pc",
     share_id: shareId,
     stoken: stoken,
     pwd: "",
@@ -327,7 +334,7 @@ async function ensureQuarkTempFolder(cookies) {
   const cachedFid = Widget.storage.get("wogg_quark_folder_fid");
   if (cachedFid) {
     try {
-      const infoData = await quarkGet(`${QUARK_DRIVE_BASE}/file/info`, { fid: cachedFid }, getHeaders);
+      const infoData = await quarkGet(`${QUARK_DRIVE_BASE}/file/info`, { fr: "pc", fid: cachedFid }, getHeaders);
       if (infoData && infoData.status === 200 && infoData.data && infoData.data.name === "wogg_temp") {
         return cachedFid;
       }
@@ -339,7 +346,7 @@ async function ensureQuarkTempFolder(cookies) {
   // 查找根目录下是否已有 wogg_temp
   try {
     const listData = await quarkGet(`${QUARK_DRIVE_BASE}/file/sort`, {
-      fid: "0", offset: 0, limit: 200, sort: "file_name:asc"
+      fr: "pc", fid: "0", offset: 0, limit: 200, sort: "file_name:asc"
     }, getHeaders);
 
     if (listData && listData.status === 200 && listData.data && listData.data.list) {
@@ -380,7 +387,7 @@ async function transferQuarkFile(cookies, shareId, stoken, fileId, toDirId) {
     to_dir_id: targetDir
   };
 
-  const data = await quarkPost(`${QUARK_DRIVE_BASE}/share/sharepage/save`, body, headers);
+  const data = await quarkPost(`${QUARK_SHARE_BASE}/share/sharepage/save?fr=pc`, body, headers);
 
   if (!data || data.status !== 200) {
     throw new Error((data && data.message) || (data && data.error && data.error.reason) || "转存失败");
@@ -409,7 +416,7 @@ async function getQuarkPlayUrl(cookies, fid) {
 
   // 优先使用 play 接口
   try {
-    const playData = await quarkPost(`${QUARK_DRIVE_BASE}/file/v2/play`, { fid: fid }, headers);
+    const playData = await quarkPost(`${QUARK_DRIVE_BASE}/file/v2/play?fr=pc`, { fid: fid }, headers);
     if (playData && playData.status === 200 && playData.data) {
       return playData.data;
     }
@@ -418,7 +425,7 @@ async function getQuarkPlayUrl(cookies, fid) {
   }
 
   // 回退到 download 接口
-  const dlData = await quarkPost(`${QUARK_DRIVE_BASE}/file/download`, { fid_list: [fid] }, headers);
+  const dlData = await quarkPost(`${QUARK_DRIVE_BASE}/file/download?fr=pc`, { fid_list: [fid] }, headers);
 
   if (!dlData || dlData.status !== 200) {
     throw new Error((dlData && dlData.message) || "获取播放链接失败");
@@ -437,7 +444,7 @@ async function deleteQuarkFile(cookies, fid) {
   const headers = buildQuarkHeaders(cookies);
 
   try {
-    const data = await quarkPost(`${QUARK_DRIVE_BASE}/file/delete`, { fid_list: [fid], exclude_fids: [] }, headers);
+    const data = await quarkPost(`${QUARK_DRIVE_BASE}/file/delete?fr=pc`, { fid_list: [fid], exclude_fids: [] }, headers);
     return data && data.status === 200;
   } catch (e) {
     return false;
