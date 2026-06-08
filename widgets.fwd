@@ -191,6 +191,15 @@
       "version": "1.0.0",
       "author": "LaoTou",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/rou.js"
+    },
+    {
+      "id": "forward.kanav",
+      "title": "KanAV",
+      "description": "KanAV 视频源",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.3",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/kanav.js"
     }
   ]
 }

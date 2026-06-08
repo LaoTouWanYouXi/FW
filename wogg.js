@@ -562,7 +562,10 @@ function parseVideoList(html) {
   videos.each((_, el) => {
     const href = $(el).find(".module-item-pic a").attr("href");
     const name = $(el).find(".module-item-pic img").attr("alt");
-    const cover = $(el).find(".module-item-pic img").attr("data-src") || $(el).find(".module-item-pic img").attr("src");
+    const $img = $(el).find(".module-item-pic img");
+    const cover = resolveUrl(
+      $img.attr("data-src") || $img.attr("data-original") || $img.attr("data-lazy-src") || $img.attr("src") || ""
+    );
     const text = $(el).find(".module-item-text").eq(0).text();
     const dq = $(el).find(".module-item-caption span").eq(2).text()
       .replace(/中国大陆|中国中国大陆/, "国产")
@@ -577,8 +580,8 @@ function parseVideoList(html) {
       id: href,
       type: "url",
       title: safeText(name),
-      posterPath: cover || "",
-      backdropPath: cover || "",
+      posterPath: cover,
+      backdropPath: cover,
       link: resolveUrl(href),
       description: remarks,
       mediaType: "movie"
@@ -600,9 +603,27 @@ function parseDetailPage(html) {
     safeText($(".module-info-heading h1").text()) ||
     safeText($("h1").first().text());
 
-  const cover = $(".module-info-poster .module-item-pic img").attr("data-src") ||
-    $(".module-info-poster .module-item-pic img").attr("src") ||
-    $("meta[property='og:image']").attr("content") || "";
+  // 海报提取 — 多选择器 + 多属性兜底，确保拿到最高清图片
+  const $posterImg = $(".module-info-poster .module-item-pic img");
+  let cover = resolveUrl(
+    $posterImg.attr("data-src") || $posterImg.attr("data-original") ||
+    $posterImg.attr("data-lazy-src") || $posterImg.attr("src") || ""
+  );
+  if (!cover) {
+    cover = resolveUrl($(".module-info-poster img").attr("data-src") ||
+      $(".module-info-poster img").attr("data-original") ||
+      $(".module-info-poster img").attr("src") || "");
+  }
+  if (!cover) {
+    cover = resolveUrl($("meta[property='og:image']").attr("content") || "");
+  }
+  if (!cover) {
+    // 兜底：从页面任意大图尝试
+    const $fallbackImg = $(".module-info img").first();
+    cover = resolveUrl(
+      $fallbackImg.attr("data-src") || $fallbackImg.attr("data-original") || $fallbackImg.attr("src") || ""
+    );
+  }
 
   const description = safeText($(".module-info-introduction-content, .video_info_content, .module-info-introduction").text());
 
@@ -704,7 +725,10 @@ function parseDetailPage(html) {
     if (relatedItems.length >= 12) return false;
     const href = $(el).find(".module-item-pic a").attr("href");
     const relTitle = $(el).find(".module-item-pic img").attr("alt");
-    const relCover = $(el).find(".module-item-pic img").attr("data-src");
+    const $relImg = $(el).find(".module-item-pic img");
+    const relCover = resolveUrl(
+      $relImg.attr("data-src") || $relImg.attr("data-original") || $relImg.attr("src") || ""
+    );
     if (!href || !relTitle) return;
     const fullUrl = resolveUrl(href);
     if (seenRelated.has(fullUrl)) return;
@@ -713,8 +737,8 @@ function parseDetailPage(html) {
       id: href,
       type: "url",
       title: safeText(relTitle),
-      posterPath: relCover || "",
-      backdropPath: relCover || "",
+      posterPath: relCover,
+      backdropPath: relCover,
       link: fullUrl,
       mediaType: "movie"
     });
@@ -743,6 +767,81 @@ async function loadList(params = {}) {
 }
 
 /**
+ * 从夸克分享链接获取文件列表（不转存），返回 episodeItems
+ * @param {string} cookies - 夸克 cookies
+ * @param {object} track - 单个 track 信息
+ * @returns {object} { episodeItems, files }
+ */
+async function fetchQuarkFileList(cookies, track) {
+  const episodeItems = [];
+  const files = []; // 完整文件信息供 loadStream 使用
+
+  try {
+    const { stoken } = await getQuarkShareToken(cookies, track.shareId, track.sharePwd || "");
+    const fileList = await getQuarkShareFileList(cookies, track.shareId, stoken, "", 0, 200);
+
+    if (!fileList || !fileList.list) return { episodeItems, files };
+
+    for (const file of fileList.list) {
+      if (isQuarkVideoFile(file)) {
+        const fileName = file.file_name || "";
+        const fileSize = file.size || file.file_size || 0;
+        const sizeText = fileSize > 0 ? ` [${formatSize(fileSize)}]` : "";
+
+        episodeItems.push({
+          id: file.fid,
+          type: "url",
+          title: `${track.name} - ${fileName}${sizeText}`,
+          link: `wogg:${track.shareId}:${file.fid}`,
+          description: `${track.name}${sizeText}`,
+          mediaType: "movie"
+        });
+
+        files.push({ fid: file.fid, fileName, fileSize, shareId: track.shareId, stoken, parentFolder: "" });
+      } else if (isQuarkFolder(file)) {
+        try {
+          const subFileList = await getQuarkShareFileList(cookies, track.shareId, stoken, file.fid, 0, 200);
+          if (!subFileList || !subFileList.list) continue;
+
+          for (const subFile of subFileList.list) {
+            if (!isQuarkVideoFile(subFile)) continue;
+
+            const subName = subFile.file_name || "";
+            const subSize = subFile.size || subFile.file_size || 0;
+            const sizeText = subSize > 0 ? ` [${formatSize(subSize)}]` : "";
+
+            episodeItems.push({
+              id: subFile.fid,
+              type: "url",
+              title: `${track.name} - ${file.file_name}/${subName}${sizeText}`,
+              link: `wogg:${track.shareId}:${subFile.fid}`,
+              description: `${track.name} - ${file.file_name}${sizeText}`,
+              mediaType: "movie"
+            });
+
+            files.push({ fid: subFile.fid, fileName: subName, fileSize: subSize, shareId: track.shareId, stoken, parentFolder: file.fid });
+          }
+        } catch (e) {
+          // 子文件夹获取失败，跳过
+        }
+      }
+    }
+  } catch (e) {
+    // 获取文件列表失败，仅显示 track 名称
+    episodeItems.push({
+      id: track.shareId,
+      type: "url",
+      title: `${track.name}（点击播放源加载）`,
+      link: `wogg:${track.shareId}:`,
+      description: `获取文件列表失败: ${e.message || "未知错误"}`,
+      mediaType: "movie"
+    });
+  }
+
+  return { episodeItems, files };
+}
+
+/**
  * 加载详情页
  * @param {string} link - 详情页链接
  */
@@ -752,8 +851,45 @@ async function loadDetail(link) {
     const html = res.data;
     const parsed = parseDetailPage(html);
 
-    if (!parsed) {
-      return null;
+    if (!parsed) return null;
+
+    // 构建夸克资源 episodeItems — 先获取文件列表（不转存）
+    const episodeItems = [];
+    const allFiles = [];
+
+    if (parsed.tracks && parsed.tracks.length > 0) {
+      const cookies = getQuarkCookies(null);
+
+      // 存储 tracks 供 loadStream 使用（固定 key + link key 双重存储）
+      Widget.storage.set("wogg_current_tracks", JSON.stringify(parsed.tracks));
+      Widget.storage.set("wogg_current_link", String(link));
+      Widget.storage.set(`wogg_tracks_${link}`, JSON.stringify(parsed.tracks));
+
+      for (const track of parsed.tracks) {
+        Widget.storage.set(`wogg_track_${track.shareId}`, JSON.stringify(track));
+
+        if (track.type === "quark" && track.shareId && cookies) {
+          // 有 cookies：调用夸克 API 获取文件名列表（不转存）
+          const { episodeItems: eps, files } = await fetchQuarkFileList(cookies, track);
+          episodeItems.push(...eps);
+          allFiles.push(...files);
+
+          // 缓存文件列表供 loadStream 复用
+          if (files.length > 0) {
+            Widget.storage.set(`wogg_files_${track.shareId}`, JSON.stringify(files));
+          }
+        } else {
+          // 无 cookies 或非夸克源：仅显示源名称
+          episodeItems.push({
+            id: track.shareId,
+            type: "url",
+            title: `${track.name}${cookies ? "" : "（需配置夸克Cookies）"}`,
+            link: `wogg:${track.shareId}:`,
+            description: cookies ? "点击播放源加载" : "请先在模块设置中配置夸克网盘Cookies",
+            mediaType: "movie"
+          });
+        }
+      }
     }
 
     const item = {
@@ -767,18 +903,9 @@ async function loadDetail(link) {
       link: link,
       mediaType: "movie",
       genreItems: parsed.genreItems.length > 0 ? parsed.genreItems : undefined,
-      relatedItems: parsed.relatedItems.length > 0 ? parsed.relatedItems : undefined
+      relatedItems: parsed.relatedItems.length > 0 ? parsed.relatedItems : undefined,
+      episodeItems: episodeItems.length > 0 ? episodeItems : undefined
     };
-
-    // 如果找到夸克网盘分享链接，将其存入 storage 供 stream 模块使用
-    if (parsed.tracks && parsed.tracks.length > 0) {
-      Widget.storage.set(`wogg_tracks_${link}`, JSON.stringify(parsed.tracks));
-      for (let i = 0; i < parsed.tracks.length; i++) {
-        const track = parsed.tracks[i];
-        const trackKey = `wogg_track_${track.shareId}`;
-        Widget.storage.set(trackKey, JSON.stringify(track));
-      }
-    }
 
     return item;
   } catch (e) {
@@ -788,7 +915,44 @@ async function loadDetail(link) {
 }
 
 /**
+ * 转存单个文件并获取播放链接
+ * @param {string} cookies - 夸克 cookies
+ * @param {string} shareId - 分享 ID
+ * @param {string} stoken - 分享令牌
+ * @param {string} fid - 文件 fid
+ * @returns {object} { playUrl, transferResult } 或抛出异常
+ */
+async function transferAndGetPlayUrl(cookies, shareId, stoken, fid) {
+  const tempFolderFid = await ensureQuarkTempFolder(cookies);
+
+  // 转存到自己的网盘
+  const transferResult = await transferQuarkFile(cookies, shareId, stoken, fid, tempFolderFid);
+
+  // 记录转存索引用于自动清理
+  const storageKey = `wogg_transfer_${fid}`;
+  addTransferIndex(storageKey);
+
+  // 获取播放链接
+  let playUrl = "";
+  try {
+    const playInfo = await getQuarkPlayUrl(cookies, transferResult.fileId);
+    if (playInfo.video_preview_url) {
+      playUrl = playInfo.video_preview_url;
+    } else if (playInfo.download_url) {
+      playUrl = playInfo.download_url;
+    } else if (playInfo.list && playInfo.list.length > 0) {
+      playUrl = playInfo.list[0].download_url || "";
+    }
+  } catch (e) {
+    // 播放链接获取失败
+  }
+
+  return { playUrl, transferResult };
+}
+
+/**
  * 播放源模块 — 夸克网盘转存并获取播放链接
+ * 点击播放时才转存到用户网盘获取播放地址
  * @param {object} params - 包含全局参数(cookies, autoClean)和上下文信息
  */
 async function loadStream(params = {}) {
@@ -814,23 +978,28 @@ async function loadStream(params = {}) {
     // 清理失败不影响播放
   }
 
-  // 从上下文获取当前视频的 tracks 信息
-  const contextLink = params.link || params.id || "";
+  // ===== 获取 tracks =====
+  // 优先级：固定 key > context link key > params 传入
   let tracks = [];
-
-  const tracksRaw = Widget.storage.get(`wogg_tracks_${contextLink}`);
-  if (tracksRaw) {
-    try { tracks = JSON.parse(tracksRaw); } catch (e) { tracks = []; }
+  const fixedTracks = Widget.storage.get("wogg_current_tracks");
+  if (fixedTracks) {
+    try { tracks = JSON.parse(fixedTracks); } catch (e) { tracks = []; }
   }
 
-  if (tracks.length === 0 && params.tracks) {
-    try { tracks = typeof params.tracks === "string" ? JSON.parse(params.tracks) : params.tracks; } catch (e) { tracks = []; }
+  if (tracks.length === 0) {
+    const contextLink = params.link || params.id || Widget.storage.get("wogg_current_link") || "";
+    if (contextLink) {
+      const tracksRaw = Widget.storage.get(`wogg_tracks_${contextLink}`);
+      if (tracksRaw) {
+        try { tracks = JSON.parse(tracksRaw); } catch (e) { tracks = []; }
+      }
+    }
   }
 
   if (tracks.length === 0) {
     return [{
       name: "未找到网盘链接",
-      description: "该视频暂无可用的夸克网盘分享链接",
+      description: "请先进入视频详情页后再打开播放源",
       url: ""
     }];
   }
@@ -841,60 +1010,69 @@ async function loadStream(params = {}) {
     try {
       if (track.type !== "quark" || !track.shareId) continue;
 
-      // 1. 获取分享令牌
-      const { stoken } = await getQuarkShareToken(cookies, track.shareId, track.sharePwd || "");
+      // 尝试使用 loadDetail 预取的文件列表缓存
+      const cachedFiles = Widget.storage.get(`wogg_files_${track.shareId}`);
+      if (cachedFiles) {
+        let files = [];
+        try { files = JSON.parse(cachedFiles); } catch (e) { files = []; }
 
-      // 2. 获取分享根目录文件列表
+        if (files.length > 0) {
+          // 有缓存文件列表 — 直接转存获取播放链接（无需再调用文件列表 API）
+          for (const file of files) {
+            try {
+              // 如果缓存中有 stoken 直接复用，否则重新获取
+              let stoken = file.stoken || "";
+              if (!stoken) {
+                const tokenResult = await getQuarkShareToken(cookies, track.shareId, track.sharePwd || "");
+                stoken = tokenResult.stoken;
+              }
+
+              const { playUrl, transferResult } = await transferAndGetPlayUrl(
+                cookies, track.shareId, stoken, file.fid
+              );
+
+              const sizeText = file.fileSize > 0 ? ` | ${formatSize(file.fileSize)}` : "";
+              resources.push({
+                name: `${track.name} - ${file.fileName}`,
+                description: `来源: ${track.name}${sizeText} | 已转存`,
+                url: playUrl || `quark://${transferResult.fileId}`,
+                customHeaders: buildQuarkHeaders(cookies)
+              });
+            } catch (transferErr) {
+              resources.push({
+                name: `${track.name} - ${file.fileName || file.fid}`,
+                description: `转存失败: ${transferErr.message}`,
+                url: ""
+              });
+            }
+          }
+          continue; // 处理完缓存的文件，跳到下一个 track
+        }
+      }
+
+      // 无缓存 — 实时获取文件列表并转存
+      const { stoken } = await getQuarkShareToken(cookies, track.shareId, track.sharePwd || "");
       const fileList = await getQuarkShareFileList(cookies, track.shareId, stoken, "", 0, 200);
 
       if (!fileList || !fileList.list) continue;
 
-      // 3. 确保目标临时文件夹存在
-      const tempFolderFid = await ensureQuarkTempFolder(cookies);
-
-      // 4. 遍历文件，处理视频和文件夹
       for (const file of fileList.list) {
         if (isQuarkVideoFile(file)) {
-          // 直接是视频文件
           const fileName = file.file_name || "";
           const fileSize = file.size || file.file_size || 0;
-          const fid = file.fid || "";
 
           try {
-            // 转存
-            const transferResult = await transferQuarkFile(
-              cookies, track.shareId, stoken, fid, tempFolderFid
+            const { playUrl, transferResult } = await transferAndGetPlayUrl(
+              cookies, track.shareId, stoken, file.fid
             );
 
-            // 记录转存索引
-            const storageKey = `wogg_transfer_${fid}`;
-            addTransferIndex(storageKey);
-
-            // 获取播放链接
-            let playUrl = "";
-            try {
-              const playInfo = await getQuarkPlayUrl(cookies, transferResult.fileId);
-              // play 接口返回 video_preview_url 或 download url
-              if (playInfo.video_preview_url) {
-                playUrl = playInfo.video_preview_url;
-              } else if (playInfo.download_url) {
-                playUrl = playInfo.download_url;
-              } else if (playInfo.list && playInfo.list.length > 0) {
-                playUrl = playInfo.list[0].download_url || "";
-              }
-            } catch (e) {
-              // 播放链接获取失败，仍然显示选项
-            }
-
             const sizeText = fileSize > 0 ? ` | ${formatSize(fileSize)}` : "";
-
             resources.push({
               name: `${track.name} - ${fileName}`,
               description: `来源: ${track.name}${sizeText} | 已转存`,
               url: playUrl || `quark://${transferResult.fileId}`,
               customHeaders: buildQuarkHeaders(cookies)
             });
-
           } catch (transferErr) {
             resources.push({
               name: `${track.name} - ${fileName}`,
@@ -903,12 +1081,11 @@ async function loadStream(params = {}) {
             });
           }
         } else if (isQuarkFolder(file)) {
-          // 文件夹，递归查找视频
+          // 文件夹：获取子文件列表
           try {
             const subFileList = await getQuarkShareFileList(
               cookies, track.shareId, stoken, file.fid, 0, 200
             );
-
             if (!subFileList || !subFileList.list) continue;
 
             for (const subFile of subFileList.list) {
@@ -916,37 +1093,19 @@ async function loadStream(params = {}) {
 
               const subName = subFile.file_name || "";
               const subSize = subFile.size || subFile.file_size || 0;
-              const subFid = subFile.fid || "";
 
               try {
-                const transferResult = await transferQuarkFile(
-                  cookies, track.shareId, stoken, subFid, tempFolderFid
+                const { playUrl, transferResult } = await transferAndGetPlayUrl(
+                  cookies, track.shareId, stoken, subFile.fid
                 );
 
-                const storageKey = `wogg_transfer_${subFid}`;
-                addTransferIndex(storageKey);
-
-                let playUrl = "";
-                try {
-                  const playInfo = await getQuarkPlayUrl(cookies, transferResult.fileId);
-                  if (playInfo.video_preview_url) {
-                    playUrl = playInfo.video_preview_url;
-                  } else if (playInfo.download_url) {
-                    playUrl = playInfo.download_url;
-                  } else if (playInfo.list && playInfo.list.length > 0) {
-                    playUrl = playInfo.list[0].download_url || "";
-                  }
-                } catch (e) {}
-
                 const sizeText = subSize > 0 ? ` | ${formatSize(subSize)}` : "";
-
                 resources.push({
                   name: `${track.name} - ${file.file_name}/${subName}`,
                   description: `来源: ${track.name}${sizeText} | 已转存`,
                   url: playUrl || `quark://${transferResult.fileId}`,
                   customHeaders: buildQuarkHeaders(cookies)
                 });
-
               } catch (transferErr) {
                 resources.push({
                   name: `${track.name} - ${subName}`,
@@ -956,11 +1115,10 @@ async function loadStream(params = {}) {
               }
             }
           } catch (e) {
-            // 文件夹解析失败，跳过
+            // 子文件夹获取失败
           }
         }
       }
-
     } catch (e) {
       resources.push({
         name: track.name || "未知源",
@@ -1014,7 +1172,10 @@ async function search(params = {}) {
     videos.each((_, el) => {
       const href = $(el).find(".video-serial").attr("href");
       const name = $(el).find(".lazyload").attr("alt");
-      const cover = $(el).find(".lazyload").attr("data-src") || $(el).find(".lazyload").attr("src");
+      const $lazyImg = $(el).find(".lazyload");
+      const cover = resolveUrl(
+        $lazyImg.attr("data-src") || $lazyImg.attr("data-original") || $lazyImg.attr("src") || ""
+      );
       const remarks = $(el).find(".video-serial").text();
 
       if (!href || !name) return;
