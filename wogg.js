@@ -784,8 +784,9 @@ async function loadList(params = {}) {
 
 /**
  * 加载详情页
- * 只从 wogg.net HTML 提取信息，不调用夸克 API
- * 夸克资源展示为 episodeItems，点击播放源时才调用夸克 API 获取文件列表和播放链接
+ * 1. 从 wogg.net HTML 提取夸克分享链接
+ * 2. 调用夸克 API 获取文件列表（不转存），展示每个视频文件名/大小
+ * 3. 将文件信息存入 storage，供 loadStream 转存+播放
  * @param {string} link - 详情页链接
  */
 async function loadDetail(link) {
@@ -796,11 +797,13 @@ async function loadDetail(link) {
 
     if (!parsed) return null;
 
-    // 将解析到的夸克分享链接直接展示为 episodeItems
     const episodeItems = [];
+    const allFiles = [];
 
     if (parsed.tracks && parsed.tracks.length > 0) {
-      // 存储 tracks 供 loadStream 使用（固定 key + link key 双重存储）
+      const cookies = getQuarkCookies(null);
+
+      // 存储 tracks 供 loadStream 使用
       Widget.storage.set("wogg_current_tracks", JSON.stringify(parsed.tracks));
       Widget.storage.set("wogg_current_link", String(link));
       Widget.storage.set(`wogg_tracks_${link}`, JSON.stringify(parsed.tracks));
@@ -808,14 +811,97 @@ async function loadDetail(link) {
       for (const track of parsed.tracks) {
         Widget.storage.set(`wogg_track_${track.shareId}`, JSON.stringify(track));
 
-        episodeItems.push({
-          id: track.shareId,
-          type: "url",
-          title: track.name || `分享链接`,
-          link: `wogg:${track.shareId}:${track.sharePwd || ""}`,
-          description: `夸克网盘 - 点击「播放源」加载视频`,
-          mediaType: "movie"
-        });
+        if (track.type === "quark" && track.shareId && cookies) {
+          // 有 cookies：调用夸克 API 获取文件列表（不转存）
+          try {
+            const { stoken } = await getQuarkShareToken(cookies, track.shareId, track.sharePwd || "");
+            const fileList = await getQuarkShareFileList(cookies, track.shareId, stoken, "", 0, 200);
+
+            if (fileList && fileList.list) {
+              for (const file of fileList.list) {
+                if (isQuarkVideoFile(file)) {
+                  const fileName = file.file_name || "";
+                  const fileSize = file.size || file.file_size || 0;
+                  const sizeText = fileSize > 0 ? ` [${formatSize(fileSize)}]` : "";
+
+                  episodeItems.push({
+                    id: file.fid,
+                    type: "url",
+                    title: `${track.name} - ${fileName}${sizeText}`,
+                    link: link,
+                    description: `${track.name}${sizeText}`,
+                    mediaType: "movie"
+                  });
+
+                  allFiles.push({
+                    fid: file.fid, fileName, fileSize,
+                    shareId: track.shareId, sharePwd: track.sharePwd || "",
+                    stoken, parentFolder: ""
+                  });
+                } else if (isQuarkFolder(file)) {
+                  // 文件夹：获取子文件列表
+                  try {
+                    const subFileList = await getQuarkShareFileList(cookies, track.shareId, stoken, file.fid, 0, 200);
+                    if (!subFileList || !subFileList.list) continue;
+
+                    for (const subFile of subFileList.list) {
+                      if (!isQuarkVideoFile(subFile)) continue;
+
+                      const subName = subFile.file_name || "";
+                      const subSize = subFile.size || subFile.file_size || 0;
+                      const sizeText = subSize > 0 ? ` [${formatSize(subSize)}]` : "";
+
+                      episodeItems.push({
+                        id: subFile.fid,
+                        type: "url",
+                        title: `${track.name} - ${file.file_name}/${subName}${sizeText}`,
+                        link: link,
+                        description: `${track.name} - ${file.file_name}${sizeText}`,
+                        mediaType: "movie"
+                      });
+
+                      allFiles.push({
+                        fid: subFile.fid, fileName: subName, fileSize: subSize,
+                        shareId: track.shareId, sharePwd: track.sharePwd || "",
+                        stoken, parentFolder: file.fid
+                      });
+                    }
+                  } catch (e) {
+                    // 子文件夹获取失败，跳过
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            // 夸克 API 获取失败，降级显示分享链接名
+            episodeItems.push({
+              id: track.shareId,
+              type: "url",
+              title: `${track.name}（点击播放源加载）`,
+              link: link,
+              description: `文件列表获取失败: ${e.message || "未知"}`,
+              mediaType: "movie"
+            });
+          }
+        } else {
+          // 无 cookies：仅显示源名称
+          episodeItems.push({
+            id: track.shareId,
+            type: "url",
+            title: `${track.name}${cookies ? "" : "（需配置夸克Cookies）"}`,
+            link: link,
+            description: cookies ? "点击播放源加载" : "请先在模块设置中配置夸克网盘Cookies",
+            mediaType: "movie"
+          });
+        }
+      }
+
+      // 缓存文件列表供 loadStream 使用（避免重复调用 API）
+      if (allFiles.length > 0) {
+        Widget.storage.set("wogg_current_files", JSON.stringify(allFiles));
+        for (const f of allFiles) {
+          Widget.storage.set(`wogg_file_${f.fid}`, JSON.stringify(f));
+        }
       }
     }
 
@@ -843,11 +929,6 @@ async function loadDetail(link) {
 
 /**
  * 转存单个文件并获取播放链接
- * @param {string} cookies - 夸克 cookies
- * @param {string} shareId - 分享 ID
- * @param {string} stoken - 分享令牌
- * @param {string} fid - 文件 fid
- * @returns {object} { playUrl, transferResult } 或抛出异常
  */
 async function transferAndGetPlayUrl(cookies, shareId, stoken, fid, tempFolderFid) {
   if (!tempFolderFid) tempFolderFid = await ensureQuarkTempFolder(cookies);
@@ -878,12 +959,12 @@ async function transferAndGetPlayUrl(cookies, shareId, stoken, fid, tempFolderFi
 }
 
 /**
- * 播放源模块 — 夸克网盘获取文件列表、转存并获取播放链接
- * 详情页不调用夸克 API，只在用户点击播放源时才调用
+ * 播放源模块
+ * 从 storage 读取 loadDetail 已缓存的文件列表，逐个转存+获取播放地址
  * @param {object} params - 包含全局参数(cookies, autoClean)和上下文信息
  */
 async function loadStream(params = {}) {
-  // 保存 cookies 到 storage（确保后续读取一致）
+  // 保存 cookies
   if (params.cookies) saveQuarkCookies(params.cookies);
 
   const cookies = getQuarkCookies(params);
@@ -899,130 +980,98 @@ async function loadStream(params = {}) {
   // 自动清理过期转存
   try {
     await cleanExpiredTransfers(params);
-  } catch (e) {
-    // 清理失败不影响播放
+  } catch (e) {}
+
+  // ===== 获取文件列表 =====
+  // 优先使用 loadDetail 缓存的文件列表，避免重复调用夸克 API
+  let files = [];
+  const cachedFiles = Widget.storage.get("wogg_current_files");
+  if (cachedFiles) {
+    try { files = JSON.parse(cachedFiles); } catch (e) { files = []; }
   }
 
-  // ===== 获取 tracks =====
-  let tracks = [];
-  const fixedTracks = Widget.storage.get("wogg_current_tracks");
-  if (fixedTracks) {
-    try { tracks = JSON.parse(fixedTracks); } catch (e) { tracks = []; }
-  }
-
-  if (tracks.length === 0) {
-    const contextLink = params.link || params.id || Widget.storage.get("wogg_current_link") || "";
-    if (contextLink) {
-      const tracksRaw = Widget.storage.get(`wogg_tracks_${contextLink}`);
-      if (tracksRaw) {
-        try { tracks = JSON.parse(tracksRaw); } catch (e) { tracks = []; }
+  // 缓存为空时，从 tracks 重新获取
+  if (files.length === 0) {
+    let tracks = [];
+    const fixedTracks = Widget.storage.get("wogg_current_tracks");
+    if (fixedTracks) {
+      try { tracks = JSON.parse(fixedTracks); } catch (e) { tracks = []; }
+    }
+    if (tracks.length === 0) {
+      const contextLink = params.link || params.id || Widget.storage.get("wogg_current_link") || "";
+      if (contextLink) {
+        const tracksRaw = Widget.storage.get(`wogg_tracks_${contextLink}`);
+        if (tracksRaw) {
+          try { tracks = JSON.parse(tracksRaw); } catch (e) { tracks = []; }
+        }
       }
+    }
+
+    if (tracks.length === 0) {
+      return [{ name: "未找到网盘链接", description: "请先进入视频详情页后再打开播放源", url: "" }];
+    }
+
+    // 实时获取文件列表
+    for (const track of tracks) {
+      if (track.type !== "quark" || !track.shareId) continue;
+      try {
+        const { stoken } = await getQuarkShareToken(cookies, track.shareId, track.sharePwd || "");
+        const fileList = await getQuarkShareFileList(cookies, track.shareId, stoken, "", 0, 200);
+        if (!fileList || !fileList.list) continue;
+        for (const file of fileList.list) {
+          if (isQuarkVideoFile(file)) {
+            files.push({ fid: file.fid, fileName: file.file_name || "", fileSize: file.size || file.file_size || 0, shareId: track.shareId, sharePwd: track.sharePwd || "", stoken });
+          } else if (isQuarkFolder(file)) {
+            try {
+              const subFileList = await getQuarkShareFileList(cookies, track.shareId, stoken, file.fid, 0, 200);
+              if (!subFileList || !subFileList.list) continue;
+              for (const subFile of subFileList.list) {
+                if (!isQuarkVideoFile(subFile)) continue;
+                files.push({ fid: subFile.fid, fileName: `${file.file_name}/${subFile.file_name || ""}`, fileSize: subFile.size || subFile.file_size || 0, shareId: track.shareId, sharePwd: track.sharePwd || "", stoken });
+              }
+            } catch (e) {}
+          }
+        }
+      } catch (e) {}
     }
   }
 
-  if (tracks.length === 0) {
-    return [{
-      name: "未找到网盘链接",
-      description: "请先进入视频详情页后再打开播放源",
-      url: ""
-    }];
+  if (files.length === 0) {
+    return [{ name: "未找到视频文件", description: "分享链接中未找到可播放的视频文件", url: "" }];
   }
 
+  // ===== 转存+获取播放地址 =====
   const resources = [];
+  const tempFolderFid = await ensureQuarkTempFolder(cookies);
 
-  for (const track of tracks) {
+  for (const file of files) {
     try {
-      if (track.type !== "quark" || !track.shareId) continue;
-
-      // 1. 获取分享令牌
-      const { stoken } = await getQuarkShareToken(cookies, track.shareId, track.sharePwd || "");
-
-      // 2. 获取分享根目录文件列表
-      const fileList = await getQuarkShareFileList(cookies, track.shareId, stoken, "", 0, 200);
-
-      if (!fileList || !fileList.list) continue;
-
-      // 3. 确保目标临时文件夹存在
-      const tempFolderFid = await ensureQuarkTempFolder(cookies);
-
-      // 4. 遍历文件，处理视频和文件夹
-      for (const file of fileList.list) {
-        if (isQuarkVideoFile(file)) {
-          const fileName = file.file_name || "";
-          const fileSize = file.size || file.file_size || 0;
-
-          try {
-            const { playUrl, transferResult } = await transferAndGetPlayUrl(
-              cookies, track.shareId, stoken, file.fid, tempFolderFid
-            );
-
-            const sizeText = fileSize > 0 ? ` | ${formatSize(fileSize)}` : "";
-            resources.push({
-              name: `${track.name} - ${fileName}`,
-              description: `来源: ${track.name}${sizeText} | 已转存`,
-              url: playUrl || `quark://${transferResult.fileId}`,
-              customHeaders: buildQuarkHeaders(cookies)
-            });
-          } catch (transferErr) {
-            resources.push({
-              name: `${track.name} - ${fileName}`,
-              description: `转存失败: ${transferErr.message}`,
-              url: ""
-            });
-          }
-        } else if (isQuarkFolder(file)) {
-          try {
-            const subFileList = await getQuarkShareFileList(
-              cookies, track.shareId, stoken, file.fid, 0, 200
-            );
-            if (!subFileList || !subFileList.list) continue;
-
-            for (const subFile of subFileList.list) {
-              if (!isQuarkVideoFile(subFile)) continue;
-
-              const subName = subFile.file_name || "";
-              const subSize = subFile.size || subFile.file_size || 0;
-
-              try {
-                const { playUrl, transferResult } = await transferAndGetPlayUrl(
-                  cookies, track.shareId, stoken, subFile.fid, tempFolderFid
-                );
-
-                const sizeText = subSize > 0 ? ` | ${formatSize(subSize)}` : "";
-                resources.push({
-                  name: `${track.name} - ${file.file_name}/${subName}`,
-                  description: `来源: ${track.name}${sizeText} | 已转存`,
-                  url: playUrl || `quark://${transferResult.fileId}`,
-                  customHeaders: buildQuarkHeaders(cookies)
-                });
-              } catch (transferErr) {
-                resources.push({
-                  name: `${track.name} - ${subName}`,
-                  description: `转存失败: ${transferErr.message}`,
-                  url: ""
-                });
-              }
-            }
-          } catch (e) {
-            // 子文件夹获取失败
-          }
-        }
+      // 如果缓存中有 stoken 直接复用，否则重新获取
+      let stoken = file.stoken || "";
+      if (!stoken) {
+        const tokenResult = await getQuarkShareToken(cookies, file.shareId, file.sharePwd || "");
+        stoken = tokenResult.stoken;
       }
-    } catch (e) {
+
+      const { playUrl, transferResult } = await transferAndGetPlayUrl(
+        cookies, file.shareId, stoken, file.fid, tempFolderFid
+      );
+
+      const sizeText = file.fileSize > 0 ? ` | ${formatSize(file.fileSize)}` : "";
       resources.push({
-        name: track.name || "未知源",
-        description: `获取失败: ${e.message}`,
+        name: file.fileName || file.fid,
+        description: `已转存${sizeText}`,
+        url: playUrl || `quark://${transferResult.fileId}`,
+        customHeaders: buildQuarkHeaders(cookies)
+      });
+    } catch (transferErr) {
+      const sizeText = file.fileSize > 0 ? ` | ${formatSize(file.fileSize)}` : "";
+      resources.push({
+        name: file.fileName || file.fid,
+        description: `转存失败: ${transferErr.message}${sizeText}`,
         url: ""
       });
     }
-  }
-
-  if (resources.length === 0) {
-    return [{
-      name: "未找到视频文件",
-      description: "分享链接中未找到可播放的视频文件",
-      url: ""
-    }];
   }
 
   return resources;
