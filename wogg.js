@@ -129,7 +129,8 @@ WidgetMetadata = {
 
 const BASE_URL = "https://www.wogg.net";
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/604.1.14 (KHTML, like Gecko)";
-const QUARK_DRIVE_BASE = "https://drive-h.quark.cn/1/clouddrive";
+const QUARK_API_BASE = "https://pan.quark.cn/1/clouddrive";
+const QUARK_FILE_BASE = "https://drive-h.quark.cn/1/clouddrive";
 const QUARK_PAN_ORIGIN = "https://pan.quark.cn";
 
 // ==================== 工具函数 ====================
@@ -230,18 +231,15 @@ function parseQuarkShareUrl(shareUrl) {
  * @returns {object} { stoken, shareInfo }
  */
 async function getQuarkShareToken(cookies, shareId, sharePwd) {
-  // token 端点要求 POST + form-urlencoded（不接受 JSON 也不接受 GET）
-  const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Origin": QUARK_PAN_ORIGIN,
-    "Referer": QUARK_PAN_ORIGIN + "/",
-    "Cookie": cookies
+  // pan.quark.cn 的 token 端点：POST JSON
+  const headers = buildQuarkHeaders(cookies);
+
+  const body = {
+    share_id: shareId,
+    share_pwd: sharePwd || ""
   };
 
-  const formBody = `share_id=${encodeURIComponent(shareId)}&share_pwd=${encodeURIComponent(sharePwd || "")}`;
-
-  const res = await Widget.http.post(`${QUARK_DRIVE_BASE}/share/sharepage/token`, formBody, { headers });
+  const res = await Widget.http.post(`${QUARK_API_BASE}/share/sharepage/token`, JSON.stringify(body), { headers });
 
   if (!res.data || res.data.status !== 200) {
     const msg = res.data?.message || res.data?.error?.reason || "获取分享令牌失败";
@@ -267,7 +265,7 @@ async function getQuarkShareToken(cookies, shareId, sharePwd) {
 async function getQuarkShareFileList(cookies, shareId, stoken, fid, offset, limit) {
   const headers = buildQuarkGetHeaders(cookies);
 
-  const res = await Widget.http.get(`${QUARK_DRIVE_BASE}/share/sharepage/detail`, {
+  const res = await Widget.http.get(`${QUARK_API_BASE}/share/sharepage/detail`, {
     headers,
     params: {
       share_id: shareId,
@@ -301,7 +299,7 @@ async function ensureQuarkTempFolder(cookies) {
   if (cachedFid) {
     // 验证文件夹是否仍然存在（file/info 改为 GET）
     try {
-      const infoRes = await Widget.http.get(`${QUARK_DRIVE_BASE}/file/info`, {
+      const infoRes = await Widget.http.get(`${QUARK_FILE_BASE}/file/info`, {
         headers: getHeaders,
         params: { fid: cachedFid }
       });
@@ -315,7 +313,7 @@ async function ensureQuarkTempFolder(cookies) {
 
   // 查找根目录下是否已有 wogg_temp（file/sort 改为 GET）
   try {
-    const listRes = await Widget.http.get(`${QUARK_DRIVE_BASE}/file/sort`, {
+    const listRes = await Widget.http.get(`${QUARK_FILE_BASE}/file/sort`, {
       headers: getHeaders,
       params: {
         fid: "0",
@@ -365,7 +363,7 @@ async function transferQuarkFile(cookies, shareId, stoken, fileId, toDirId) {
     to_dir_id: targetDir
   };
 
-  const res = await Widget.http.post(`${QUARK_DRIVE_BASE}/share/sharepage/save`, JSON.stringify(body), { headers });
+  const res = await Widget.http.post(`${QUARK_API_BASE}/share/sharepage/save`, JSON.stringify(body), { headers });
 
   if (!res.data || res.data.status !== 200) {
     const msg = res.data?.message || res.data?.error?.reason || "转存失败";
@@ -398,7 +396,7 @@ async function getQuarkPlayUrl(cookies, fid) {
 
   // 尝试获取视频播放信息（优先使用 play 接口）
   try {
-    const playRes = await Widget.http.post(`${QUARK_DRIVE_BASE}/file/v2/play`, JSON.stringify({
+    const playRes = await Widget.http.post(`${QUARK_FILE_BASE}/file/v2/play`, JSON.stringify({
       fid: fid
     }), { headers });
 
@@ -410,7 +408,7 @@ async function getQuarkPlayUrl(cookies, fid) {
   }
 
   // 回退到 download 接口
-  const res = await Widget.http.post(`${QUARK_DRIVE_BASE}/file/download`, JSON.stringify({
+  const res = await Widget.http.post(`${QUARK_FILE_BASE}/file/download`, JSON.stringify({
     fid_list: [fid]
   }), { headers });
 
@@ -430,7 +428,7 @@ async function getQuarkPlayUrl(cookies, fid) {
 async function deleteQuarkFile(cookies, fid) {
   const headers = buildQuarkHeaders(cookies);
 
-  const res = await Widget.http.post(`${QUARK_DRIVE_BASE}/file/delete`, JSON.stringify({
+  const res = await Widget.http.post(`${QUARK_FILE_BASE}/file/delete`, JSON.stringify({
     fid_list: [fid],
     exclude_fids: []
   }), { headers });
