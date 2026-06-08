@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.rouvideo",
   title: "肉视频",
-  version: "1.0.0",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   description: "肉视频聚合模块，支持国产AV、探花、自拍流出、OnlyFans、日本、搜索",
   author: "Forward",
@@ -188,7 +188,7 @@ function parseVideoList(html) {
       backdropPath: cover,
       description: subTitle || hdInfo,
       link: resolveUrl(href),
-      mediaType: "movie",
+      mediaType: "tvshow",
     });
   });
 
@@ -266,7 +266,8 @@ async function loadDetail(link) {
         title: rTitle,
         posterPath: rCover,
         backdropPath: rCover,
-        link: rDetailLink
+        link: rDetailLink,
+        mediaType: "tvshow",
       });
     });
 
@@ -281,7 +282,7 @@ async function loadDetail(link) {
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
-      mediaType: "movie",
+      mediaType: "tvshow",
       customHeaders: HEADERS
     };
   } catch (e) {

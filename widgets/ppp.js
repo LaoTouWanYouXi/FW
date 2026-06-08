@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.pppporn",
   title: "PppPorn",
-  version: "1.0.0",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   description: "PppPorn 视频聚合模块，支持分类浏览、搜索",
   author: "Forward",
@@ -395,7 +395,7 @@ function parseVideoList(html) {
       backdropPath: cover,
       durationText: duration || undefined,
       link: resolveUrl(href),
-      mediaType: "movie",
+      mediaType: "tvshow",
     });
   });
 
@@ -518,7 +518,8 @@ async function loadDetail(link) {
         title: rTitle,
         posterPath: rCover,
         backdropPath: rCover,
-        link: rDetailLink
+        link: rDetailLink,
+        mediaType: "tvshow",
       });
     });
 
@@ -533,7 +534,7 @@ async function loadDetail(link) {
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
-      mediaType: "movie",
+      mediaType: "tvshow",
       customHeaders: HEADERS
     };
   } catch (e) {

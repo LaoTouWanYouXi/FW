@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.0",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   description: "JavMove 视频聚合模块，支持最新影片、即将上映、搜索",
   author: "Forward",
@@ -77,7 +77,7 @@ function parseVideoList(html) {
       backdropPath: cover,
       releaseDate: pubdate ? pubdate.split("T")[0] : "",
       link: detailLink,
-      mediaType: "movie",
+      mediaType: "tvshow",
     });
   });
 
@@ -154,10 +154,20 @@ async function loadDetail(link) {
         const watchUrl = `${BASE_URL}/watch?token=${dataId}`;
         try {
           const watchRes = await Widget.http.get(watchUrl, {
-            headers: { ...HEADERS, "Referer": "https://javquick.com/" }
+            headers: { ...HEADERS, "Referer": "https://javmove.com/" }
           });
-          videoUrl = watchRes.data || "";
-          if (typeof videoUrl === "object") videoUrl = JSON.stringify(videoUrl);
+          let rawUrl = watchRes.data || "";
+
+          // 兼容：Widget.http.get 可能将 JSON 响应自动解析为对象
+          if (typeof rawUrl === "object") {
+            rawUrl = JSON.stringify(rawUrl);
+          }
+
+          // 安全校验：只有以 http 开头才是有效的视频地址
+          // /watch 无 Referer 时返回 "re"，无效 token 返回空串，都需要过滤
+          if (typeof rawUrl === "string" && rawUrl.startsWith("http")) {
+            videoUrl = rawUrl;
+          }
         } catch (e) {}
       }
     }
@@ -190,7 +200,8 @@ async function loadDetail(link) {
         title: rTitle,
         posterPath: rCover,
         backdropPath: rCover,
-        link: rDetailLink
+        link: rDetailLink,
+        mediaType: "tvshow",
       });
     });
 
@@ -205,7 +216,7 @@ async function loadDetail(link) {
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link,
-      mediaType: "movie",
+      mediaType: "tvshow",
       customHeaders: HEADERS
     };
   } catch (e) {

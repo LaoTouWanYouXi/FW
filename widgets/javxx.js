@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.0.0",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   description: "JavXX 视频聚合模块，支持热门影片、最新影片、最近更新、有码影片、无码影片、搜索",
   author: "Forward",
@@ -131,8 +131,20 @@ function xorEncrypt(input, key) {
     const k = key.charCodeAt(i % key.length);
     result.push(input.charCodeAt(i) ^ k);
   }
-  const wordArray = CryptoJS.lib.WordArray.create(Uint8Array.from(result));
-  return CryptoJS.enc.Base64.stringify(wordArray);
+  // 纯 JS 实现 base64 编码，不依赖 CryptoJS
+  const bytes = new Uint8Array(result);
+  const map = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let b64 = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    b64 += map[(b0 >> 2) & 0x3F];
+    b64 += map[((b0 << 4) | (b1 >> 4)) & 0x3F];
+    b64 += i + 1 < bytes.length ? map[((b1 << 2) | (b2 >> 6)) & 0x3F] : "=";
+    b64 += i + 2 < bytes.length ? map[b2 & 0x3F] : "=";
+  }
+  return b64;
 }
 
 function parseVideoList(html) {
@@ -157,7 +169,7 @@ function parseVideoList(html) {
       backdropPath: cover,
       durationText: duration,
       link: resolveUrl(href),
-      mediaType: "movie",
+      mediaType: "tvshow",
     });
   });
 
@@ -194,21 +206,99 @@ async function loadDetail(link) {
     const title = $("h1").first().text().trim() || $('meta[property="og:title"]').attr("content") || "";
     const cover = $('meta[property="og:image"]').attr("content") || $(".image > img").attr("src") || "";
 
+    let videoUrl = "";
+
+    // === 策略1：通过 data-url 解密 + stream API ===
     const dataUrl = $("#video-files div").attr("data-url") || "";
-    if (!dataUrl) return null;
+    if (dataUrl) {
+      try {
+        // XOR_KEY 解密 data-url → 得到 embed URL（如 https://surrit.store/e/2VPP3NN2）
+        const decodedUrl = xorDecode(dataUrl, XOR_KEY);
 
-    const decodedUrl = xorDecode(dataUrl, XOR_KEY);
-    const fileName = decodedUrl.split("/").pop().split("?")[0];
-    const token = xorEncrypt(fileName, AES_KEY);
+        // 从 embed URL 提取 videoId（路径最后一段）
+        const urlPath = decodedUrl.replace(/https?:\/\/[^/]+/, "");
+        const videoId = urlPath.split("/").filter(Boolean).pop() || "";
 
-    const streamRes = await Widget.http.get(`${SURRIT_BASE}/stream?src=javxx&poster=&token=${token}`, { headers: HEADERS });
-    const streamData = streamRes.data || {};
-    const media = JSON.parse(streamData).result.media;
+        if (videoId) {
+          // 用 AES_KEY 加密 videoId 生成 token
+          const token = encodeURIComponent(xorEncrypt(videoId, AES_KEY));
 
-    const decryptedMedia = xorDecode(media, AES_KEY);
-    const parsed = JSON.parse(decryptedMedia);
-    const videoUrl = parsed.stream || "";
-    const subtitle = parsed.vtt || "";
+          // 请求 stream API
+          const streamHeaders = {
+            ...HEADERS,
+            "Referer": `${SURRIT_BASE}/e/${videoId}?src=javxx`,
+            "X-Requested-With": "XMLHttpRequest",
+          };
+          const streamRes = await Widget.http.get(
+            `${SURRIT_BASE}/stream?src=javxx&token=${token}`,
+            { headers: streamHeaders }
+          );
+
+          // 解析响应（兼容字符串和对象格式）
+          let streamJson = streamRes.data;
+          if (typeof streamJson === "string") {
+            streamJson = JSON.parse(streamJson);
+          }
+
+          const media = streamJson && streamJson.result && streamJson.result.media;
+          if (media) {
+            // 用 AES_KEY 解密 media → 得到 JSON { stream: "...", vtt: "..." }
+            const decryptedMedia = xorDecode(media, AES_KEY);
+            const parsed = JSON.parse(decryptedMedia);
+            videoUrl = parsed.stream || "";
+          }
+        }
+      } catch (e) {}
+    }
+
+    // === 策略2：从 WatchPlayer d-tag 的 code 属性构造 embed URL ===
+    if (!videoUrl) {
+      try {
+        const playerCode = $('d-tag[src="WatchPlayer"]').attr("code") || "";
+        if (playerCode) {
+          // 尝试用 videoId（code 通常是 MIDA-614-Uncensored-Leaked 格式）
+          // embed URL 的 videoId 是简短哈希，不能直接从 code 推导
+          // 回退：从 HTML 中正则提取 surrit.store URL
+        }
+      } catch (e) {}
+    }
+
+    // === 策略3：正则从 HTML 提取 surrit embed URL ===
+    if (!videoUrl) {
+      const embedMatch = html.match(/https?:\/\/surrit\.store\/e\/[a-zA-Z0-9_]+/);
+      if (embedMatch) {
+        const embedUrl = embedMatch[0];
+        const vidMatch = embedUrl.match(/\/e\/([a-zA-Z0-9_]+)/);
+        if (vidMatch && vidMatch[1]) {
+          const videoId = vidMatch[1];
+          const token = encodeURIComponent(xorEncrypt(videoId, AES_KEY));
+          try {
+            const streamHeaders = {
+              ...HEADERS,
+              "Referer": `${SURRIT_BASE}/e/${videoId}?src=javxx`,
+              "X-Requested-With": "XMLHttpRequest",
+            };
+            const streamRes = await Widget.http.get(
+              `${SURRIT_BASE}/stream?src=javxx&token=${token}`,
+              { headers: streamHeaders }
+            );
+            let streamJson = streamRes.data;
+            if (typeof streamJson === "string") {
+              streamJson = JSON.parse(streamJson);
+            }
+            const media = streamJson && streamJson.result && streamJson.result.media;
+            if (media) {
+              const decryptedMedia = xorDecode(media, AES_KEY);
+              const parsed = JSON.parse(decryptedMedia);
+              videoUrl = parsed.stream || "";
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    // 确保 videoUrl 是有效 URL
+    if (videoUrl && !videoUrl.startsWith("http")) videoUrl = "";
 
     const genreItems = [];
     $("a[href*='/genres/'], a[href*='/tag/'], .tags a").each((_, el) => {
@@ -238,7 +328,8 @@ async function loadDetail(link) {
         title: rTitle,
         posterPath: rCover,
         backdropPath: rCover,
-        link: rDetailLink
+        link: rDetailLink,
+        mediaType: "tvshow",
       });
     });
 
@@ -249,11 +340,11 @@ async function loadDetail(link) {
       posterPath: cover,
       backdropPath: cover,
       videoUrl: videoUrl || "",
-      playerType: "system",
+      playerType: videoUrl.includes(".m3u8") ? "system" : "system",
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
-      mediaType: "movie",
+      mediaType: "tvshow",
       customHeaders: {
         "User-Agent": HEADERS["User-Agent"],
         "Origin": "https://surrit.store",
