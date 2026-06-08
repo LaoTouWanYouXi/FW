@@ -162,8 +162,8 @@
       "description": "JavMove 视频聚合模块，支持最新影片、即将上映、搜索",
       "requiredVersion": "0.0.1",
       "version": "1.0.0",
-      "author": "Forward",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/h/javmove.js"
+      "author": "LaoTou",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javmove.js"
     },
     {
       "id": "forward.javxx",
@@ -171,8 +171,8 @@
       "description": "JavXX 视频聚合模块，支持热门影片、最新影片、最近更新、有码影片、无码影片、搜索",
       "requiredVersion": "0.0.1",
       "version": "1.0.0",
-      "author": "Forward",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/h/javxx.js"
+      "author": "LaoTou",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javxx.js"
     },
     {
       "id": "forward.pppporn",
@@ -180,8 +180,8 @@
       "description": "PppPorn 视频聚合模块，支持分类浏览、搜索",
       "requiredVersion": "0.0.1",
       "version": "1.0.0",
-      "author": "Forward",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/h/ppp.js"
+      "author": "LaoTou",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/ppp.js"
     },
     {
       "id": "forward.rouvideo",
@@ -189,8 +189,8 @@
       "description": "肉视频聚合模块，支持国产AV、探花、自拍流出、OnlyFans、日本、搜索",
       "requiredVersion": "0.0.1",
       "version": "1.0.0",
-      "author": "Forward",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/h/rou.js"
+      "author": "LaoTou",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/rou.js"
     }
   ]
 }
