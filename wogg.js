@@ -230,15 +230,18 @@ function parseQuarkShareUrl(shareUrl) {
  * @returns {object} { stoken, shareInfo }
  */
 async function getQuarkShareToken(cookies, shareId, sharePwd) {
-  const headers = buildQuarkGetHeaders(cookies);
+  // token 端点要求 POST + form-urlencoded（不接受 JSON 也不接受 GET）
+  const headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Origin": QUARK_PAN_ORIGIN,
+    "Referer": QUARK_PAN_ORIGIN + "/",
+    "Cookie": cookies
+  };
 
-  const res = await Widget.http.get(`${QUARK_DRIVE_BASE}/share/sharepage/token`, {
-    headers,
-    params: {
-      share_id: shareId,
-      share_pwd: sharePwd || ""
-    }
-  });
+  const formBody = `share_id=${encodeURIComponent(shareId)}&share_pwd=${encodeURIComponent(sharePwd || "")}`;
+
+  const res = await Widget.http.post(`${QUARK_DRIVE_BASE}/share/sharepage/token`, formBody, { headers });
 
   if (!res.data || res.data.status !== 200) {
     const msg = res.data?.message || res.data?.error?.reason || "获取分享令牌失败";
