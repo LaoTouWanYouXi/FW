@@ -584,6 +584,97 @@ function safeText(str) {
   return (str || "").replace(/\s+/g, " ").trim();
 }
 
+// ==================== 演员头像缓存 & 异步补全 ====================
+
+const PEOPLE_AVATAR_CACHE = {};
+
+async function resolvePeopleAvatar(peopleHref) {
+  if (!peopleHref) return "";
+  if (Object.prototype.hasOwnProperty.call(PEOPLE_AVATAR_CACHE, peopleHref)) {
+    return PEOPLE_AVATAR_CACHE[peopleHref];
+  }
+  try {
+    const { data } = await Widget.http.get(peopleHref, { headers: getHeaders(BASE_URL + "/") });
+    if (!data) { PEOPLE_AVATAR_CACHE[peopleHref] = ""; return ""; }
+    const $ = Widget.html.load(data);
+    const $img = $("div.model-avatar img, div.avatar img, img.model-img, .model-img-container img").first();
+    const src = $img.attr("data-src") || $img.attr("src") || "";
+    const avatar = src.startsWith("//") ? "https:" + src
+      : src.startsWith("http") ? src
+      : "";
+    PEOPLE_AVATAR_CACHE[peopleHref] = avatar;
+    return avatar;
+  } catch (e) {
+    PEOPLE_AVATAR_CACHE[peopleHref] = "";
+    return "";
+  }
+}
+
+// ==================== 剧照截图 ====================
+
+const CDN_SCREENSHOT_BASE = "https://assets-cdn.jable.tv/contents/videos_screenshots";
+
+function buildScreenshotPaths(videoNumId, count) {
+  if (!videoNumId) return [];
+  const n = count || 20;
+  const prefix = Math.floor(parseInt(videoNumId, 10) / 1000) * 1000;
+  const paths = [];
+  for (let i = 1; i <= n; i++) {
+    paths.push(`${CDN_SCREENSHOT_BASE}/${prefix}/${videoNumId}/${videoNumId}_${i}.jpg`);
+  }
+  return paths;
+}
+
+function extractPageScreenshots($, html, videoNumId) {
+  const screenshots = [];
+  const seen = new Set();
+
+  const pushUrl = (raw) => {
+    if (!raw) return;
+    const clean = raw.startsWith("//") ? "https:" + raw
+      : raw.startsWith("http") ? raw
+      : "";
+    if (!clean || seen.has(clean)) return;
+    seen.add(clean);
+    screenshots.push(clean);
+  };
+
+  // 1) 页面截图容器中的 <img>
+  const selectors = [
+    "a[data-fancybox='gallery'] img",
+    "a[data-fancybox] img",
+    ".screenshots img",
+    ".video-screenshots img",
+    "[class*='screenshot'] img",
+    ".detail-screenshots img",
+  ];
+  for (const sel of selectors) {
+    $(sel).each((_, el) => {
+      const $img = $(el);
+      const src = $img.attr("data-src") || $img.attr("src") || "";
+      if (src && (src.includes("videos_screenshots") || src.includes("jable"))) pushUrl(src);
+    });
+    if (screenshots.length > 0) break;
+  }
+
+  // 2) 从页面 JS / HTML 中正则提取截图 URL
+  if (screenshots.length === 0) {
+    const raw = String(html || "").replace(/\\\//g, "/");
+    const pattern = /https?:\/\/[^"'\s<>]+?videos_screenshots[^"'\s<>]+?\.jpg/gi;
+    const matches = raw.match(pattern);
+    if (matches) {
+      for (const url of matches) pushUrl(url);
+    }
+  }
+
+  // 3) 回退：基于 CDN URL 模式构建
+  if (screenshots.length === 0) {
+    return buildScreenshotPaths(videoNumId);
+  }
+
+  return screenshots;
+}
+
 
 function parseListHtml(html) {
   if (!html || !html.trim()) return [];
@@ -679,6 +770,7 @@ async function loadDetail(link) {
     const html = data || "";
     const $ = Widget.html.load(html);
 
+    // === 1. 视频地址提取 ===
     let videoUrl = "";
     const hlsMatch = html.match(/var\s+hlsUrl\s*=\s*['"]([^'"]+)['"]/);
     videoUrl = hlsMatch?.[1] || "";
@@ -695,6 +787,7 @@ async function loadDetail(link) {
     if (!videoUrl) throw new Error("无法获取视频地址");
     if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
 
+    // === 2. 基础信息（纯 DOM，无网络） ===
     const title = safeText($("section.video-info h4").first().text())
       || safeText($('meta[property="og:title"]').attr("content"))
       || "未知标题";
@@ -705,6 +798,7 @@ async function loadDetail(link) {
 
     const description = safeText($("h5.desc").first().text()) || undefined;
 
+    // === 3. 预告片 & videoNumId ===
     let trailers = undefined;
     const posterUrl = cover;
     const pageCtxMatch = html.match(/videoId\s*:\s*['"](\d+)['"]/);
@@ -712,12 +806,12 @@ async function loadDetail(link) {
     const videoNumId = pageCtxMatch?.[1] || ogImgMatch?.[1] || "";
     if (videoNumId) {
       const prefix = Math.floor(parseInt(videoNumId, 10) / 1000) * 1000;
-      const cdnBase = "https://assets-cdn.jable.tv/contents/videos_screenshots";
-      const previewMp4 = `${cdnBase}/${prefix}/${videoNumId}/${videoNumId}_preview.mp4`;
-      const previewCover = posterUrl || `${cdnBase}/${prefix}/${videoNumId}/preview.jpg`;
+      const previewMp4 = `${CDN_SCREENSHOT_BASE}/${prefix}/${videoNumId}/${videoNumId}_preview.mp4`;
+      const previewCover = posterUrl || `${CDN_SCREENSHOT_BASE}/${prefix}/${videoNumId}/preview.jpg`;
       trailers = [{ coverUrl: previewCover, url: previewMp4 }];
     }
 
+    // === 4. 分类 & 标签（纯 DOM） ===
     const genreItems = [];
     $("h5.tags a.cat").each((_, el) => {
       const $a = $(el);
@@ -739,8 +833,10 @@ async function loadDetail(link) {
 
     const allGenres = [...genreItems, ...tagItems];
 
+    // === 5. 演员信息（纯 DOM + 记录缺失头像） ===
     const peoples = [];
     const seenPeoples = new Set();
+    const missingAvatarItems = [];
     $("div.models a.model").each((_, el) => {
       const $a = $(el);
       const modelHref = normalizeUrl($a.attr("href") || "");
@@ -760,6 +856,9 @@ async function loadDetail(link) {
       const avatar = avatarSrc.startsWith("//") ? "https:" + avatarSrc
         : avatarSrc.startsWith("http") ? avatarSrc
         : "";
+      if (!avatar && modelHref) {
+        missingAvatarItems.push({ index: peoples.length, href: modelHref });
+      }
       peoples.push({
         id,
         title: name,
@@ -767,6 +866,7 @@ async function loadDetail(link) {
       });
     });
 
+    // === 6. 推荐视频（纯 DOM） ===
     const relatedItems = [];
     const seenRelated = new Set([link]);
     $("div.video-img-box").each((_, el) => {
@@ -810,6 +910,23 @@ async function loadDetail(link) {
       });
     });
 
+    // === 7. 剧照截图（DOM 提取 + CDN 回退） ===
+    const backdropPaths = extractPageScreenshots($, html, videoNumId);
+
+    // === 8. 并行网络请求：缺失头像补全 ===
+    if (missingAvatarItems.length > 0) {
+      const avatarResults = await Promise.all(
+        missingAvatarItems.map(item => resolvePeopleAvatar(item.href))
+      );
+      for (let i = 0; i < missingAvatarItems.length; i++) {
+        const { index } = missingAvatarItems[i];
+        if (avatarResults[i]) {
+          peoples[index].avatar = avatarResults[i];
+        }
+      }
+    }
+
+    // === 9. 组装结果 ===
     return {
       id: link,
       type: "url",
@@ -820,6 +937,7 @@ async function loadDetail(link) {
       trailers,
       backdropPath: cover || undefined,
       posterPath: cover || undefined,
+      backdropPaths: backdropPaths.length > 0 ? backdropPaths : undefined,
       genreItems: allGenres.length > 0 ? allGenres : undefined,
       peoples: peoples.length > 0 ? peoples : undefined,
       relatedItems,
