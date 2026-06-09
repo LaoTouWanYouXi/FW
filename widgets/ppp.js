@@ -391,11 +391,10 @@ function parseVideoList(html) {
       id: href,
       type: "url",
       title,
-      posterPath: cover,
-      backdropPath: cover,
+      backdropPath: cover || undefined,
       durationText: duration || undefined,
       link: resolveUrl(href),
-      mediaType: "tv",
+      mediaType: "movie",
     });
   });
 
@@ -516,10 +515,9 @@ async function loadDetail(link) {
         id: rHref,
         type: "url",
         title: rTitle,
-        posterPath: rCover,
-        backdropPath: rCover,
+        backdropPath: rCover || undefined,
         link: rDetailLink,
-        mediaType: "tv",
+        mediaType: "movie",
       });
     });
 
@@ -527,14 +525,14 @@ async function loadDetail(link) {
       id: link,
       type: "url",
       title,
-      posterPath: cover,
-      backdropPath: cover,
+      backdropPath: cover || undefined,
+      posterPath: cover || undefined,
       videoUrl: videoUrl || "",
       playerType: "system",
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
-      mediaType: "tv",
+      mediaType: "movie",
       customHeaders: HEADERS
     };
   } catch (e) {
