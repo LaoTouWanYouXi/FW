@@ -3,9 +3,9 @@ WidgetMetadata = {
     title: "MissAV_ovo",
     author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|CC|EL|Eric|墨白",
     description: "MissAV 视频聚合模块，支持其他模块聚合missav资源、支持高清海报、封面图、预告片、相似推荐、演员信息及头像",
-    version: "4.0.0",
+    version: "3.1",
     requiredVersion: "0.0.1",
-    site: "https://missav.ai",
+    site: "https://missav.ws",
     modules: [
         {
             title: "最近更新",
@@ -84,9 +84,21 @@ WidgetMetadata = {
             type: "video",
             params: [
                 { name: "page", title: "页码", type: "page" },
-                { name: "endpoint", title: "endpoint", type: "enumeration", value: "dm814/cn/uncensored-leak", enumOptions: [
-                    { title: "无码流出", value: "dm814/cn/uncensored-leak" },
-                    { title: "东京热", value: "dm42/cn/tokyohot" }
+                { name: "endpoint", title: "endpoint", type: "enumeration", value: "dm816/cn/uncensored-leak", enumOptions: [
+                    { title: "无码流出", value: "dm816/cn/uncensored-leak" },
+                    { title: "FC2", value: "dm473/cn/fc2" },
+                    { title: "HEYZO", value: "dm1977446/cn/heyzo" },
+                    { title: "东京热", value: "dm42/cn/tokyohot" },
+                    { title: "一本道", value: "dm4364834/cn/1pondo" },
+                    { title: "Caribbeancom", value: "dm7414012/cn/caribbeancom" },
+                    { title: "Caribbeancompr", value: "dm83900/cn/caribbeancompr" },
+                    { title: "10musume", value: "dm6341956/cn/10musume" },
+                    { title: "pacopacomama", value: "dm2479243/cn/pacopacomama" },
+                    { title: "Gachinco", value: "dm150/cn/gachinco" },
+                    { title: "XXX-AV", value: "dm42/cn/xxxav" },
+                    { title: "人妻斬", value: "dm37/cn/marriedslash" },
+                    { title: "顽皮4610", value: "dm33/cn/naughty4610" },
+                    { title: "顽皮0930", value: "dm37/cn/naughty0930" }
                 ] },
                 { name: "sort_by", title: "排序", type: "enumeration", value: "released_at", enumOptions: [
                     { title: "发行日期", value: "released_at" },
@@ -326,13 +338,13 @@ WidgetMetadata = {
     }
 };
 
-const BASE_URL = "https://missav.ai";
-const AVATAR_BASE_URL = "https://missav.ai";
+const BASE_URL = "https://missav.ws";
+const AVATAR_BASE_URL = "https://missav.ws";
 const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Referer": "https://missav.ai/",
+    "Referer": "https://missav.ws/",
     "Connection": "keep-alive"
 };
 
@@ -375,8 +387,20 @@ function getCategoryOptions() {
         { title: "PRESTIGE PREMIUM", value: "dm999/cn/maan", group: "amateur" },
         { title: "S-CUTE", value: "dm38/cn/scute", group: "amateur" },
         { title: "ARA", value: "dm34/cn/ara", group: "amateur" },
-        { title: "无码流出", value: "dm814/cn/uncensored-leak", group: "uncensored" },
+        { title: "无码流出", value: "dm816/cn/uncensored-leak", group: "uncensored" },
+        { title: "FC2", value: "dm473/cn/fc2", group: "uncensored" },
+        { title: "HEYZO", value: "dm1977446/cn/heyzo", group: "uncensored" },
         { title: "东京热", value: "dm42/cn/tokyohot", group: "uncensored" },
+        { title: "一本道", value: "dm4364834/cn/1pondo", group: "uncensored" },
+        { title: "Caribbeancom", value: "dm7414012/cn/caribbeancom", group: "uncensored" },
+        { title: "Caribbeancompr", value: "dm83900/cn/caribbeancompr", group: "uncensored" },
+        { title: "10musume", value: "dm6341956/cn/10musume", group: "uncensored" },
+        { title: "pacopacomama", value: "dm2479243/cn/pacopacomama", group: "uncensored" },
+        { title: "Gachinco", value: "dm150/cn/gachinco", group: "uncensored" },
+        { title: "XXX-AV", value: "dm42/cn/xxxav", group: "uncensored" },
+        { title: "人妻斬", value: "dm37/cn/marriedslash", group: "uncensored" },
+        { title: "顽皮4610", value: "dm33/cn/naughty4610", group: "uncensored" },
+        { title: "顽皮0930", value: "dm37/cn/naughty0930", group: "uncensored" },
         { title: "麻豆传媒", value: "dm63/cn/madou", group: "asia" },
         { title: "TWAV", value: "dm31/cn/twav", group: "asia" },
         { title: "Furuke", value: "dm15/cn/furuke", group: "asia" },
@@ -744,19 +768,244 @@ function collectStringValues(value, depth = 0, out = [], visited = new Set()) {
 }
 
 function extractCodeFromParams(params = {}) {
+    // 第一层：优先扫描最可能含有番号的字段。
+    // 这些字段包括常见视频源字段，以及可能的 Emby / 本地媒体字段。
     const priorityCandidates = [
-        params.code, params.videoId, params.number, params.fileName, params.filename, params.title
+        params.code,
+        params.videoId,
+        params.number,
+
+        // Emby / 本地媒体可能字段
+        params.fileName,
+        params.filename,
+        params.file_name,
+        params.name,
+        params.path,
+        params.filePath,
+        params.file_path,
+        params.mediaPath,
+        params.media_path,
+        params.itemPath,
+        params.item_path,
+        params.localPath,
+        params.local_path,
+        params.originalFilename,
+        params.originalFileName,
+
+        // 常规媒体字段
+        params.id,
+        params.title,
+        params.seriesName,
+        params.originalTitle,
+        params.originalName,
+        params.episodeName,
+        params.description,
+        params.genreTitle,
+        params.overview,
+        params.link,
+        params.url,
+        params.videoUrl,
+        params.playUrl,
+        params.streamUrl
     ];
+
+    // 常见嵌套对象字段
+    if (params.tmdbInfo) {
+        priorityCandidates.push(
+            params.tmdbInfo.title,
+            params.tmdbInfo.name,
+            params.tmdbInfo.originalTitle,
+            params.tmdbInfo.originalName,
+            params.tmdbInfo.overview
+        );
+    }
+
+    if (params.info) {
+        priorityCandidates.push(
+            params.info.title,
+            params.info.name,
+            params.info.originalTitle,
+            params.info.originalName,
+            params.info.overview
+        );
+    }
+
+    if (params.mediaSource) {
+        priorityCandidates.push(
+            params.mediaSource.name,
+            params.mediaSource.fileName,
+            params.mediaSource.filename,
+            params.mediaSource.path,
+            params.mediaSource.url,
+            params.mediaSource.streamUrl
+        );
+    }
+
+    if (Array.isArray(params.mediaSources)) {
+        for (const source of params.mediaSources) {
+            priorityCandidates.push(
+                source?.name,
+                source?.fileName,
+                source?.filename,
+                source?.path,
+                source?.url,
+                source?.streamUrl
+            );
+        }
+    }
+
+    // 第一轮：优先字段允许纯数字番号。
     for (const value of priorityCandidates) {
         const code = extractSearchCode(value, { allowPureNumeric: true });
         if (code) return code;
     }
+
+    // 第二轮：递归扫描所有字符串。
+    // 这里不允许纯数字，避免误把日期 / ID / 时间戳识别为番号。
     const allStrings = collectStringValues(params);
+
     for (const value of allStrings) {
         const code = extractSearchCode(value, { allowPureNumeric: false });
         if (code) return code;
     }
+
     return "";
+}
+
+// ==================== MissAV 多类型搜索（移植自 Missav_stream_v1.2） ====================
+// 一个番号可能在 MissAV 上有：有码 / 中文 / 无码 三种详情页。
+// 以下函数负责精确匹配所有类型的详情页并提取 surrit UUID。
+
+function extractCodeFromMissAVLink(link) {
+    const href = getText(link);
+    if (!href) return "";
+    const lastPart = href.split("?")[0].split("#")[0].split("/").filter(Boolean).pop() || "";
+    const cleaned = decodeURIComponent(lastPart)
+        .replace(/-uncensored-leak/gi, "")
+        .replace(/-chinese-subtitle/gi, "")
+        .replace(/-/g, " ");
+    return extractSearchCode(cleaned, { allowPureNumeric: true });
+}
+
+function classifyMissavLink(link) {
+    const href = getText(link).toLowerCase();
+    if (href.includes("-uncensored-leak")) return "破解无码";
+    if (href.includes("-chinese-subtitle")) return "中文";
+    return "有码";
+}
+
+function parseSearchResults(html, targetCode) {
+    if (!html || html.includes("Just a moment")) {
+        console.warn("[MissAV] 可能被 Cloudflare 拦截，搜索页返回异常");
+        return [];
+    }
+
+    const $ = Widget.html.load(html);
+    const results = [];
+    const seen = new Set();
+
+    $("div.group").each((i, el) => {
+        const $el = $(el);
+        const $link = $el.find("a.text-secondary").first();
+        const href = $link.attr("href");
+        if (!href) return;
+
+        const link = resolveUrl(href);
+        if (!link || seen.has(link)) return;
+        seen.add(link);
+
+        const title = $link.text().trim();
+        const codeFromLink = extractCodeFromMissAVLink(link);
+        const codeFromTitle = extractSearchCode(title, { allowPureNumeric: true });
+        const code = codeFromLink || codeFromTitle;
+
+        results.push({ title, link, code });
+    });
+
+    // fallback：如果 div.group 结构失效，遍历所有链接
+    if (results.length === 0) {
+        $("a[href]").each((i, el) => {
+            const $el = $(el);
+            const href = $el.attr("href");
+            if (!href) return;
+            const link = resolveUrl(href);
+            if (!link.includes("/cn/")) return;
+            if (seen.has(link)) return;
+            const codeFromLink = extractCodeFromMissAVLink(link);
+            if (!codeFromLink) return;
+            seen.add(link);
+            results.push({ title: $el.text().trim(), link, code: codeFromLink });
+        });
+    }
+
+    const targetLoose = normalizeCode(targetCode);
+    const exact = results.filter(item => normalizeCode(item.code) === targetLoose);
+    if (exact.length > 0) return exact;
+    return results;
+}
+
+function normalizeCode(value) {
+    return getText(value).toUpperCase().replace(/[\s_\-]+/g, "");
+}
+
+async function findAllMissAVDetailPages(code) {
+    const searchKeys = [code, code.replace(/-/g, "")].filter(Boolean);
+    const targetLoose = normalizeCode(code);
+    const seen = new Set();
+    const pages = [];
+
+    for (const key of [...new Set(searchKeys)]) {
+        const url = `${BASE_URL}/cn/search/${encodeURIComponent(key)}`;
+        try {
+            const res = await Widget.http.get(url, { headers: HEADERS });
+            const html = res.data || "";
+            const results = parseSearchResults(html, code);
+            if (!results.length) continue;
+
+            const exactMatches = results.filter(item => normalizeCode(item.code) === targetLoose);
+            for (const item of exactMatches) {
+                if (seen.has(item.link)) continue;
+                seen.add(item.link);
+                pages.push({ link: item.link, code, type: classifyMissavLink(item.link) });
+            }
+        } catch (e) {
+            console.warn(`[MissAV] 搜索失败：${key}`, e?.message || e);
+        }
+    }
+
+    return pages;
+}
+
+async function buildMissavStreamItems(uuid, code, detailLink, type = "有码") {
+    const items = [];
+    const headers = {
+        "Referer": "https://missav.ws/",
+        "User-Agent": HEADERS["User-Agent"],
+        "Origin": "https://missav.ws"
+    };
+
+    try {
+        const resp = await Widget.http.get(`https://surrit.com/${uuid}/1080p/video.m3u8`, {
+            headers, timeout: 1500
+        });
+        if (resp && resp.statusCode === 200 && String(resp.data || "").includes("#EXTM3U")) {
+            items.push({
+                name: `MissAV ${type} 1080P`,
+                description: `番号：${code}\n类型：${type}\n来源：MissAV\n清晰度：1080P`,
+                url: `https://surrit.com/${uuid}/1080p/video.m3u8`,
+                customHeaders: headers
+            });
+        }
+    } catch (e) {}
+
+    items.push({
+        name: `MissAV ${type} 720P`,
+        description: `番号：${code}\n类型：${type}\n来源：MissAV\n清晰度：720P`,
+        url: `https://surrit.com/${uuid}/720p/video.m3u8`,
+        customHeaders: headers
+    });
+
+    return items;
 }
 
 
@@ -931,6 +1180,8 @@ const MGSTAGE_COVER_RULES = {
 
 const IMAGE_AVAILABLE_CACHE = {};
 const IMAGE_CHECK_TIMEOUT_MS = 900;
+const IMAGE_SIZE_CHECK_TIMEOUT_MS = 300; // size 检测只需确认是否是占位图(小图返回快)，用短超时
+const MIN_IMAGE_CONTENT_LENGTH = 5000; // bytes，低于此值视为占位图
 
 function compactUniqueUrls(urls) {
     const seen = new Set();
@@ -993,6 +1244,28 @@ function buildDmmCoverCandidatesFromParts(parts) {
     };
 }
 
+async function filterImagesBySize(urls, concurrency = 5) {
+    const results = [];
+    for (let i = 0; i < urls.length; i += concurrency) {
+        const batch = urls.slice(i, i + concurrency);
+        const checks = await Promise.all(batch.map(url => isImageUrlAvailable(url, true)));
+        for (let j = 0; j < batch.length; j++) {
+            if (checks[j]) results.push(batch[j]);
+        }
+    }
+    return results;
+}
+
+// 剧照需要 size 验证的系列（MGStage 图常返回占位图）
+function shouldVerifyGallerySize(prefix) {
+    return ["ABF", "ABP", "ABW"].includes(prefix);
+}
+
+// 列表/封面图需要 size 验证的系列（DMM 系占位图），验证失败回退到 MissAV 原始图
+function shouldVerifyCoverSize(prefix) {
+    return ["DLDSS", "SDNT", "SABA", "DTT"].includes(prefix);
+}
+
 function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
     const parts = parseJavCodeParts(videoIdOrTitle);
     if (!parts) return { posterCandidates: [], backdropCandidates: [] };
@@ -1023,12 +1296,13 @@ function buildCoverUrlsFromVideoId(videoIdOrTitle) {
     };
 }
 
-async function isImageUrlAvailable(url) {
+async function isImageUrlAvailable(url, checkSize = false) {
     const clean = String(url || "").trim();
     if (!clean) return false;
 
-    if (Object.prototype.hasOwnProperty.call(IMAGE_AVAILABLE_CACHE, clean)) {
-        return IMAGE_AVAILABLE_CACHE[clean];
+    const cacheKey = checkSize ? `size:${clean}` : clean;
+    if (Object.prototype.hasOwnProperty.call(IMAGE_AVAILABLE_CACHE, cacheKey)) {
+        return IMAGE_AVAILABLE_CACHE[cacheKey];
     }
 
     try {
@@ -1036,16 +1310,33 @@ async function isImageUrlAvailable(url) {
             headers: {
                 "User-Agent": HEADERS["User-Agent"],
                 "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-                "Referer": "https://missav.ai/"
+                "Referer": "https://missav.ws/"
             },
-            timeout: IMAGE_CHECK_TIMEOUT_MS
+            timeout: checkSize ? IMAGE_SIZE_CHECK_TIMEOUT_MS : IMAGE_CHECK_TIMEOUT_MS
         });
 
-        const ok = !!resp && resp.statusCode >= 200 && resp.statusCode < 400;
-        IMAGE_AVAILABLE_CACHE[clean] = ok;
-        return ok;
+        if (!resp || resp.statusCode >= 400) {
+            IMAGE_AVAILABLE_CACHE[cacheKey] = false;
+            return false;
+        }
+
+        // content-length 检查：太小说明是占位图（如 DMM 的 ps.jpg 占位图）
+        if (checkSize && resp.headers) {
+            const contentLength = parseInt(
+                resp.headers["content-length"] ||
+                resp.headers["Content-Length"] ||
+                resp.headers["content_length"] || "0", 10
+            );
+            if (contentLength > 0 && contentLength < MIN_IMAGE_CONTENT_LENGTH) {
+                IMAGE_AVAILABLE_CACHE[cacheKey] = false;
+                return false;
+            }
+        }
+
+        IMAGE_AVAILABLE_CACHE[cacheKey] = true;
+        return true;
     } catch (e) {
-        IMAGE_AVAILABLE_CACHE[clean] = false;
+        IMAGE_AVAILABLE_CACHE[cacheKey] = false;
         return false;
     }
 }
@@ -1106,7 +1397,16 @@ async function parseVideoList(html, options = {}) {
 
             // Forward 实测：列表封面和详情页主图最依赖列表 item.coverUrl。
             // 因此 coverUrl 放高清竖图；detailPoster 放经过验证的高清横图。
-            const posterCover = hdCovers.posterUrl || fourhoiCover || imgSrc;
+            var posterCover = hdCovers.posterUrl || fourhoiCover || imgSrc;
+
+            // DLDSS 番号的 DMM 竖图可能是占位图，做 size 检测，失败回退 MissAV 原始图
+            if (hdCovers.posterUrl && videoId) {
+                const parts = parseJavCodeParts(videoId);
+                if (parts && shouldVerifyCoverSize(parts.prefix)) {
+                    const valid = await isImageUrlAvailable(hdCovers.posterUrl, true);
+                    if (!valid) posterCover = fourhoiCover || imgSrc;
+                }
+            }
 
             // 特殊映射的固定背景图（跳过 HEAD 检测）
             var backdropCover = hdCovers.backdropUrlOverride || "";
@@ -1770,13 +2070,60 @@ async function loadResource(params = {}) {
         const code = extractCodeFromParams(params);
         if (!code) return [];
 
+        // 查找所有精确匹配的 MissAV 详情页（有码/中文/无码）
+        const detailPages = await findAllMissAVDetailPages(code);
+        if (!detailPages.length) {
+            // fallback：使用旧版单页查找逻辑
+            return loadResourceLegacy(params, code);
+        }
+
+        // 按中文 → 无码 → 有码排序
+        const typePriority = { "中文": 0, "破解无码": 1, "有码": 2 };
+        detailPages.sort((a, b) => (typePriority[a.type] ?? 99) - (typePriority[b.type] ?? 99));
+
+        const allStreams = [];
+        const seenUuids = new Set();
+
+        for (const page of detailPages) {
+            const cacheKey = `${code.toUpperCase()}_${page.type}`;
+            let uuid = VIDEO_URL_CACHE[cacheKey];
+
+            if (!uuid) {
+                try {
+                    const res = await Widget.http.get(page.link, { headers: HEADERS });
+                    const html = res.data || "";
+                    if (html.includes("Just a moment")) continue;
+
+                    // 提取 surrit UUID
+                    uuid = extractSurritUuidFromDetailHtml(html);
+                    if (uuid) VIDEO_URL_CACHE[cacheKey] = uuid;
+                } catch (e) {
+                    continue;
+                }
+            }
+
+            if (!uuid || seenUuids.has(uuid)) continue;
+            seenUuids.add(uuid);
+
+            const streams = await buildMissavStreamItems(uuid, code, page.link, page.type);
+            allStreams.push(...streams);
+        }
+
+        return allStreams;
+    } catch (e) {
+        return [];
+    }
+}
+
+// 旧版单页查找逻辑（作为 findAllMissAVDetailPages 的回退）
+async function loadResourceLegacy(params, code) {
+    try {
         let cached = VIDEO_URL_CACHE[code.toUpperCase()];
         let videoUrl = cached ? cached.url : null;
         let currentReferer = cached?.referer || `${BASE_URL}/cn/search/${encodeURIComponent(code.trim())}`;
         let detailHtml = "";
 
         if (!videoUrl) {
-            // ===== 增加重试机制：最多尝试 2 次 =====
             const MAX_RETRIES = 2;
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
                 let searchUrl = `${BASE_URL}/cn/search/${encodeURIComponent(code.trim())}`;
@@ -1785,7 +2132,6 @@ async function loadResource(params = {}) {
                 detailHtml = html;
                 let detailLink = searchUrl;
 
-                // 如果被 Cloudflare 拦截，直接重试
                 if (html.includes("Just a moment") || html.includes("cf-browser-verification")) {
                     if (attempt < MAX_RETRIES) continue;
                     return [];
@@ -1812,7 +2158,6 @@ async function loadResource(params = {}) {
                         }
                     });
 
-                    // 精确匹配失败时，尝试用番号搜索文本匹配
                     if (!firstHref) {
                         const targetUpper = code.toUpperCase();
                         $("div.group").each((i, el) => {
@@ -1840,19 +2185,12 @@ async function loadResource(params = {}) {
                 }
 
                 currentReferer = detailLink;
-
                 videoUrl = extractVideoUrlFromHtml(detailHtml);
 
-                // 如果在详情页 HTML 中没找到视频地址，重试
                 if (!videoUrl) {
-                    if (attempt < MAX_RETRIES) {
-                        // 清除可能被 Cloudflare 影响的缓存
-                        continue;
-                    }
+                    if (attempt < MAX_RETRIES) continue;
                     break;
                 }
-
-                // 找到视频地址了，跳出重试循环
                 break;
             }
 
@@ -1862,53 +2200,49 @@ async function loadResource(params = {}) {
         }
 
         if (videoUrl) {
-            // 提取 surrit UUID，直接返回清晰度分轨（绕过 master playlist）
             const uuidMatch = videoUrl.match(/surrit\.com\/([a-f0-9\-]{36})\//i);
             const uuid = uuidMatch ? uuidMatch[1] : "";
 
             if (uuid) {
-                const resources = [];
-                const trackName = code.toUpperCase();
-                const baseUrl = `https://surrit.com/${uuid}`;
-
-                // 检测 1080p 是否可用
-                try {
-                    const resp = await Widget.http.get(`${baseUrl}/1080p/video.m3u8`, {
-                        headers: { "Referer": currentReferer, "User-Agent": HEADERS["User-Agent"], "Origin": "https://missav.ai" },
-                        timeout: 1500
-                    });
-                    if (resp && resp.statusCode === 200 && String(resp.data || "").includes("#EXTM3U")) {
-                        resources.push({
-                            name: trackName + " - 1080P",
-                            description: "番号：" + trackName + " | MissAV 1080P",
-                            url: `${baseUrl}/1080p/video.m3u8`,
-                            customHeaders: { "Referer": currentReferer, "User-Agent": HEADERS["User-Agent"], "Origin": "https://missav.ai" }
-                        });
-                    }
-                } catch (e) {}
-
-                resources.push({
-                    name: trackName + " - 720P",
-                    description: "番号：" + trackName + " | MissAV 720P",
-                    url: `${baseUrl}/720p/video.m3u8`,
-                    customHeaders: { "Referer": currentReferer, "User-Agent": HEADERS["User-Agent"], "Origin": "https://missav.ai" }
-                });
-
-                return resources;
+                return await buildMissavStreamItems(uuid, code, currentReferer, "有码");
             }
 
-            // fallback：无 UUID 时直接用原始地址
             return [{
                 name: code.toUpperCase(),
                 description: "MissAV 播放源",
                 url: videoUrl,
-                customHeaders: { "Referer": currentReferer, "User-Agent": HEADERS["User-Agent"], "Origin": "https://missav.ai" }
+                customHeaders: { "Referer": currentReferer, "User-Agent": HEADERS["User-Agent"], "Origin": "https://missav.ws" }
             }];
         }
         return [];
     } catch (e) {
         return [];
     }
+}
+
+function extractSurritUuidFromDetailHtml(html) {
+    if (!html) return "";
+    const $ = Widget.html.load(html);
+    let uuid = "";
+
+    $("script").each((i, el) => {
+        const scriptContent = $(el).html() || "";
+        if (scriptContent.includes("surrit.com") && scriptContent.includes(".m3u8")) {
+            const uuidFromUrl = scriptContent.match(/https:\/\/surrit\.com\/([a-f0-9\-]{36})\/[^"'\s]*\.m3u8/i);
+            if (uuidFromUrl && uuidFromUrl[1]) { uuid = uuidFromUrl[1]; return false; }
+        }
+        if (!uuid && scriptContent.includes("eval(function")) {
+            const uuidMatches = scriptContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi);
+            if (uuidMatches && uuidMatches.length > 0) { uuid = uuidMatches[0]; return false; }
+        }
+    });
+
+    if (!uuid) {
+        const match = html.match(/surrit\.com\/([a-f0-9\-]{36})\//i);
+        if (match && match[1]) uuid = match[1];
+    }
+
+    return uuid;
 }
 
 // ==================== 播放地址增强（合并自 3.8 方案）：直接提取 + Packer 解混淆 ====================
@@ -2022,6 +2356,7 @@ async function loadDetail(link) {
         const $ = Widget.html.load(html);
 
         const title = $('meta[property="og:title"]').attr('content') || $('h1').text().trim();
+        const code = extractSearchCode(title) || extractVideoId(link);
 
         const actors = [];
         const peoples = [];
@@ -2085,6 +2420,44 @@ async function loadDetail(link) {
             }
         });
 
+        // 简介提取：优先取 DOM 中的描述，去重后回退到 meta description
+        let officialDescription = $("div.mb-1.text-secondary.break-all").first().text().trim();
+        if (!officialDescription) {
+            officialDescription = $('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || "";
+        }
+        if (officialDescription) {
+            const jpTitle = (() => {
+                let jt = "";
+                $(".text-secondary").each((_, el) => {
+                    const label = $(el).find("span").first().text().trim();
+                    if (label === "标题:" || label === "標題:") { jt = $(el).find(".font-medium").text().trim(); return false; }
+                });
+                return jt;
+            })();
+
+            const normalizeStr = (s) => String(s || "").replace(/[\s_\-\|，,.:：、。！!?机制？()（）「」『』……+~～\x22']/g, "").toUpperCase();
+            const dNorm = normalizeStr(officialDescription);
+            const tNorm = normalizeStr(title);
+            const jNorm = normalizeStr(jpTitle);
+
+            // 如果简介和标题/日文标题完全一样，说明不是真简介，清空
+            if ((tNorm && dNorm === tNorm) || (jNorm && dNorm === jNorm)) {
+                officialDescription = "";
+            } else {
+                // 去掉简介里混入的标题/番号等重复文本
+                if (title) officialDescription = officialDescription.split(title).join("");
+                if (jpTitle) officialDescription = officialDescription.split(jpTitle).join("");
+                if (code) {
+                    officialDescription = officialDescription.split(code).join("").split(code.toUpperCase()).join("").split(code.toLowerCase()).join("");
+                    const codeNoHyphen = code.replace(/-/g, "");
+                    if (codeNoHyphen) officialDescription = officialDescription.split(codeNoHyphen).join("").split(codeNoHyphen.toUpperCase()).join("").split(codeNoHyphen.toLowerCase()).join("");
+                }
+                officialDescription = officialDescription
+                    .replace(/在\s*MissAV\.ai\s*上免费高清在线观看|在\s*MissAV\s*上免费观看|免费高清在线观看|在线观看|免费观看|高清|视频|观看/gi, "")
+                    .replace(/^[\s,.:：、，。\-–—_]+/g, "").trim();
+            }
+        }
+
         // 多路并行：JavTrailers 剧照 + 预告片 + 回退推荐 + 演员头像
         const dvdId = extractDvdIdFromMissAv($, link);
         const trailerTitle = title || $('meta[property="og:title"]').attr('content') || "";
@@ -2117,6 +2490,17 @@ async function loadDetail(link) {
             avatarPromise
         ]);
 
+        const detailCode = extractVideoId(link);
+
+        // ABF/ABP/ABW 的 MGStage 剧照常返回占位图（content-length 很小），
+        // 用 HEAD + size 检查过滤掉。
+        if (jtMeta.backdropPaths?.length) {
+            const parts = parseJavCodeParts(dvdId || detailCode);
+            if (parts && shouldVerifyGallerySize(parts.prefix)) {
+                jtMeta.backdropPaths = await filterImagesBySize(jtMeta.backdropPaths);
+            }
+        }
+
         // DOM 推荐有内容就用 DOM 的，否则用回退的
         const finalRelatedItems = relatedItems.length > 0 ? relatedItems : fallbackItems;
         const trailerCoverUrl = buildTrailerCoverUrl(trailerTitle) || buildMissavListCoverUrl(link);
@@ -2142,17 +2526,28 @@ async function loadDetail(link) {
 
         // 高清封面兜底：主图仍优先依赖列表 item.coverUrl；
         // 这里用于直接进入详情页等场景，不再依赖 0oo0 私人服务。
-        const detailCode = extractVideoId(link);
         const detailHdCovers = buildCoverUrlsFromVideoId(detailCode);
 
         if (finalVideoUrl) {
-            const detailPosterCover = detailHdCovers.posterUrl || resolveUrl(missavCover) || "";
-            const detailBackdropCover = detailHdCovers.backdropUrlOverride || detailHdCovers.backdropUrl || resolveUrl(missavCover) || detailPosterCover;
+            var detailPosterCover = detailHdCovers.posterUrl || resolveUrl(missavCover) || "";
+            var detailBackdropCover = detailHdCovers.backdropUrlOverride || detailHdCovers.backdropUrl || resolveUrl(missavCover) || detailPosterCover;
+
+            // DLDSS 番号的 DMM 封面图可能是占位图，并行做 size 检测后回退
+            const detailParts = parseJavCodeParts(detailCode);
+            if (detailParts && shouldVerifyCoverSize(detailParts.prefix)) {
+                const [posterOk, backdropOk] = await Promise.all([
+                    detailHdCovers.posterUrl ? isImageUrlAvailable(detailHdCovers.posterUrl, true) : false,
+                    (detailHdCovers.backdropUrl && !detailHdCovers.backdropUrlOverride) ? isImageUrlAvailable(detailHdCovers.backdropUrl, true) : false
+                ]);
+                if (!posterOk) detailPosterCover = resolveUrl(missavCover) || "";
+                if (!backdropOk) detailBackdropCover = resolveUrl(missavCover) || detailPosterCover;
+            }
 
             const item = {
                 id: link,
                 type: "video",
                 title,
+                description: officialDescription,
                 videoUrl: finalVideoUrl,
                 actors,
                 trailers,
@@ -2179,9 +2574,9 @@ async function loadDetail(link) {
                 relatedItems: finalRelatedItems,
 
                 customHeaders: {
-                    "Referer": "https://missav.ai/",
+                    "Referer": "https://missav.ws/",
                     "User-Agent": HEADERS["User-Agent"],
-                    "Origin": "https://missav.ai"
+                    "Origin": "https://missav.ws"
                 }
             };
 
