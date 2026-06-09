@@ -199,16 +199,29 @@ function buildQuarkGetHeaders(cookies) {
 
 /**
  * 安全的夸克 API POST 请求
- * Widget.http 在非2xx时会抛异常，此函数捕获后提取业务错误信息
+ * Widget.http 在非2xx时会抛异常，此函数尝试从异常中提取响应数据
+ * 若能提取到有效 JSON 响应，则返回该数据（让调用方检查 data.status）
+ * 否则抛出包含接口名的错误
  */
 async function quarkPost(url, body, headers) {
   try {
     const res = await Widget.http.post(url, JSON.stringify(body), { headers });
     return res.data;
   } catch (e) {
-    // Widget.http 抛异常时，从错误信息中提取详情
+    // 尝试从异常中提取响应数据（Widget.http 非2xx时可能将响应挂在 error 上）
+    const errData = (e && e.response && e.response.data) || (e && e.data);
+    if (errData && typeof errData === "object" && errData.status !== undefined) {
+      return errData;
+    }
+    // 尝试从错误消息中解析 JSON 响应体
     const msg = e.message || String(e);
-    // 提取接口名便于调试
+    try {
+      const jsonMatch = msg.match(/\{[\s\S]*"status"[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed && parsed.status !== undefined) return parsed;
+      }
+    } catch (parseErr) {}
     const apiName = url.replace(/.*\/clouddrive\//, "").replace(/\?.*/, "");
     throw new Error(`[${apiName}] ${msg}`);
   }
@@ -217,6 +230,7 @@ async function quarkPost(url, body, headers) {
 /**
  * 安全的夸克 API GET 请求（手动拼 URL 查询参数）
  * Widget.http 的 params 选项可能不可靠，手动拼接更稳妥
+ * 非2xx时尝试从异常中提取响应数据
  */
 async function quarkGet(url, params, headers) {
   // 手动拼接查询参数
@@ -230,7 +244,19 @@ async function quarkGet(url, params, headers) {
     const res = await Widget.http.get(fullUrl, { headers });
     return res.data;
   } catch (e) {
+    // 尝试从异常中提取响应数据
+    const errData = (e && e.response && e.response.data) || (e && e.data);
+    if (errData && typeof errData === "object" && errData.status !== undefined) {
+      return errData;
+    }
     const msg = e.message || String(e);
+    try {
+      const jsonMatch = msg.match(/\{[\s\S]*"status"[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed && parsed.status !== undefined) return parsed;
+      }
+    } catch (parseErr) {}
     const apiName = url.replace(/.*\/clouddrive\//, "").replace(/\?.*/, "");
     throw new Error(`[${apiName}] ${msg}`);
   }
@@ -282,7 +308,13 @@ async function getQuarkShareToken(cookies, shareId, sharePwd) {
   const data = await quarkPost(`${QUARK_SHARE_BASE}/share/sharepage/token?fr=pc`, body, headers);
 
   if (!data || data.status !== 200) {
-    throw new Error((data && data.message) || "获取分享令牌失败");
+    const errMsg = (data && data.message) || "获取分享令牌失败";
+    const errCode = data && data.code;
+    // 41006 = 分享不存在/已过期
+    if (errCode === 41006 || data.status === 404) {
+      throw new Error(`分享链接已失效或不存在: ${errMsg}`);
+    }
+    throw new Error(errMsg);
   }
 
   return {
