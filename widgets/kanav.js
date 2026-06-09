@@ -158,6 +158,7 @@ function parseVideoList(html) {
       durationText,
       releaseDate: pubDate,
       description: remark,
+      mediaType: "tv",
     });
   });
   return items;

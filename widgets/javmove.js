@@ -1,13 +1,12 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.2",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   description: "JavMove 视频聚合模块，支持最新影片、即将上映、搜索",
   author: "Forward",
   site: "https://javmove.com",
   detailCacheDuration: 300,
-  columns: 2,
   modules: [
     {
       id: "latest",
@@ -78,7 +77,7 @@ function parseVideoList(html) {
       backdropPath: cover,
       releaseDate: pubdate ? pubdate.split("T")[0] : "",
       link: detailLink,
-      mediaType: "tvshow",
+      mediaType: "tv",
     });
   });
 
@@ -202,7 +201,7 @@ async function loadDetail(link) {
         posterPath: rCover,
         backdropPath: rCover,
         link: rDetailLink,
-        mediaType: "tvshow",
+        mediaType: "tv",
       });
     });
 
@@ -217,7 +216,7 @@ async function loadDetail(link) {
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link,
-      mediaType: "tvshow",
+      mediaType: "tv",
       customHeaders: HEADERS
     };
   } catch (e) {

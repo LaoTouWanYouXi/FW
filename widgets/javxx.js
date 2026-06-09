@@ -7,7 +7,6 @@ WidgetMetadata = {
   author: "Forward",
   site: "https://javxx.com",
   detailCacheDuration: 300,
-  columns: 2,
   modules: [
     {
       id: "hot",
@@ -170,7 +169,7 @@ function parseVideoList(html) {
       backdropPath: cover,
       durationText: duration,
       link: resolveUrl(href),
-      mediaType: "tvshow",
+      mediaType: "tv",
     });
   });
 
@@ -252,23 +251,41 @@ async function loadDetail(link) {
       } catch (e) {}
     }
 
-    // === 策略2：从 WatchPlayer d-tag 的 code 属性构造 embed URL ===
+    // === 策略2：直接从 HTML 中提取 .m3u8 / .mp4 视频地址 ===
     if (!videoUrl) {
-      try {
-        const playerCode = $('d-tag[src="WatchPlayer"]').attr("code") || "";
-        if (playerCode) {
-          // 尝试用 videoId（code 通常是 MIDA-614-Uncensored-Leaked 格式）
-          // embed URL 的 videoId 是简短哈希，不能直接从 code 推导
-          // 回退：从 HTML 中正则提取 surrit.store URL
+      $("script").each((_, el) => {
+        const content = $(el).html() || "";
+        if (content.includes(".m3u8")) {
+          const match = content.match(/https?:\/\/[\w./-]+\.m3u8[\w./-]*/);
+          if (match) { videoUrl = match[0]; return false; }
         }
-      } catch (e) {}
+      });
+    }
+    if (!videoUrl) {
+      $("script").each((_, el) => {
+        const content = $(el).html() || "";
+        if (content.includes(".mp4")) {
+          const match = content.match(/https?:\/\/[\w./-]+\.mp4[\w./-]*/);
+          if (match) { videoUrl = match[0]; return false; }
+        }
+      });
     }
 
-    // === 策略3：正则从 HTML 提取 surrit embed URL ===
+    // === 策略3：从 video/source 标签提取 ===
     if (!videoUrl) {
-      const embedMatch = html.match(/https?:\/\/surrit\.store\/e\/[a-zA-Z0-9_]+/);
+      videoUrl = $('video source[type="video/mp4"]').attr("src")
+        || $("video source").attr("src")
+        || $("video").attr("src")
+        || "";
+    }
+    if (videoUrl && videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+
+    // === 策略4：正则从 HTML 提取 surrit embed URL（surrit.store 可能已变更） ===
+    if (!videoUrl) {
+      const embedMatch = html.match(/https?:\/\/surrit\.\w+\/e\/[a-zA-Z0-9_]+/);
       if (embedMatch) {
         const embedUrl = embedMatch[0];
+        const surritBase = embedUrl.replace(/\/e\/.*/, "");
         const vidMatch = embedUrl.match(/\/e\/([a-zA-Z0-9_]+)/);
         if (vidMatch && vidMatch[1]) {
           const videoId = vidMatch[1];
@@ -276,11 +293,11 @@ async function loadDetail(link) {
           try {
             const streamHeaders = {
               ...HEADERS,
-              "Referer": `${SURRIT_BASE}/e/${videoId}?src=javxx`,
+              "Referer": `${surritBase}/e/${videoId}?src=javxx`,
               "X-Requested-With": "XMLHttpRequest",
             };
             const streamRes = await Widget.http.get(
-              `${SURRIT_BASE}/stream?src=javxx&token=${token}`,
+              `${surritBase}/stream?src=javxx&token=${token}`,
               { headers: streamHeaders }
             );
             let streamJson = streamRes.data;
@@ -295,6 +312,20 @@ async function loadDetail(link) {
             }
           } catch (e) {}
         }
+      }
+    }
+
+    // === 策略5：尝试访问 embed 页面直接提取视频 ===
+    if (!videoUrl) {
+      const embedMatch = html.match(/https?:\/\/[a-z0-9.-]+\/e\/[a-zA-Z0-9_]+/);
+      if (embedMatch) {
+        try {
+          const embedRes = await Widget.http.get(embedMatch[0], { headers: HEADERS });
+          const embedHtml = embedRes.data || "";
+          // 从 embed 页面提取 m3u8/mp4
+          const m = embedHtml.match(/https?:\/\/[\w./-]+?\.(m3u8|mp4)[\w./-]*/);
+          if (m) videoUrl = m[0];
+        } catch (e) {}
       }
     }
 
@@ -330,7 +361,7 @@ async function loadDetail(link) {
         posterPath: rCover,
         backdropPath: rCover,
         link: rDetailLink,
-        mediaType: "tvshow",
+        mediaType: "tv",
       });
     });
 
@@ -345,12 +376,10 @@ async function loadDetail(link) {
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
-      mediaType: "tvshow",
-      customHeaders: {
-        "User-Agent": HEADERS["User-Agent"],
-        "Origin": "https://surrit.store",
-        "Referer": "https://surrit.store/"
-      }
+      mediaType: "tv",
+      customHeaders: videoUrl && videoUrl.includes("surrit")
+        ? { "User-Agent": HEADERS["User-Agent"], "Origin": "https://surrit.store", "Referer": "https://surrit.store/" }
+        : { "User-Agent": HEADERS["User-Agent"], "Referer": "https://javxx.com/" }
     };
   } catch (e) {
     return null;
