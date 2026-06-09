@@ -1,12 +1,13 @@
 WidgetMetadata = {
   id: "forward.pppporn",
   title: "PppPorn",
-  version: "1.0.1",
+  version: "1.0.2",
   requiredVersion: "0.0.1",
   description: "PppPorn 视频聚合模块，支持分类浏览、搜索",
   author: "Forward",
   site: "https://ppp.porn",
   detailCacheDuration: 300,
+  columns: 2,
   modules: [
     {
       id: "china",

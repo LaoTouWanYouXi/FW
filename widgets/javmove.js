@@ -1,12 +1,13 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.1",
+  version: "1.0.2",
   requiredVersion: "0.0.1",
   description: "JavMove 视频聚合模块，支持最新影片、即将上映、搜索",
   author: "Forward",
   site: "https://javmove.com",
   detailCacheDuration: 300,
+  columns: 2,
   modules: [
     {
       id: "latest",

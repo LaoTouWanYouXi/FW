@@ -1,12 +1,13 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.0.1",
+  version: "1.0.2",
   requiredVersion: "0.0.1",
   description: "JavXX 视频聚合模块，支持热门影片、最新影片、最近更新、有码影片、无码影片、搜索",
   author: "Forward",
   site: "https://javxx.com",
   detailCacheDuration: 300,
+  columns: 2,
   modules: [
     {
       id: "hot",

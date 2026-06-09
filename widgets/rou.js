@@ -1,12 +1,13 @@
 WidgetMetadata = {
   id: "forward.rouvideo",
   title: "肉视频",
-  version: "1.0.1",
+  version: "1.0.2",
   requiredVersion: "0.0.1",
   description: "肉视频聚合模块，支持国产AV、探花、自拍流出、OnlyFans、日本、搜索",
   author: "Forward",
   site: "https://rou.video",
   detailCacheDuration: 300,
+  columns: 2,
   modules: [
     {
       id: "cnAv",
