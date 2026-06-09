@@ -374,7 +374,7 @@ async function loadDetail(link) {
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
-      mediaType: "movie",
+      mediaType: "tv",
       customHeaders: videoUrl && videoUrl.includes("surrit")
         ? { "User-Agent": HEADERS["User-Agent"], "Origin": "https://surrit.store", "Referer": "https://surrit.store/" }
         : { "User-Agent": HEADERS["User-Agent"], "Referer": "https://javxx.com/" }

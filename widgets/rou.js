@@ -280,7 +280,7 @@ async function loadDetail(link) {
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
-      mediaType: "movie",
+      mediaType: "tv",
       customHeaders: HEADERS
     };
   } catch (e) {

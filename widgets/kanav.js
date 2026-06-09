@@ -153,12 +153,12 @@ function parseVideoList(html) {
       id: href,
       type: "url",
       title,
-      posterPath,
+      backdropPath: posterPath || undefined,
       link: detailUrl,
       durationText,
       releaseDate: pubDate,
       description: remark,
-      mediaType: "tv",
+      mediaType: "movie",
     });
   });
   return items;
@@ -273,6 +273,7 @@ async function loadDetail(link) {
       link,
       videoUrl,
       playerType: "system",
+      mediaType: "tv",
       customHeaders: {
         "User-Agent": UA,
         "Referer": CDN_REFERER,
@@ -290,6 +291,7 @@ async function loadDetail(link) {
       link,
       videoUrl: queryVideo,
       playerType: "system",
+      mediaType: "tv",
       customHeaders: {
         "User-Agent": UA,
         "Referer": CDN_REFERER,
@@ -328,6 +330,7 @@ async function loadDetail(link) {
     link,
     videoUrl,
     playerType: "system",
+    mediaType: "tv",
     customHeaders: {
       "User-Agent": UA,
       "Referer": CDN_REFERER,
