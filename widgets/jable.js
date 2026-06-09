@@ -9,14 +9,12 @@ WidgetMetadata = {
   detailCacheDuration: 300,
   modules: [
     {
-      id: "loadResource",
       title: "聚合",
       functionName: "loadResource",
       type: "stream",
       params: [],
     },
     {
-      id: "search",
       title: "搜索项",
       functionName: "search",
       cacheDuration: 3600,
@@ -39,7 +37,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "latest",
       title: "最近更新",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -49,7 +46,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "newRelease",
       title: "全新上市",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -59,7 +55,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "theme",
       title: "影片主题",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -98,7 +93,6 @@ WidgetMetadata = {
       ]
     },
     {
-      id: "hot",
       title: "热门影片",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -119,7 +113,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "models",
       title: "女优",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -208,7 +201,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "outfit",
       title: "衣着",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -252,7 +244,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "plot",
       title: "剧情",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -295,7 +286,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "location",
       title: "地点",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -335,7 +325,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "body",
       title: "身材",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -375,7 +364,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "role",
       title: "角色",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -418,7 +406,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "acts",
       title: "交合",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -456,7 +443,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "play",
       title: "玩法",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -502,7 +488,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "misc",
       title: "杂项",
       functionName: "loadPage",
       cacheDuration: 3600,
