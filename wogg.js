@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.wogg",
   title: "玩偶哥哥",
-  version: "3.0.1",
+  version: "3.1.0",
   requiredVersion: "0.0.1",
   description: "玩偶哥哥视频模块，支持分类浏览、搜索、夸克网盘转存与播放",
   author: "wogg",
@@ -129,10 +129,10 @@ WidgetMetadata = {
 
 const BASE_URL = "https://www.wogg.net";
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/604.1.14 (KHTML, like Gecko)";
-// 分享相关 API 使用 pan.quark.cn（drive-h.quark.cn 的分享接口已返回 404）
-const QUARK_SHARE_BASE = "https://pan.quark.cn/1/clouddrive";
-// 文件操作 API 使用 drive-h.quark.cn（播放/下载/删除等）
-const QUARK_DRIVE_BASE = "https://drive-h.quark.cn/1/clouddrive";
+// 分享/文件 API 使用 drive-pc.quark.cn（2025+ 标准接口）
+const QUARK_SHARE_BASE = "https://drive-pc.quark.cn/1/clouddrive";
+const QUARK_DRIVE_BASE = "https://drive-pc.quark.cn/1/clouddrive";
+const QUARK_SAVE_BASE = "https://drive.quark.cn/1/clouddrive";
 const QUARK_PAN_ORIGIN = "https://pan.quark.cn";
 
 // ==================== 工具函数 ====================
@@ -219,23 +219,45 @@ function saveQuarkCookies(cookies) {
 function buildQuarkHeaders(cookies) {
   return {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
     "Content-Type": "application/json",
+    "Accept-Language": "zh-CN,zh;q=0.9",
     "Origin": QUARK_PAN_ORIGIN,
     "Referer": QUARK_PAN_ORIGIN + "/",
     "Cookie": cookies
   };
 }
 
-/**
- * 构建夸克 GET 请求头（无 Content-Type）
- */
 function buildQuarkGetHeaders(cookies) {
   return {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9",
     "Origin": QUARK_PAN_ORIGIN,
     "Referer": QUARK_PAN_ORIGIN + "/",
     "Cookie": cookies
   };
+}
+
+function quarkQuery(extra) {
+  const base = {
+    pr: "ucpro",
+    fr: "pc",
+    uc_param_str: "",
+    __dt: String(Math.floor(Math.random() * 9000 + 100)),
+    __t: String(Date.now())
+  };
+  if (!extra) return base;
+  return Object.assign(base, extra);
+}
+
+function appendQuery(url, params) {
+  const query = Object.keys(params || {})
+    .filter((k) => params[k] !== undefined && params[k] !== null && params[k] !== "")
+    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`)
+    .join("&");
+  if (!query) return url;
+  return url.includes("?") ? `${url}&${query}` : `${url}?${query}`;
 }
 
 /**
@@ -244,9 +266,10 @@ function buildQuarkGetHeaders(cookies) {
  * 若能提取到有效 JSON 响应，则返回该数据（让调用方检查 data.status）
  * 否则抛出包含接口名的错误
  */
-async function quarkPost(url, body, headers) {
+async function quarkPost(url, body, headers, queryParams) {
+  const fullUrl = appendQuery(url, quarkQuery(queryParams));
   try {
-    const res = await Widget.http.post(url, JSON.stringify(body), { headers });
+    const res = await Widget.http.post(fullUrl, JSON.stringify(body), { headers });
     return res.data;
   } catch (e) {
     // 尝试从异常中提取响应数据（Widget.http 非2xx时可能将响应挂在 error 上）
@@ -274,10 +297,10 @@ async function quarkPost(url, body, headers) {
  * 非2xx时尝试从异常中提取响应数据
  */
 async function quarkGet(url, params, headers) {
-  // 手动拼接查询参数
-  const query = Object.keys(params || {})
-    .filter(k => params[k] !== undefined && params[k] !== null)
-    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`)
+  const merged = quarkQuery(params || {});
+  const query = Object.keys(merged)
+    .filter(k => merged[k] !== undefined && merged[k] !== null)
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(merged[k])}`)
     .join("&");
   const fullUrl = query ? `${url}?${query}` : url;
 
@@ -338,21 +361,19 @@ function parseQuarkShareUrl(shareUrl) {
  * @param {string} sharePwd - 分享密码（可为空）
  * @returns {object} { stoken, shareInfo }
  */
-async function getQuarkShareToken(cookies, shareId, sharePwd) {
+async function getQuarkShareToken(cookies, pwdId, passcode) {
   const headers = buildQuarkHeaders(cookies);
-
   const body = {
-    share_id: shareId,
-    share_pwd: sharePwd || ""
+    pwd_id: pwdId,
+    passcode: passcode || ""
   };
 
-  const data = await quarkPost(`${QUARK_SHARE_BASE}/share/sharepage/token?fr=pc`, body, headers);
+  const data = await quarkPost(`${QUARK_SHARE_BASE}/share/sharepage/token`, body, headers);
 
-  if (!data || data.status !== 200) {
+  if (!data || data.status !== 200 || !data.data || !data.data.stoken) {
     const errMsg = (data && data.message) || "获取分享令牌失败";
     const errCode = data && data.code;
-    // 41006 = 分享不存在/已过期
-    if (errCode === 41006 || data.status === 404) {
+    if (errCode === 41006 || (data && data.status === 404)) {
       throw new Error(`分享链接已失效或不存在: ${errMsg}`);
     }
     throw new Error(errMsg);
@@ -364,28 +385,18 @@ async function getQuarkShareToken(cookies, shareId, sharePwd) {
   };
 }
 
-/**
- * 获取夸克分享文件列表
- * @param {string} cookies - 夸克网盘 cookies
- * @param {string} shareId - 分享 ID
- * @param {string} stoken - 分享令牌
- * @param {string} fid - 目录 fid，根目录传空
- * @param {number} offset - 偏移量
- * @param {number} limit - 每页条数
- * @returns {object} 文件列表
- */
-async function getQuarkShareFileList(cookies, shareId, stoken, fid, offset, limit, sharePwd) {
+async function getQuarkShareFileList(cookies, pwdId, stoken, pdirFid, page, size, passcode) {
   const headers = buildQuarkGetHeaders(cookies);
 
   const data = await quarkGet(`${QUARK_SHARE_BASE}/share/sharepage/detail`, {
-    fr: "pc",
-    share_id: shareId,
+    pwd_id: pwdId,
     stoken: stoken,
-    pwd: sharePwd || "",
-    fid: fid || "",
-    offset: offset || 0,
-    limit: limit || 200,
-    sort: "file_name:asc"
+    pdir_fid: pdirFid || "0",
+    force: "0",
+    _page: String(page || 1),
+    _size: String(size || 200),
+    _fetch_total: "1",
+    _sort: "file_type:asc,updated_at:desc"
   }, headers);
 
   if (!data || data.status !== 200) {
@@ -393,6 +404,44 @@ async function getQuarkShareFileList(cookies, shareId, stoken, fid, offset, limi
   }
 
   return data.data;
+}
+
+function extractSavedFidFromTask(taskData) {
+  const saveAs = taskData && taskData.data && taskData.data.save_as;
+  if (!saveAs) return null;
+  if (saveAs.save_as_top_fids && saveAs.save_as_top_fids.length > 0) {
+    return saveAs.save_as_top_fids[0];
+  }
+  if (saveAs.fid_list && saveAs.fid_list.length > 0) {
+    return saveAs.fid_list[0];
+  }
+  if (saveAs.fid) return saveAs.fid;
+  return null;
+}
+
+async function pollQuarkTask(cookies, taskId, maxRetry) {
+  const headers = buildQuarkGetHeaders(cookies);
+  const retries = maxRetry || 30;
+
+  for (let i = 0; i < retries; i++) {
+    const data = await quarkGet(`${QUARK_DRIVE_BASE}/task`, {
+      task_id: taskId,
+      retry_index: String(i)
+    }, headers);
+
+    if (data && data.status === 200 && data.data) {
+      if (data.data.status === 2) return data;
+      if (data.data.status === 3) {
+        throw new Error((data.data && data.data.task_title) || "转存任务失败");
+      }
+    }
+
+    if (data && data.code && data.code !== 0 && data.message && data.message !== "ok") {
+      throw new Error(data.message);
+    }
+  }
+
+  throw new Error("转存任务超时，请稍后重试");
 }
 
 /**
@@ -419,7 +468,11 @@ async function ensureQuarkTempFolder(cookies) {
   // 查找根目录下是否已有 wogg_temp
   try {
     const listData = await quarkGet(`${QUARK_DRIVE_BASE}/file/sort`, {
-      fr: "pc", fid: "0", offset: 0, limit: 200, sort: "file_name:asc"
+      pdir_fid: "0",
+      _page: "1",
+      _size: "200",
+      _fetch_total: "0",
+      _sort: "file_type:asc,updated_at:desc"
     }, getHeaders);
 
     if (listData && listData.status === 200 && listData.data && listData.data.list) {
@@ -448,63 +501,64 @@ async function ensureQuarkTempFolder(cookies) {
  * @param {string} toDirId - 目标文件夹 fid
  * @returns {object} 转存结果
  */
-async function transferQuarkFile(cookies, shareId, stoken, fileId, toDirId) {
+async function transferQuarkFile(cookies, pwdId, stoken, fileId, shareFidToken, toDirId) {
   const headers = buildQuarkHeaders(cookies);
-
   const targetDir = toDirId || await ensureQuarkTempFolder(cookies);
 
+  if (!shareFidToken) {
+    throw new Error("缺少 share_fid_token，无法转存");
+  }
+
   const body = {
-    share_id: shareId,
+    fid_list: [fileId],
+    fid_token_list: [shareFidToken],
+    to_pdir_fid: targetDir,
+    pwd_id: pwdId,
     stoken: stoken,
-    file_list: [fileId],
-    to_dir_id: targetDir
+    pdir_fid: "0",
+    scene: "link"
   };
 
-  const data = await quarkPost(`${QUARK_SHARE_BASE}/share/sharepage/save?fr=pc`, body, headers);
+  const data = await quarkPost(`${QUARK_SAVE_BASE}/share/sharepage/save`, body, headers);
 
-  if (!data || data.status !== 200) {
+  if (!data || data.status !== 200 || !data.data || !data.data.task_id) {
     throw new Error((data && data.message) || (data && data.error && data.error.reason) || "转存失败");
   }
 
-  // 记录转存时间用于自动清理
+  const taskResult = await pollQuarkTask(cookies, data.data.task_id);
+  const savedFid = extractSavedFidFromTask(taskResult) || fileId;
+
   const transferKey = `wogg_transfer_${fileId}`;
   Widget.storage.set(transferKey, JSON.stringify({
-    fileId: fileId,
+    fileId: savedFid,
     toDirId: targetDir,
     timestamp: Date.now(),
-    shareId: shareId
+    shareId: pwdId
   }));
-
-  const savedList = (data.data && data.data.save_as_list) || [];
-  const savedFid = savedList.length > 0 ? savedList[0].fid : fileId;
 
   return { toDirId: targetDir, fileId: savedFid };
 }
 
-/**
- * 获取夸克网盘文件的播放链接
- */
 async function getQuarkPlayUrl(cookies, fid) {
   const headers = buildQuarkHeaders(cookies);
 
-  // 优先使用 play 接口
-  try {
-    const playData = await quarkPost(`${QUARK_DRIVE_BASE}/file/v2/play?fr=pc`, { fid: fid }, headers);
-    if (playData && playData.status === 200 && playData.data) {
-      return playData.data;
-    }
-  } catch (e) {
-    // play 接口失败，尝试 download 接口
-  }
+  const dlData = await quarkPost(
+    `${QUARK_DRIVE_BASE}/file/download`,
+    { fids: [fid] },
+    headers,
+    { sys: "win32", ve: "2.5.56" }
+  );
 
-  // 回退到 download 接口
-  const dlData = await quarkPost(`${QUARK_DRIVE_BASE}/file/download?fr=pc`, { fid_list: [fid] }, headers);
-
-  if (!dlData || dlData.status !== 200) {
+  if (!dlData || dlData.status !== 200 || !dlData.data) {
     throw new Error((dlData && dlData.message) || "获取播放链接失败");
   }
 
-  return dlData.data;
+  const list = Array.isArray(dlData.data) ? dlData.data : [dlData.data];
+  if (list.length === 0) {
+    throw new Error("获取播放链接失败：空响应");
+  }
+
+  return list[0];
 }
 
 /**
@@ -605,12 +659,14 @@ function addTransferIndex(storageKey) {
  * @returns {boolean}
  */
 function isQuarkVideoFile(file) {
-  // 方式1: 通过 file_type 判断
+  if (!file || file.dir === true) return false;
   if (file.file_type === "video" || file.objCategory === "video") return true;
-  // 方式2: 通过扩展名判断
   const videoExts = [".mp4", ".mkv", ".avi", ".ts", ".flv", ".mov", ".rmvb", ".wmv", ".m4v", ".3gp", ".webm"];
   const name = (file.file_name || file.name || "").toLowerCase();
-  return videoExts.some(ext => name.endsWith(ext));
+  if (videoExts.some((ext) => name.endsWith(ext))) return true;
+  // 夸克 file_type: 1 通常为视频
+  if (file.file_type === 1 && name) return true;
+  return false;
 }
 
 /**
@@ -829,15 +885,15 @@ async function resolveDetailTracks(detailLink) {
 
 async function collectQuarkFilesFromTracks(cookies, tracks) {
   const allFiles = [];
+  let lastError = "";
 
   for (const track of tracks) {
     if (track.type !== "quark" || !track.shareId) continue;
 
     try {
-      const { stoken } = await getQuarkShareToken(cookies, track.shareId, track.sharePwd || "");
-      const fileList = await getQuarkShareFileList(
-        cookies, track.shareId, stoken, "", 0, 200, track.sharePwd || ""
-      );
+      const passcode = track.sharePwd || "";
+      const { stoken } = await getQuarkShareToken(cookies, track.shareId, passcode);
+      const fileList = await getQuarkShareFileList(cookies, track.shareId, stoken, "0", 1, 200, passcode);
 
       if (!fileList || !fileList.list) continue;
 
@@ -848,14 +904,15 @@ async function collectQuarkFilesFromTracks(cookies, tracks) {
             fileName: file.file_name || "",
             fileSize: file.size || file.file_size || 0,
             shareId: track.shareId,
-            sharePwd: track.sharePwd || "",
+            sharePwd: passcode,
+            shareFidToken: file.share_fid_token || "",
             stoken,
-            parentFolder: ""
+            parentFolder: "0"
           });
         } else if (isQuarkFolder(file)) {
           try {
             const subFileList = await getQuarkShareFileList(
-              cookies, track.shareId, stoken, file.fid, 0, 200, track.sharePwd || ""
+              cookies, track.shareId, stoken, file.fid, 1, 200, passcode
             );
             if (!subFileList || !subFileList.list) continue;
 
@@ -866,18 +923,26 @@ async function collectQuarkFilesFromTracks(cookies, tracks) {
                 fileName: subFile.file_name || "",
                 fileSize: subFile.size || subFile.file_size || 0,
                 shareId: track.shareId,
-                sharePwd: track.sharePwd || "",
+                sharePwd: passcode,
+                shareFidToken: subFile.share_fid_token || "",
                 stoken,
                 parentFolder: file.fid,
                 displayName: `${file.file_name}/${subFile.file_name || ""}`
               });
             }
-          } catch (e) {}
+          } catch (e) {
+            lastError = e.message || String(e);
+          }
         }
       }
     } catch (e) {
-      console.error("[wogg] collectQuarkFilesFromTracks:", e.message || e);
+      lastError = e.message || String(e);
+      console.error("[wogg] collectQuarkFilesFromTracks:", lastError);
     }
+  }
+
+  if (allFiles.length === 0 && lastError) {
+    throw new Error(lastError);
   }
 
   return allFiles;
@@ -908,13 +973,44 @@ function filterFilesBySelection(files, selectedId) {
   return matched;
 }
 
-function cacheQuarkFiles(allFiles) {
+function cacheQuarkFiles(detailLink, allFiles) {
   if (!allFiles || allFiles.length === 0) return;
+  const normalizedLink = normalizeDetailLink(detailLink);
   Widget.storage.set("wogg_current_files", JSON.stringify(allFiles));
+  Widget.storage.set("wogg_current_link", normalizedLink);
+  if (normalizedLink) {
+    Widget.storage.set(`wogg_files_${normalizedLink}`, JSON.stringify(allFiles));
+  }
   for (const file of allFiles) {
     Widget.storage.set(`wogg_file_${file.fid}`, JSON.stringify(file));
     Widget.storage.set(`wogg_file_${file.shareId}:${file.fid}`, JSON.stringify(file));
   }
+}
+
+function readCachedFiles(detailLink) {
+  const normalizedLink = normalizeDetailLink(detailLink);
+  if (!normalizedLink) return [];
+
+  const scoped = Widget.storage.get(`wogg_files_${normalizedLink}`);
+  if (scoped) {
+    try {
+      const files = JSON.parse(scoped);
+      if (Array.isArray(files) && files.length > 0) return files;
+    } catch (e) {}
+  }
+
+  const currentLink = Widget.storage.get("wogg_current_link") || "";
+  if (currentLink === normalizedLink) {
+    const cached = Widget.storage.get("wogg_current_files");
+    if (cached) {
+      try {
+        const files = JSON.parse(cached);
+        if (Array.isArray(files) && files.length > 0) return files;
+      } catch (e) {}
+    }
+  }
+
+  return [];
 }
 
 // ==================== 模块函数 ====================
@@ -956,6 +1052,7 @@ async function loadDetail(link) {
 
     const episodeItems = [];
     let allFiles = [];
+    let fetchError = "";
 
     if (parsed.tracks && parsed.tracks.length > 0) {
       cacheDetailTracks(detailLink, parsed.tracks);
@@ -964,7 +1061,7 @@ async function loadDetail(link) {
       if (cookies) {
         try {
           allFiles = await collectQuarkFilesFromTracks(cookies, parsed.tracks);
-          cacheQuarkFiles(allFiles);
+          cacheQuarkFiles(detailLink, allFiles);
 
           for (const file of allFiles) {
             const displayName = file.displayName || file.fileName || file.fid;
@@ -979,7 +1076,8 @@ async function loadDetail(link) {
             });
           }
         } catch (e) {
-          console.error("[wogg] loadDetail 获取文件列表失败:", e.message || e);
+          fetchError = e.message || String(e);
+          console.error("[wogg] loadDetail 获取文件列表失败:", fetchError);
         }
       }
 
@@ -991,7 +1089,7 @@ async function loadDetail(link) {
             title: `${track.name}${cookies ? "（点击播放源加载）" : "（需配置夸克Cookies）"}`,
             link: detailLink,
             description: cookies
-              ? (allFiles.length === 0 ? "文件列表获取失败，请尝试播放源" : "点击播放源加载")
+              ? (fetchError || "文件列表获取失败，请尝试播放源或检查 Cookies")
               : "请先在模块设置中填写夸克网盘 Cookies",
             mediaType: "movie"
           });
@@ -1022,29 +1120,20 @@ async function loadDetail(link) {
 /**
  * 转存单个文件并获取播放链接
  */
-async function transferAndGetPlayUrl(cookies, shareId, stoken, fid, tempFolderFid) {
+async function transferAndGetPlayUrl(cookies, pwdId, stoken, fid, shareFidToken, tempFolderFid) {
   if (!tempFolderFid) tempFolderFid = await ensureQuarkTempFolder(cookies);
 
-  // 转存到自己的网盘
-  const transferResult = await transferQuarkFile(cookies, shareId, stoken, fid, tempFolderFid);
+  const transferResult = await transferQuarkFile(cookies, pwdId, stoken, fid, shareFidToken, tempFolderFid);
 
-  // 记录转存索引用于自动清理
   const storageKey = `wogg_transfer_${fid}`;
   addTransferIndex(storageKey);
 
-  // 获取播放链接
   let playUrl = "";
   try {
     const playInfo = await getQuarkPlayUrl(cookies, transferResult.fileId);
-    if (playInfo.video_preview_url) {
-      playUrl = playInfo.video_preview_url;
-    } else if (playInfo.download_url) {
-      playUrl = playInfo.download_url;
-    } else if (playInfo.list && playInfo.list.length > 0) {
-      playUrl = playInfo.list[0].download_url || "";
-    }
+    playUrl = playInfo.download_url || playInfo.video_preview_url || "";
   } catch (e) {
-    // 播放链接获取失败
+    console.error("[wogg] 获取播放链接失败:", e.message || e);
   }
 
   return { playUrl, transferResult };
@@ -1075,22 +1164,20 @@ async function loadStream(params = {}) {
     params.link || Widget.storage.get("wogg_current_link") || ""
   );
   const selectedId = params.id ? String(params.id) : "";
+  let fetchError = "";
 
   let files = [];
-  const cachedFiles = Widget.storage.get("wogg_current_files");
-  if (cachedFiles) {
-    try { files = JSON.parse(cachedFiles); } catch (e) { files = []; }
-  }
-
-  if (files.length === 0 && detailLink) {
+  if (detailLink) {
     try {
       const tracks = await resolveDetailTracks(detailLink);
       if (tracks.length > 0) {
         files = await collectQuarkFilesFromTracks(cookies, tracks);
-        cacheQuarkFiles(files);
+        cacheQuarkFiles(detailLink, files);
       }
     } catch (e) {
-      console.error("[wogg] loadStream 获取详情资源失败:", e.message || e);
+      fetchError = e.message || String(e);
+      console.error("[wogg] loadStream 获取详情资源失败:", fetchError);
+      files = readCachedFiles(detailLink);
     }
   }
 
@@ -1100,7 +1187,11 @@ async function loadStream(params = {}) {
     if (!detailLink) {
       return [{ name: "未找到详情链接", description: "请先进入视频详情页后再打开播放源", url: "" }];
     }
-    return [{ name: "未找到视频文件", description: "分享链接中未找到可播放的视频，请检查夸克 Cookies 是否有效", url: "" }];
+    return [{
+      name: "未找到视频文件",
+      description: fetchError || "分享链接中未找到可播放的视频，请检查夸克 Cookies 是否有效",
+      url: ""
+    }];
   }
 
   const resources = [];
@@ -1114,22 +1205,23 @@ async function loadStream(params = {}) {
         stoken = tokenResult.stoken;
       }
 
-      const { playUrl, transferResult } = await transferAndGetPlayUrl(
-        cookies, file.shareId, stoken, file.fid, tempFolderFid
+      const { playUrl } = await transferAndGetPlayUrl(
+        cookies,
+        file.shareId,
+        stoken,
+        file.fid,
+        file.shareFidToken || "",
+        tempFolderFid
       );
 
       const displayName = file.displayName || file.fileName || file.fid;
       const sizeText = file.fileSize > 0 ? ` | ${formatSize(file.fileSize)}` : "";
       resources.push({
         name: displayName,
-        description: playUrl ? `已转存${sizeText}` : `已转存，等待获取播放地址${sizeText}`,
+        description: playUrl ? `已转存${sizeText}` : `转存成功，但未获取到播放直链${sizeText}`,
         url: playUrl || "",
         customHeaders: playUrl ? buildQuarkHeaders(cookies) : undefined
       });
-
-      if (!playUrl && transferResult && transferResult.fileId) {
-        resources[resources.length - 1].description = `转存成功但未获取到直链，文件ID: ${transferResult.fileId}${sizeText}`;
-      }
     } catch (transferErr) {
       const displayName = file.displayName || file.fileName || file.fid;
       const sizeText = file.fileSize > 0 ? ` | ${formatSize(file.fileSize)}` : "";
