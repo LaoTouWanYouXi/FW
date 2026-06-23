@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.wogg",
   title: "玩偶哥哥",
-  version: "3.6.0",
+  version: "3.7.0",
   requiredVersion: "0.0.1",
   description: "玩偶哥哥视频模块，支持分类浏览、搜索、夸克网盘转存与播放",
   author: "wogg",
@@ -174,6 +174,48 @@ function resolveActiveDetailLink(params) {
     if (normalized) return normalized;
   }
   return "";
+}
+
+function resolveSearchKeyword(params) {
+  if (!params) return "";
+  return safeText(
+    params.seriesName || params.title || params.name || params.keyword || ""
+  );
+}
+
+async function searchWoggDetailLink(keyword) {
+  const kw = safeText(keyword);
+  if (!kw) return "";
+
+  const url = `${BASE_URL}/vodsearch/${encodeURIComponent(kw)}----------1---.html`;
+  try {
+    const res = await Widget.http.get(url, { headers: getHeaders() });
+    const html = res.data;
+    if (!html) return "";
+
+    const $ = Widget.html.load(html);
+    if ($("title").text() === "Just a moment...") return "";
+
+    const href = $(".module-search-item .video-serial").first().attr("href");
+    return href ? resolveUrl(href) : "";
+  } catch (e) {
+    console.error("[wogg] searchWoggDetailLink 失败:", e.message || e);
+    return "";
+  }
+}
+
+async function resolveActiveDetailLinkAsync(params) {
+  const direct = resolveActiveDetailLink(params);
+  if (direct) return direct;
+
+  const keyword = resolveSearchKeyword(params);
+  if (!keyword) return "";
+
+  const searched = await searchWoggDetailLink(keyword);
+  if (searched) {
+    Widget.storage.set("wogg_current_link", searched);
+  }
+  return searched;
 }
 
 function resolveActiveMediaType(params, detailLink) {
@@ -790,12 +832,13 @@ function addTransferIndex(storageKey) {
  */
 function isQuarkVideoFile(file) {
   if (!file || isQuarkFolder(file)) return false;
-  if (file.file_type === "video" || file.objCategory === "video") return true;
+  if (file.file_type === "video" || file.objCategory === "video" || file.category === "video") return true;
   const videoExts = [".mp4", ".mkv", ".avi", ".ts", ".flv", ".mov", ".rmvb", ".wmv", ".m4v", ".3gp", ".webm", ".m3u8"];
   const name = (file.file_name || file.name || "").toLowerCase();
   if (videoExts.some((ext) => name.endsWith(ext))) return true;
-  // 夸克 file_type: 1 通常为视频
-  if (file.file_type === 1 && name) return true;
+  if (String(file.format_type || "").indexOf("video") >= 0) return true;
+  // 夸克 file_type: 1 通常为视频（兼容字符串）
+  if (Number(file.file_type) === 1 && name) return true;
   return false;
 }
 
@@ -807,7 +850,7 @@ function isQuarkVideoFile(file) {
 function isQuarkFolder(file) {
   if (!file) return false;
   if (file.dir === true || file.dir === 1 || file.dir === "1") return true;
-  if (file.file_type === "folder" || file.file_type === 0 || file.file_type === "0") return true;
+  if (file.file_type === "folder" || Number(file.file_type) === 0) return true;
   const includeItems = Number(file.include_items || 0);
   if (includeItems > 0) return true;
   return false;
@@ -1027,7 +1070,20 @@ function parseDetailPage(html) {
     });
   }
 
-  // 如果模块行没找到，尝试从整个页面正文中提取夸克链接
+  // 如果模块行没找到，尝试从 onclick / 正文中提取夸克链接
+  if (tracks.length === 0) {
+    $("[onclick*='pan.quark.cn']").each((_, el) => {
+      const onclick = $(el).attr("onclick") || "";
+      const match = onclick.match(/https?:\/\/pan\.quark\.cn\/s\/[a-zA-Z0-9]+(?:\?[^'"]*)?/);
+      if (match) {
+        addQuarkTrack(tracks, seenShareIds, {
+          name: safeText($(el).closest(".module-row-one").find("h4").first().text()).replace(" - 玩偶哥哥", "") || `分享${tracks.length + 1}`,
+          panUrl: match[0]
+        });
+      }
+    });
+  }
+
   if (tracks.length === 0) {
     const bodyText = $("body").html() || "";
     // 匹配夸克分享链接，支持紧随其后的提取码
@@ -1165,9 +1221,19 @@ async function collectShareVideosRecursive(cookies, track, pdirFid, depth) {
   return results;
 }
 
+async function inspectShareRootListing(cookies, track) {
+  const passcode = track.sharePwd || "";
+  const { stoken } = await getQuarkShareToken(cookies, track.shareId, passcode);
+  const response = await getQuarkShareFileList(cookies, track.shareId, stoken, "0", 1, 50, passcode);
+  const list = response.list || [];
+  const names = list.slice(0, 8).map((item) => item.file_name || item.fid).join(" | ");
+  return { stoken, count: list.length, names: names || "空目录" };
+}
+
 async function collectQuarkFilesFromTracks(cookies, tracks) {
   const allFiles = [];
   let lastError = "";
+  const inspectNotes = [];
 
   for (const track of tracks) {
     if (track.type !== "quark" || !track.shareId) continue;
@@ -1177,6 +1243,10 @@ async function collectQuarkFilesFromTracks(cookies, tracks) {
       const { stoken } = await getQuarkShareToken(cookies, track.shareId, passcode);
       track.stoken = stoken;
       const files = await collectShareVideosRecursive(cookies, track, "0", 0);
+      if (files.length === 0) {
+        const root = await inspectShareRootListing(cookies, track);
+        inspectNotes.push(`${track.name || track.shareId}: 根目录${root.count}项 [${root.names}]`);
+      }
       allFiles.push(...files);
     } catch (e) {
       lastError = e.message || String(e);
@@ -1184,8 +1254,18 @@ async function collectQuarkFilesFromTracks(cookies, tracks) {
     }
   }
 
-  if (allFiles.length === 0 && lastError) {
-    throw new Error(lastError);
+  if (allFiles.length === 0) {
+    if (inspectNotes.length > 0) {
+      throw new Error(`分享内未发现可播放视频。${inspectNotes.join("；")}`);
+    }
+    if (lastError) {
+      throw new Error(lastError);
+    }
+    const hasQuark = tracks.some((track) => track.type === "quark" && track.shareId);
+    if (!hasQuark) {
+      throw new Error("详情页未找到夸克网盘链接（可能仅有百度/其他网盘）");
+    }
+    throw new Error("夸克分享中未找到视频文件");
   }
 
   return allFiles;
@@ -1523,7 +1603,7 @@ async function loadStream(params = {}) {
 
   const cookies = getQuarkCookies(params);
   if (!cookies) {
-    console.error("[wogg] loadResource: 未配置夸克 Cookie");
+    console.error("[wogg] loadResource: 未配置夸克 Cookie，请在模块设置中填写");
     return [];
   }
 
@@ -1531,22 +1611,28 @@ async function loadStream(params = {}) {
     await cleanExpiredTransfers(params);
   } catch (e) {}
 
-  const detailLink = resolveActiveDetailLink(params);
+  const detailLink = await resolveActiveDetailLinkAsync(params);
   let fetchError = "";
 
+  if (!detailLink) {
+    console.error("[wogg] loadResource: 未找到详情页链接，请先打开视频详情页，或确保 Forward 传入了 title/link");
+    return [];
+  }
+
   let files = [];
-  if (detailLink) {
-    try {
-      const tracks = await resolveDetailTracks(detailLink);
-      if (tracks.length > 0) {
-        files = await collectQuarkFilesFromTracks(cookies, tracks);
-        cacheQuarkFiles(detailLink, files);
-      }
-    } catch (e) {
-      fetchError = e.message || String(e);
-      console.error("[wogg] loadResource 获取详情资源失败:", fetchError);
-      files = readCachedFiles(detailLink);
+  try {
+    const tracks = await resolveDetailTracks(detailLink);
+    if (tracks.length === 0) {
+      fetchError = "详情页未解析到夸克分享链接";
+      console.error("[wogg] loadResource:", fetchError, detailLink);
+    } else {
+      files = await collectQuarkFilesFromTracks(cookies, tracks);
+      cacheQuarkFiles(detailLink, files);
     }
+  } catch (e) {
+    fetchError = e.message || String(e);
+    console.error("[wogg] loadResource 获取详情资源失败:", fetchError);
+    files = readCachedFiles(detailLink);
   }
 
   if (files.length === 0 && detailLink) {
@@ -1554,7 +1640,7 @@ async function loadStream(params = {}) {
   }
 
   if (files.length === 0) {
-    console.error("[wogg] loadResource: 未找到视频文件", fetchError || detailLink || "no-link");
+    console.error("[wogg] loadResource: 未找到视频文件 |", fetchError || detailLink);
     return [];
   }
 
