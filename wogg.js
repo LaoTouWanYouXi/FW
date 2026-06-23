@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.wogg",
   title: "玩偶哥哥",
-  version: "3.4.0",
+  version: "3.5.0",
   requiredVersion: "0.0.1",
   description: "玩偶哥哥视频模块，支持分类浏览、搜索、夸克网盘转存与播放",
   author: "wogg",
@@ -175,8 +175,13 @@ function isQuarkFileSelectionId(selectedId, files) {
   if (!raw || isDetailPageId(raw)) return false;
   if (raw.includes(":")) return true;
   if (/^[a-f0-9]{32}$/i.test(raw)) return true;
-  if (files && files.some((file) => file.shareId === raw || file.fid === raw)) return true;
   return false;
+}
+
+function isTrackSelectionId(selectedId, files) {
+  const raw = String(selectedId || "").trim();
+  if (!raw || isDetailPageId(raw)) return false;
+  return !!(files && files.some((file) => file.shareId === raw));
 }
 
 function persistDetailContext(params) {
@@ -199,11 +204,17 @@ function addQuarkTrack(tracks, seenShareIds, info) {
   });
 }
 
+function extractPasscodeFromText(text) {
+  const match = String(text || "").match(/(?:提取码|密码|口令)[：:\s]*([a-zA-Z0-9]{4,8})/);
+  return match ? match[1] : "";
+}
+
 function extractQuarkCandidatesFromRow($, $row) {
   const candidates = [];
   const name = safeText($row.find(".module-row-title h4").first().text()).replace(" - 玩偶哥哥", "").trim() ||
     safeText($row.find("h4").first().text()).replace(" - 玩偶哥哥", "").trim() ||
     "默认";
+  const rowPasscode = extractPasscodeFromText($row.text());
 
   const rawValues = [
     $row.find(".module-row-title p").first().text(),
@@ -218,7 +229,15 @@ function extractQuarkCandidatesFromRow($, $row) {
     const text = safeText(raw);
     if (!text) continue;
     const match = text.match(/https?:\/\/pan\.quark\.cn\/s\/[^\s'"<>]+/);
-    if (match) candidates.push({ name, panUrl: match[0] });
+    if (!match) continue;
+
+    let panUrl = match[0];
+    const parsed = parseQuarkShareUrl(panUrl);
+    const passcode = (parsed && parsed.sharePwd) || extractPasscodeFromText(text) || rowPasscode;
+    if (passcode && panUrl.indexOf("pwd=") < 0) {
+      panUrl += (panUrl.indexOf("?") >= 0 ? "&" : "?") + "pwd=" + passcode;
+    }
+    candidates.push({ name, panUrl });
   }
   return candidates;
 }
@@ -457,9 +476,15 @@ function extractSavedFidFromTask(taskData) {
   return null;
 }
 
+async function quarkSleep(ms) {
+  if (typeof setTimeout === "function") {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+}
+
 async function pollQuarkTask(cookies, taskId, maxRetry) {
   const headers = buildQuarkGetHeaders(cookies);
-  const retries = maxRetry || 30;
+  const retries = maxRetry || 40;
 
   for (let i = 0; i < retries; i++) {
     const data = await quarkGet(`${QUARK_DRIVE_BASE}/task`, {
@@ -477,6 +502,8 @@ async function pollQuarkTask(cookies, taskId, maxRetry) {
     if (data && data.code && data.code !== 0 && data.message && data.message !== "ok") {
       throw new Error(data.message);
     }
+
+    await quarkSleep(Number((data && data.metadata && data.metadata.tq_gap) || 500));
   }
 
   throw new Error("转存任务超时，请稍后重试");
@@ -599,6 +626,50 @@ async function getQuarkPlayUrl(cookies, fid) {
   return list[0];
 }
 
+async function ensureShareFidToken(cookies, file) {
+  if (file.shareFidToken) return file.shareFidToken;
+
+  const passcode = file.sharePwd || "";
+  let stoken = file.stoken || "";
+  if (!stoken) {
+    const tokenResult = await getQuarkShareToken(cookies, file.shareId, passcode);
+    stoken = tokenResult.stoken;
+    file.stoken = stoken;
+  }
+
+  const folders = [];
+  if (file.parentFolder) folders.push(String(file.parentFolder));
+  if (folders.indexOf("0") < 0) folders.push("0");
+
+  for (const pdirFid of folders) {
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      const response = await getQuarkShareFileList(
+        cookies, file.shareId, stoken, pdirFid, page, 200, passcode
+      );
+      const list = response.list || [];
+      const hit = list.find((item) => item.fid === file.fid);
+      if (hit && hit.share_fid_token) {
+        file.shareFidToken = hit.share_fid_token;
+        return hit.share_fid_token;
+      }
+
+      const metadata = response.metadata || {};
+      const total = Number(metadata._total || 0);
+      const count = Number(metadata._count || list.length);
+      const size = Number(metadata._size || 200);
+      if (total < 1 || total <= size || count < size) {
+        hasMore = false;
+      } else {
+        page += 1;
+      }
+    }
+  }
+
+  throw new Error("缺少 share_fid_token，无法转存");
+}
+
 /**
  * 删除夸克网盘文件
  * @param {string} cookies - 夸克网盘 cookies
@@ -699,7 +770,7 @@ function addTransferIndex(storageKey) {
 function isQuarkVideoFile(file) {
   if (!file || isQuarkFolder(file)) return false;
   if (file.file_type === "video" || file.objCategory === "video") return true;
-  const videoExts = [".mp4", ".mkv", ".avi", ".ts", ".flv", ".mov", ".rmvb", ".wmv", ".m4v", ".3gp", ".webm"];
+  const videoExts = [".mp4", ".mkv", ".avi", ".ts", ".flv", ".mov", ".rmvb", ".wmv", ".m4v", ".3gp", ".webm", ".m3u8"];
   const name = (file.file_name || file.name || "").toLowerCase();
   if (videoExts.some((ext) => name.endsWith(ext))) return true;
   // 夸克 file_type: 1 通常为视频
@@ -1099,10 +1170,23 @@ async function collectQuarkFilesFromTracks(cookies, tracks) {
   return allFiles;
 }
 
+function resolveEpisodeFromParams(params) {
+  if (!params) return 0;
+  if (params.episode !== undefined && params.episode !== null && String(params.episode) !== "") {
+    const ep = Number(params.episode);
+    if (ep > 0) return ep;
+  }
+  return parseEpisodeNumber(params.episodeName || "");
+}
+
 function filterFilesBySelection(files, selectedId) {
-  if (!selectedId || !isQuarkFileSelectionId(selectedId, files)) return files;
+  if (!selectedId) return files;
 
   const raw = String(selectedId);
+  if (!isQuarkFileSelectionId(raw, files) && !isTrackSelectionId(raw, files)) {
+    return files;
+  }
+
   const fidOnly = raw.includes(":") ? raw.split(":").pop() : raw;
 
   const matched = files.filter((file) =>
@@ -1134,7 +1218,11 @@ function filterFilesBySelection(files, selectedId) {
 function pickTransferTargets(files, params) {
   let targets = sortFilesByEpisode(files.slice());
   targets = filterFilesBySelection(targets, params.id);
-  targets = filterFilesByEpisodeNumber(targets, params.episode);
+
+  const episodeNum = resolveEpisodeFromParams(params);
+  if (episodeNum > 0) {
+    targets = filterFilesByEpisodeNumber(targets, episodeNum);
+  }
 
   const detailLink = resolveActiveDetailLink(params);
   let mediaType = String(params.type || params.mediaType || "").toLowerCase();
@@ -1142,7 +1230,7 @@ function pickTransferTargets(files, params) {
     mediaType = String(Widget.storage.get(`wogg_media_type_${detailLink}`) || "").toLowerCase();
   }
 
-  const hasEpisode = params.episode !== undefined && params.episode !== null && String(params.episode) !== "";
+  const hasEpisode = episodeNum > 0;
   const hasFileId = isQuarkFileSelectionId(params.id, files);
 
   if (mediaType === "tv" && !hasEpisode && !hasFileId && targets.length > 1) {
@@ -1178,14 +1266,16 @@ async function transferFilesToResources(cookies, files) {
       if (!stoken) {
         const tokenResult = await getQuarkShareToken(cookies, file.shareId, file.sharePwd || "");
         stoken = tokenResult.stoken;
+        file.stoken = stoken;
       }
 
+      const shareFidToken = await ensureShareFidToken(cookies, file);
       const { playUrl } = await transferAndGetPlayUrl(
         cookies,
         file.shareId,
         stoken,
         file.fid,
-        file.shareFidToken || "",
+        shareFidToken,
         tempFolderFid
       );
 
@@ -1285,6 +1375,7 @@ async function loadList(params = {}) {
 async function loadDetail(link) {
   try {
     const detailLink = normalizeDetailLink(link);
+    Widget.storage.set("wogg_current_link", detailLink);
     const res = await Widget.http.get(detailLink, { headers: getHeaders() });
     const parsed = parseDetailPage(res.data);
 
@@ -1365,7 +1456,7 @@ async function transferAndGetPlayUrl(cookies, pwdId, stoken, fid, shareFidToken,
   let playUrl = "";
   try {
     const playInfo = await getQuarkPlayUrl(cookies, transferResult.fileId);
-    playUrl = playInfo.download_url || playInfo.video_preview_url || "";
+    playUrl = playInfo.download_url || playInfo.video_preview_url || playInfo.url || playInfo.preview_url || "";
   } catch (e) {
     console.error("[wogg] 获取播放链接失败:", e.message || e);
   }
@@ -1495,6 +1586,12 @@ async function search(params = {}) {
 
       if (!href || !name) return;
 
+      const remarksText = safeText(remarks);
+      let mediaType = "movie";
+      if (/更新至|全\d+集|连载|第\d+集|剧集|动漫|综艺|短剧/.test(remarksText)) {
+        mediaType = "tv";
+      }
+
       items.push({
         id: href,
         type: "url",
@@ -1502,8 +1599,8 @@ async function search(params = {}) {
         posterPath: cover || "",
         backdropPath: cover || "",
         link: resolveUrl(href),
-        description: safeText(remarks),
-        mediaType: "movie"
+        description: remarksText,
+        mediaType: mediaType
       });
     });
 
