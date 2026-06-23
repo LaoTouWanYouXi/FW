@@ -29,15 +29,6 @@
       "version": "1.0.9",
       "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/平台剧场.js"
-    },
-    {
-      "id": "wogg_yingshi",
-      "title": "玩偶哥哥",
-      "description": "网盘资源查找观看",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.1",
-      "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/wogg.js"
     }
   ]
 }
