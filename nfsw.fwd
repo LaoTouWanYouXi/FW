@@ -4,6 +4,33 @@
   "icon": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/9331.jpeg",
   "widgets": [
     {
+      "id": "forward.tikporn",
+      "title": "Tik.Porn",
+      "description": "Tik.Porn — 短视频聚合",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "EL",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/tikporn.js"
+    },
+    {
+      "id": "gm.xHamster.gm",
+      "title": "xHamster",
+      "description": "xHamster 是一个以用户上传内容（UGC）为核心的成人视频网站和社区平台。",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "EL",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/xhamster.js"
+    },
+    {
+      "id": "bagua",
+      "title": "八卦",
+      "description": "八卦",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/bagua-v2.5.js"
+    },
+    {
       "id": "91porn_makka",
       "title": "91Porn",
       "description": "91Porn 分类浏览与全局搜索模块",
