@@ -26,147 +26,426 @@ WidgetMetadata = {
           "value": "https://bagua-cover-proxy.dingyong1024.workers.dev"
         }
       ]
+    },
+    {
+      "name": "coverMode",
+      "title": "\u5c01\u9762\u7c7b\u578b",
+      "type": "enumeration",
+      "value": "image",
+      "enumOptions": [
+        {
+          "title": "\u56fe\u7247\u5c01\u9762 (\u63a8\u8350)",
+          "value": "image"
+        },
+        {
+          "title": "\u89c6\u9891\u5c01\u9762 (M3U8)",
+          "value": "video"
+        },
+        {
+          "title": "\u56fe\u7247+\u89c6\u9891",
+          "value": "both"
+        }
+      ]
+    },
+    {
+      "name": "previewCount",
+      "title": "\u89c6\u9891\u5c01\u9762\u6570\u91cf",
+      "type": "enumeration",
+      "value": "0",
+      "enumOptions": [
+        {
+          "title": "\u5173\u95ed",
+          "value": "0"
+        },
+        {
+          "title": "\u524d 6 \u6761",
+          "value": "6"
+        },
+        {
+          "title": "\u524d 12 \u6761",
+          "value": "12"
+        }
+      ]
     }
   ],
   "modules": [
     {
-      "id": "loadList",
-      "title": "\u5206\u7c7b",
+      "id": "xazd",
+      "title": "\u6821\u56ed\u5b66\u751f",
       "functionName": "loadList",
       "cacheDuration": 600,
       "params": [
         {
           "name": "category",
           "title": "\u9891\u9053",
-          "type": "enumeration",
-          "value": "xazd",
-          "enumOptions": [
-            {
-              "title": "\u6821\u56ed\u5b66\u751f",
-              "value": "xazd"
-            },
-            {
-              "title": "\u6bcf\u65e5\u5927\u8d5b",
-              "value": "mrds"
-            },
-            {
-              "title": "\u4e3b\u9898\u5927\u8d5b",
-              "value": "ztds"
-            },
-            {
-              "title": "\u70ed\u641c\u5403\u74dc",
-              "value": "rstt"
-            },
-            {
-              "title": "\u5fc5\u64b8\u5927\u8d5b",
-              "value": "blyp"
-            },
-            {
-              "title": "\u53cd\u5dee\u6cc4\u5bc6",
-              "value": "fctg"
-            },
-            {
-              "title": "\u7f51\u7ea2\u9ed1\u6599",
-              "value": "mhds"
-            },
-            {
-              "title": "\u730e\u5947\u91cd\u53e3",
-              "value": "lqdp"
-            },
-            {
-              "title": "AV\u770b\u7247",
-              "value": "jdsj"
-            },
-            {
-              "title": "\u660e\u661f\u5927\u8d5b",
-              "value": "mxwh"
-            },
-            {
-              "title": "\u52a8\u6f2b\u4e4b\u5bb6",
-              "value": "smdh"
-            },
-            {
-              "title": "\u5f71\u89c6\u56fd\u6f2b",
-              "value": "dypd"
-            },
-            {
-              "title": "cos\u5199\u771f",
-              "value": "mtds"
-            },
-            {
-              "title": "\u58f0\u63a7ASMR",
-              "value": "ysds"
-            },
-            {
-              "title": "\u5bf8\u6b62\u6311\u6218",
-              "value": "czds"
-            },
-            {
-              "title": "\u6df7\u526aPMV",
-              "value": "hjds"
-            },
-            {
-              "title": "\u539f\u521b\u6295\u7a3f",
-              "value": "tgds"
-            },
-            {
-              "title": "\u6b27\u7f8e\u7cbe\u54c1",
-              "value": "omjp"
-            },
-            {
-              "title": "\u5168\u7f51\u53c2\u8d5b",
-              "value": "qwcs"
-            },
-            {
-              "title": "\u4e16\u754c\u676f\u533a",
-              "value": "sjbq"
-            }
-          ]
+          "type": "constant",
+          "value": "xazd"
         },
         {
           "name": "page",
           "title": "\u9875\u7801",
           "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "mrds",
+      "title": "\u6bcf\u65e5\u5927\u8d5b",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "mrds"
         },
         {
-          "name": "coverMode",
-          "title": "\u5c01\u9762\u7c7b\u578b",
-          "type": "enumeration",
-          "value": "image",
-          "enumOptions": [
-            {
-              "title": "\u56fe\u7247\u5c01\u9762 (\u63a8\u8350)",
-              "value": "image"
-            },
-            {
-              "title": "\u89c6\u9891\u5c01\u9762 (M3U8)",
-              "value": "video"
-            },
-            {
-              "title": "\u56fe\u7247+\u89c6\u9891",
-              "value": "both"
-            }
-          ]
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "ztds",
+      "title": "\u4e3b\u9898\u5927\u8d5b",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "ztds"
         },
         {
-          "name": "previewCount",
-          "title": "\u89c6\u9891\u5c01\u9762\u6570\u91cf",
-          "type": "enumeration",
-          "value": "0",
-          "enumOptions": [
-            {
-              "title": "\u5173\u95ed",
-              "value": "0"
-            },
-            {
-              "title": "\u524d 6 \u6761",
-              "value": "6"
-            },
-            {
-              "title": "\u524d 12 \u6761",
-              "value": "12"
-            }
-          ]
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "rstt",
+      "title": "\u70ed\u641c\u5403\u74dc",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "rstt"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "blyp",
+      "title": "\u5fc5\u64b8\u5927\u8d5b",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "blyp"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "fctg",
+      "title": "\u53cd\u5dee\u6cc4\u5bc6",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "fctg"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "mhds",
+      "title": "\u7f51\u7ea2\u9ed1\u6599",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "mhds"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "lqdp",
+      "title": "\u730e\u5947\u91cd\u53e3",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "lqdp"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "jdsj",
+      "title": "AV\u770b\u7247",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "jdsj"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "mxwh",
+      "title": "\u660e\u661f\u5927\u8d5b",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "mxwh"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "smdh",
+      "title": "\u52a8\u6f2b\u4e4b\u5bb6",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "smdh"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "dypd",
+      "title": "\u5f71\u89c6\u56fd\u6f2b",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "dypd"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "mtds",
+      "title": "cos\u5199\u771f",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "mtds"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "ysds",
+      "title": "\u58f0\u63a7ASMR",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "ysds"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "czds",
+      "title": "\u5bf8\u6b62\u6311\u6218",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "czds"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "hjds",
+      "title": "\u6df7\u526aPMV",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "hjds"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "tgds",
+      "title": "\u539f\u521b\u6295\u7a3f",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "tgds"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "omjp",
+      "title": "\u6b27\u7f8e\u7cbe\u54c1",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "omjp"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "qwcs",
+      "title": "\u5168\u7f51\u53c2\u8d5b",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "qwcs"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
+        }
+      ]
+    },
+    {
+      "id": "sjbq",
+      "title": "\u4e16\u754c\u676f\u533a",
+      "functionName": "loadList",
+      "cacheDuration": 600,
+      "params": [
+        {
+          "name": "category",
+          "title": "\u9891\u9053",
+          "type": "constant",
+          "value": "sjbq"
+        },
+        {
+          "name": "page",
+          "title": "\u9875\u7801",
+          "type": "page"
         }
       ]
     }
@@ -184,46 +463,6 @@ WidgetMetadata = {
         "name": "page",
         "title": "\u9875\u7801",
         "type": "page"
-      },
-      {
-        "name": "coverMode",
-        "title": "\u5c01\u9762\u7c7b\u578b",
-        "type": "enumeration",
-        "value": "image",
-        "enumOptions": [
-          {
-            "title": "\u56fe\u7247\u5c01\u9762 (\u63a8\u8350)",
-            "value": "image"
-          },
-          {
-            "title": "\u89c6\u9891\u5c01\u9762 (M3U8)",
-            "value": "video"
-          },
-          {
-            "title": "\u56fe\u7247+\u89c6\u9891",
-            "value": "both"
-          }
-        ]
-      },
-      {
-        "name": "previewCount",
-        "title": "\u89c6\u9891\u5c01\u9762\u6570\u91cf",
-        "type": "enumeration",
-        "value": "0",
-        "enumOptions": [
-          {
-            "title": "\u5173\u95ed",
-            "value": "0"
-          },
-          {
-            "title": "\u524d 6 \u6761",
-            "value": "6"
-          },
-          {
-            "title": "\u524d 12 \u6761",
-            "value": "12"
-          }
-        ]
       }
     ]
   }
