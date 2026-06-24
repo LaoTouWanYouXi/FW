@@ -9,15 +9,6 @@ WidgetMetadata = {
   detailCacheDuration: 300,
   modules: [
     {
-      title: "\u9996\u9875",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: [
-        { name: "url", title: "\u5217\u8868\u5730\u5740", type: "constant", value: "https://koreanpornmovie.com/" },
-        { name: "page", title: "\u9875\u7801", type: "page", value: "1" },
-      ],
-    },
-    {
       title: "\u5206\u7c7b",
       functionName: "loadPage",
       cacheDuration: 3600,
@@ -26,8 +17,9 @@ WidgetMetadata = {
           name: "url",
           title: "\u9009\u62e9\u5206\u7c7b",
           type: "enumeration",
-          value: "https://koreanpornmovie.com/tag/18-movies/",
+          value: "https://koreanpornmovie.com/",
           enumOptions: [
+            { title: "\u9996\u9875", value: "https://koreanpornmovie.com/" },
             { title: "\u4e09\u7ea7\u7535\u5f71", value: "https://koreanpornmovie.com/tag/18-movies/" },
             { title: "\u97e9\u56fdAV", value: "https://koreanpornmovie.com/tag/korean-av/" },
             { title: "\u97e9\u56fd\u6d41\u51fa", value: "https://koreanpornmovie.com/tag/korean-leak/" },

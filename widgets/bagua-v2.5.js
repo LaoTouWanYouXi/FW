@@ -3,7 +3,7 @@ WidgetMetadata = {
   "title": "bagua",
   "version": "2.5",
   "requiredVersion": "0.0.2",
-  "description": "bagua 分类、搜索与详情模块 (封面修复增强版)",
+  "description": "bagua \u5206\u7c7b\u3001\u641c\u7d22\u4e0e\u8be6\u60c5\u6a21\u5757 (\u5c01\u9762\u4fee\u590d\u589e\u5f3a\u7248)",
   "author": "Codex",
   "site": "https://www.mrds66.com",
   "icon": "https://www.mrds66.com/usr/themes/Mirages/images/logo-2.png?v=2",
@@ -11,18 +11,18 @@ WidgetMetadata = {
   "globalParams": [
     {
       "name": "baseUrl",
-      "title": "站点域名",
+      "title": "\u7ad9\u70b9\u57df\u540d",
       "type": "input",
       "value": "https://www.mrds66.com"
     },
     {
       "name": "coverProxy",
-      "title": "封面代理",
+      "title": "\u5c01\u9762\u4ee3\u7406",
       "type": "input",
       "value": "https://bagua-cover-proxy.dingyong1024.workers.dev",
       "placeholders": [
         {
-          "title": "Cloudflare Worker 地址",
+          "title": "Cloudflare Worker \u5730\u5740",
           "value": "https://bagua-cover-proxy.dingyong1024.workers.dev"
         }
       ]
@@ -31,139 +31,139 @@ WidgetMetadata = {
   "modules": [
     {
       "id": "loadList",
-      "title": "分类",
+      "title": "\u5206\u7c7b",
       "functionName": "loadList",
       "cacheDuration": 600,
       "params": [
         {
           "name": "category",
-          "title": "频道",
+          "title": "\u9891\u9053",
           "type": "enumeration",
           "value": "xazd",
           "enumOptions": [
             {
-              "title": "校园学生",
+              "title": "\u6821\u56ed\u5b66\u751f",
               "value": "xazd"
             },
             {
-              "title": "每日大赛",
+              "title": "\u6bcf\u65e5\u5927\u8d5b",
               "value": "mrds"
             },
             {
-              "title": "主题大赛",
+              "title": "\u4e3b\u9898\u5927\u8d5b",
               "value": "ztds"
             },
             {
-              "title": "热搜吃瓜",
+              "title": "\u70ed\u641c\u5403\u74dc",
               "value": "rstt"
             },
             {
-              "title": "必撸大赛",
+              "title": "\u5fc5\u64b8\u5927\u8d5b",
               "value": "blyp"
             },
             {
-              "title": "反差泄密",
+              "title": "\u53cd\u5dee\u6cc4\u5bc6",
               "value": "fctg"
             },
             {
-              "title": "网红黑料",
+              "title": "\u7f51\u7ea2\u9ed1\u6599",
               "value": "mhds"
             },
             {
-              "title": "猎奇重口",
+              "title": "\u730e\u5947\u91cd\u53e3",
               "value": "lqdp"
             },
             {
-              "title": "AV看片",
+              "title": "AV\u770b\u7247",
               "value": "jdsj"
             },
             {
-              "title": "明星大赛",
+              "title": "\u660e\u661f\u5927\u8d5b",
               "value": "mxwh"
             },
             {
-              "title": "动漫之家",
+              "title": "\u52a8\u6f2b\u4e4b\u5bb6",
               "value": "smdh"
             },
             {
-              "title": "影视国漫",
+              "title": "\u5f71\u89c6\u56fd\u6f2b",
               "value": "dypd"
             },
             {
-              "title": "cos写真",
+              "title": "cos\u5199\u771f",
               "value": "mtds"
             },
             {
-              "title": "声控ASMR",
+              "title": "\u58f0\u63a7ASMR",
               "value": "ysds"
             },
             {
-              "title": "寸止挑战",
+              "title": "\u5bf8\u6b62\u6311\u6218",
               "value": "czds"
             },
             {
-              "title": "混剪PMV",
+              "title": "\u6df7\u526aPMV",
               "value": "hjds"
             },
             {
-              "title": "原创投稿",
+              "title": "\u539f\u521b\u6295\u7a3f",
               "value": "tgds"
             },
             {
-              "title": "欧美精品",
+              "title": "\u6b27\u7f8e\u7cbe\u54c1",
               "value": "omjp"
             },
             {
-              "title": "全网参赛",
+              "title": "\u5168\u7f51\u53c2\u8d5b",
               "value": "qwcs"
             },
             {
-              "title": "世界杯区",
+              "title": "\u4e16\u754c\u676f\u533a",
               "value": "sjbq"
             }
           ]
         },
         {
           "name": "page",
-          "title": "页码",
+          "title": "\u9875\u7801",
           "type": "page"
         },
         {
           "name": "coverMode",
-          "title": "封面类型",
+          "title": "\u5c01\u9762\u7c7b\u578b",
           "type": "enumeration",
           "value": "image",
           "enumOptions": [
             {
-              "title": "图片封面 (推荐)",
+              "title": "\u56fe\u7247\u5c01\u9762 (\u63a8\u8350)",
               "value": "image"
             },
             {
-              "title": "视频封面 (M3U8)",
+              "title": "\u89c6\u9891\u5c01\u9762 (M3U8)",
               "value": "video"
             },
             {
-              "title": "图片+视频",
+              "title": "\u56fe\u7247+\u89c6\u9891",
               "value": "both"
             }
           ]
         },
         {
           "name": "previewCount",
-          "title": "视频封面数量",
+          "title": "\u89c6\u9891\u5c01\u9762\u6570\u91cf",
           "type": "enumeration",
           "value": "0",
           "enumOptions": [
             {
-              "title": "关闭",
+              "title": "\u5173\u95ed",
               "value": "0"
             },
             {
-              "title": "前 6 条",
+              "title": "\u524d 6 \u6761",
               "value": "6"
             },
             {
-              "title": "前 12 条",
+              "title": "\u524d 12 \u6761",
               "value": "12"
             }
           ]
@@ -172,55 +172,55 @@ WidgetMetadata = {
     }
   ],
   "search": {
-    "title": "搜索",
+    "title": "\u641c\u7d22",
     "functionName": "search",
     "params": [
       {
         "name": "keyword",
-        "title": "关键词",
+        "title": "\u5173\u952e\u8bcd",
         "type": "input"
       },
       {
         "name": "page",
-        "title": "页码",
+        "title": "\u9875\u7801",
         "type": "page"
       },
       {
         "name": "coverMode",
-        "title": "封面类型",
+        "title": "\u5c01\u9762\u7c7b\u578b",
         "type": "enumeration",
         "value": "image",
         "enumOptions": [
           {
-            "title": "图片封面 (推荐)",
+            "title": "\u56fe\u7247\u5c01\u9762 (\u63a8\u8350)",
             "value": "image"
           },
           {
-            "title": "视频封面 (M3U8)",
+            "title": "\u89c6\u9891\u5c01\u9762 (M3U8)",
             "value": "video"
           },
           {
-            "title": "图片+视频",
+            "title": "\u56fe\u7247+\u89c6\u9891",
             "value": "both"
           }
         ]
       },
       {
         "name": "previewCount",
-        "title": "视频封面数量",
+        "title": "\u89c6\u9891\u5c01\u9762\u6570\u91cf",
         "type": "enumeration",
         "value": "0",
         "enumOptions": [
           {
-            "title": "关闭",
+            "title": "\u5173\u95ed",
             "value": "0"
           },
           {
-            "title": "前 6 条",
+            "title": "\u524d 6 \u6761",
             "value": "6"
           },
           {
-            "title": "前 12 条",
+            "title": "\u524d 12 \u6761",
             "value": "12"
           }
         ]
@@ -741,7 +741,7 @@ function normalizeDate(text) {
   if (!value) return "";
   var iso = value.match(/(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
-  var zh = value.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+  var zh = value.match(/(\d{4})\s*\u5e74\s*(\d{1,2})\s*\u6708\s*(\d{1,2})\s*\u65e5/);
   if (zh) return zh[1] + "-" + pad2(zh[2]) + "-" + pad2(zh[3]);
   return value;
 }
