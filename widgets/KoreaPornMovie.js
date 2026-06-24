@@ -4,7 +4,7 @@ WidgetMetadata = {
   description: "KoreaPornMovie \u97e9\u56fd\u5f71\u89c6\u805a\u5408\u6a21\u5757",
   author: "nibiru/makka/el",
   site: "https://koreanpornmovie.com",
-  version: "1.0.0",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   detailCacheDuration: 300,
   modules: [
@@ -55,7 +55,7 @@ WidgetMetadata = {
           name: "url",
           title: "\u5217\u8868\u5730\u5740",
           type: "constant",
-          value: "https://koreanpornmovie.com/tag/korean-av/"
+          value: "https://koreanpornmovie.com/tag/korean-bj/"
         },
         {
           name: "page",
@@ -74,7 +74,7 @@ WidgetMetadata = {
           name: "url",
           title: "\u5217\u8868\u5730\u5740",
           type: "constant",
-          value: "https://koreanpornmovie.com/tag/korean-leak/"
+          value: "https://koreanpornmovie.com/tag/scandal/"
         },
         {
           name: "page",
@@ -93,7 +93,7 @@ WidgetMetadata = {
           name: "url",
           title: "\u5217\u8868\u5730\u5740",
           type: "constant",
-          value: "https://koreanpornmovie.com/tag/hidden-cam/"
+          value: "https://koreanpornmovie.com/tag/cam/"
         },
         {
           name: "page",
@@ -320,8 +320,14 @@ function safeText(str) {
 
 // ==================== \u5217\u8868\u89e3\u6790 ====================
 
+function isEmptyArchivePage(html) {
+  if (!html || !html.trim()) return true;
+  return /can(?:'|&#8217;|&apos;)t find what you(?:'|&#8217;|&apos;)re looking for|perhaps searching can help|page not found|error-404/i.test(html);
+}
+
 function parseListHtml(html) {
   if (!html || !html.trim()) return [];
+  if (isEmptyArchivePage(html)) return [];
   const $ = Widget.html.load(html);
   const items = [];
   const seen = new Set();
