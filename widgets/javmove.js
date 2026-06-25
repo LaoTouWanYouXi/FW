@@ -3,36 +3,36 @@ WidgetMetadata = {
   title: "JavMove",
   version: "1.0.1",
   requiredVersion: "0.0.1",
-  description: "JavMove 视频聚合模块，支持最新影片、即将上映、搜索",
+  description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u5f71\u7247\u3001\u5373\u5c06\u4e0a\u6620\u3001\u641c\u7d22",
   author: "Forward",
   site: "https://javmove.com",
   detailCacheDuration: 300,
   modules: [
     {
       id: "latest",
-      title: "最新影片",
+      title: "\u6700\u65b0\u5f71\u7247",
       functionName: "loadLatest",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "页码", type: "page" }
+        { name: "page", title: "\u9875\u7801", type: "page" }
       ]
     },
     {
       id: "upcoming",
-      title: "即将上映",
+      title: "\u5373\u5c06\u4e0a\u6620",
       functionName: "loadUpcoming",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "页码", type: "page" }
+        { name: "page", title: "\u9875\u7801", type: "page" }
       ]
     }
   ],
   search: {
-    title: "搜索",
+    title: "\u641c\u7d22",
     functionName: "search",
     params: [
-      { name: "keyword", title: "关键词", type: "input" },
-      { name: "page", title: "页码", type: "page" }
+      { name: "keyword", title: "\u5173\u952e\u8bcd", type: "input" },
+      { name: "page", title: "\u9875\u7801", type: "page" }
     ]
   }
 };
@@ -83,7 +83,24 @@ function parseVideoList(html) {
   return items.length > 0 ? items : [];
 }
 
+async function loadGenreList(params = {}) {
+  const genreId = String(params.genreId || "").trim();
+  if (!genreId) return [];
+
+  const page = Number(params.page || 1);
+  let url = genreId.startsWith("http") ? genreId : resolveUrl(genreId);
+  if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
+
+  try {
+    const res = await Widget.http.get(url, { headers: HEADERS });
+    return parseVideoList(res.data);
+  } catch (e) {
+    return [];
+  }
+}
+
 async function loadLatest(params = {}) {
+  if (params.genreId) return loadGenreList(params);
   const page = Number(params.page || 1);
   try {
     const url = `${BASE_URL}/release?page=${page}`;
@@ -95,6 +112,7 @@ async function loadLatest(params = {}) {
 }
 
 async function loadUpcoming(params = {}) {
+  if (params.genreId) return loadGenreList(params);
   const page = Number(params.page || 1);
   try {
     const url = `${BASE_URL}/upcoming?page=${page}`;
@@ -190,7 +208,7 @@ async function loadDetail(link) {
       if (!rDetailLink || seenRelated.has(rDetailLink)) return;
       seenRelated.add(rDetailLink);
 
-      const rTitle = ($el.find("h2").attr("title") || "").split(" ")[0] || "相关影片";
+      const rTitle = ($el.find("h2").attr("title") || "").split(" ")[0] || "\u76f8\u5173\u5f71\u7247";
       const rCover = $el.find(".movie-image").attr("data-srcset") || $el.find(".movie-image").attr("src") || $el.find("img").attr("src") || "";
 
       relatedItems.push({
@@ -214,7 +232,7 @@ async function loadDetail(link) {
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link,
-      mediaType: "tv",
+      mediaType: "movie",
       customHeaders: HEADERS
     };
   } catch (e) {
@@ -223,6 +241,8 @@ async function loadDetail(link) {
 }
 
 async function search(params = {}) {
+  if (params.genreId) return loadGenreList(params);
+
   const keyword = params.keyword || "";
   const page = Number(params.page || 1);
   if (!keyword) return [];

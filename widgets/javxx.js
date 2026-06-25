@@ -300,10 +300,28 @@ function parseVideoList(html) {
 }
 
 async function loadCategory(categoryId, params = {}) {
+  if (params.genreId) return loadGenreList(params);
+
   const page = Number(params.page || 1);
   const path = CATEGORY_MAP[categoryId] || "/cn/new";
   let url = `${BASE_URL}${path}`;
   if (page > 1) url += `?page=${page}`;
+
+  try {
+    const res = await Widget.http.get(url, { headers: HEADERS });
+    return parseVideoList(res.data);
+  } catch (e) {
+    return [];
+  }
+}
+
+async function loadGenreList(params = {}) {
+  const genreId = String(params.genreId || "").trim();
+  if (!genreId) return [];
+
+  const page = Number(params.page || 1);
+  let url = genreId.startsWith("http") ? genreId : resolveUrl(genreId);
+  if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
 
   try {
     const res = await Widget.http.get(url, { headers: HEADERS });
@@ -462,6 +480,8 @@ async function loadDetail(link) {
 }
 
 async function search(params = {}) {
+  if (params.genreId) return loadGenreList(params);
+
   const keyword = params.keyword || "";
   const page = Number(params.page || 1);
   if (!keyword) return [];
