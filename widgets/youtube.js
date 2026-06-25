@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.youtube",
   title: "油管",
-  version: "1.2.0",
+  version: "1.2.1",
   requiredVersion: "0.0.1",
   description: "YouTube 视频源，支持推荐、热门、分类频道与搜索",
   author: "Forward",
@@ -115,17 +115,41 @@ const BROWSE_MAP = {
   gaming: "FEgaming",
   news: "FEnews",
   sports: "FEsports",
-  movies: "FEfilm",
+  movies: "FEmovies_and_shows",
+};
+
+const HTML_FEEDS = {
+  trending: "/feed/trending",
+  music: "/feed/music",
+  gaming: "/gaming",
+  news: "/feed/news",
+  sports: "/feed/sports",
+  movies: "/feed/storefront",
 };
 
 const SEARCH_FALLBACK = {
-  home: "recommended",
+  home: "最新 推荐",
   trending: "trending",
   music: "music",
   gaming: "gaming",
   news: "news",
   sports: "sports",
-  movies: "movie",
+  movies: "movie trailer",
+};
+
+const DEFAULT_CONTEXT = {
+  client: {
+    clientName: "WEB",
+    clientVersion: "2.20241218.01.00",
+    hl: "zh-CN",
+    gl: "HK",
+    userAgent: UA,
+    timeZone: "Asia/Shanghai",
+    utcOffsetMinutes: 480,
+    originalUrl: "https://www.youtube.com/",
+  },
+  user: { lockedSafetyMode: false },
+  request: { useSsl: true },
 };
 
 const PLAYER_CLIENTS = [
@@ -345,23 +369,14 @@ function buildAuthHeaders(params) {
   const cookie = normalizeCookie(auth.cookie);
   if (cookie) headers.Cookie = cookie;
   let authorization = auth.authorization || "";
-  if (!authorization && cookie) authorization = buildSapisidHash(cookie);
-  if (authorization) headers.Authorization = authorization;
-  return headers;
-}
-
-function buildInnertubeHeaders(params) {
-  const headers = Object.assign(
-    {
-      "Content-Type": "application/json",
-      Accept: "*/*",
-      Origin: "https://www.youtube.com",
-      Referer: "https://www.youtube.com/",
-    },
-    buildAuthHeaders(params)
-  );
-  const visitorData = storageGet("visitor_data");
-  if (visitorData) headers["X-Goog-Visitor-Id"] = visitorData;
+  if (!authorization && cookie) {
+    authorization = buildSapisidHash(cookie);
+  }
+  if (authorization && authorization.indexOf("SAPISIDHASH") === 0) {
+    headers.Authorization = authorization;
+  } else if (authorization) {
+    headers.Authorization = authorization;
+  }
   return headers;
 }
 
@@ -421,7 +436,7 @@ function getSearchParam() {
   d[t++] = 0x10;
   d[t++] = 2;
   d[c] = t - c - 1;
-  return encodeURIComponent(b64EncodeBytes(d.slice(0, t)));
+  return b64EncodeBytes(d.slice(0, t));
 }
 
 function thumbUrl(thumbnails, videoId) {
@@ -633,6 +648,27 @@ function saveContinuationFromData(data, storageKey) {
   walk(data);
 }
 
+function parseYtcfg(html) {
+  const flat = html.replace(/\n/g, "");
+  const markers = ["ytcfg.set(", "window.ytcfg.set("];
+  for (let m = 0; m < markers.length; m++) {
+    let idx = flat.indexOf(markers[m]);
+    while (idx >= 0) {
+      const parsed = extractJsonObject(flat, idx + markers[m].length);
+      if (parsed && parsed.INNERTUBE_API_KEY) return parsed;
+      idx = flat.indexOf(markers[m], idx + 1);
+    }
+  }
+  const legacy = flat.match(/ytplayer=\{\};ytcfg\.set\(([\s\S]*?)\);/);
+  if (legacy) {
+    try {
+      const parsed = JSON.parse(legacy[1]);
+      if (parsed && parsed.INNERTUBE_API_KEY) return parsed;
+    } catch (e) {}
+  }
+  return null;
+}
+
 async function initSession(params) {
   cacheAuthFromParams(params || {});
   const auth = getAuthParams();
@@ -646,17 +682,29 @@ async function initSession(params) {
     return;
   }
 
-  const res = await Widget.http.get(SITE, {
-    headers: buildAuthHeaders(auth),
-  });
-  const html = typeof res.data === "string" ? res.data : String(res.data || "");
-  const regex = /ytcfg\.set\((\{.*?\})\);/;
-  const match = html.replace(/\n/g, "").match(regex);
-  if (!match) throw new Error("无法解析 YouTube 会话配置");
-  const ytcfg = JSON.parse(match[1]);
-  storageSet("api_key", ytcfg.INNERTUBE_API_KEY || FALLBACK_API_KEY);
-  storageSet("context", JSON.stringify(ytcfg.INNERTUBE_CONTEXT || {}));
-  if (ytcfg.VISITOR_DATA) storageSet("visitor_data", ytcfg.VISITOR_DATA);
+  let ytcfg = null;
+  try {
+    const res = await Widget.http.get(SITE, {
+      headers: buildAuthHeaders(auth),
+    });
+    const html =
+      typeof res.data === "string" ? res.data : String(res.data || "");
+    ytcfg = parseYtcfg(html);
+  } catch (e) {
+    console.error("[initSession] 拉取首页失败:", e.message || e);
+  }
+
+  storageSet("api_key", (ytcfg && ytcfg.INNERTUBE_API_KEY) || FALLBACK_API_KEY);
+  const ctx =
+    ytcfg && ytcfg.INNERTUBE_CONTEXT
+      ? ytcfg.INNERTUBE_CONTEXT
+      : DEFAULT_CONTEXT;
+  storageSet("context", JSON.stringify(ctx));
+  const visitorData =
+    (ytcfg && ytcfg.VISITOR_DATA) ||
+    (ctx.client && ctx.client.visitorData) ||
+    "";
+  if (visitorData) storageSet("visitor_data", visitorData);
   storageSet("session_tag", sessionTag);
 }
 
@@ -665,67 +713,132 @@ function getApiKey() {
 }
 
 function getContext() {
-  const ctx = parseStoredJson(storageGet("context")) || {};
-  if (!ctx.client) {
-    ctx.client = {
-      clientName: "WEB",
-      clientVersion: "2.20241218.01.00",
-      hl: "zh-CN",
-      gl: "US",
-      userAgent: UA,
-      timeZone: "Asia/Shanghai",
-      utcOffsetMinutes: 480,
-    };
-  }
+  const stored = parseStoredJson(storageGet("context"));
+  const ctx = stored
+    ? JSON.parse(JSON.stringify(stored))
+    : JSON.parse(JSON.stringify(DEFAULT_CONTEXT));
+  if (!ctx.client) ctx.client = JSON.parse(JSON.stringify(DEFAULT_CONTEXT.client));
+  if (!ctx.user) ctx.user = JSON.parse(JSON.stringify(DEFAULT_CONTEXT.user));
+  if (!ctx.request) ctx.request = JSON.parse(JSON.stringify(DEFAULT_CONTEXT.request));
+  const visitorData = storageGet("visitor_data");
+  if (visitorData) ctx.client.visitorData = visitorData;
   return ctx;
+}
+
+function buildInnertubeHeaders(params, clientOverride) {
+  const ctx = getContext();
+  const client = clientOverride || ctx.client || DEFAULT_CONTEXT.client;
+  const headers = Object.assign(
+    {
+      "Content-Type": "application/json",
+      Accept: "*/*",
+      Origin: "https://www.youtube.com",
+      Referer: "https://www.youtube.com/",
+      "User-Agent": client.userAgent || UA,
+      "X-YouTube-Client-Name": "1",
+      "X-YouTube-Client-Version": client.clientVersion || "2.20241218.01.00",
+    },
+    buildAuthHeaders(params)
+  );
+  if (client.visitorData) headers["X-Goog-Visitor-Id"] = client.visitorData;
+  else {
+    const visitorData = storageGet("visitor_data");
+    if (visitorData) headers["X-Goog-Visitor-Id"] = visitorData;
+  }
+  return headers;
 }
 
 async function postInnertube(path, body, params) {
   const apiKey = getApiKey();
   const res = await Widget.http.post(
-    SITE + path + "?key=" + apiKey + "&prettyPrint=false",
+    SITE + path + "?key=" + encodeURIComponent(apiKey),
     JSON.stringify(body),
     { headers: buildInnertubeHeaders(params || getAuthParams()) }
   );
-  return typeof res.data === "object" ? res.data : parseStoredJson(res.data);
+  const data =
+    typeof res.data === "object" ? res.data : parseStoredJson(res.data);
+  if (data && data.error) {
+    throw new Error(
+      (data.error.message || "InnerTube error") +
+        " (" +
+        (data.error.code || "unknown") +
+        ")"
+    );
+  }
+  return data;
+}
+
+async function loadListFromHtml(feedPath, params) {
+  const res = await Widget.http.get(SITE + feedPath, {
+    headers: Object.assign({ Origin: SITE }, buildAuthHeaders(params)),
+  });
+  const html = typeof res.data === "string" ? res.data : String(res.data || "");
+  const parsedResponse = parseInitialData(html);
+  if (!parsedResponse) return [];
+  const collected = [];
+  extractAllVideoRenderers(parsedResponse, collected);
+  return dedupeItems(collected);
+}
+
+async function loadHomeFromHtml(params) {
+  const url =
+    SITE + "/results?search_query=" + encodeURIComponent("最新|推薦");
+  const res = await Widget.http.get(url, {
+    headers: buildAuthHeaders(params),
+  });
+  const html = typeof res.data === "string" ? res.data : String(res.data || "");
+  const parsedResponse = parseInitialData(html);
+  if (!parsedResponse) return [];
+  const contents =
+    parsedResponse.contents &&
+    parsedResponse.contents.twoColumnSearchResultsRenderer &&
+    parsedResponse.contents.twoColumnSearchResultsRenderer.primaryContents &&
+    parsedResponse.contents.twoColumnSearchResultsRenderer.primaryContents
+      .sectionListRenderer &&
+    parsedResponse.contents.twoColumnSearchResultsRenderer.primaryContents
+      .sectionListRenderer.contents;
+  if (!contents || !contents[0]) {
+    const collected = [];
+    extractAllVideoRenderers(parsedResponse, collected);
+    return dedupeItems(collected);
+  }
+  const cards = [];
+  contents[0].itemSectionRenderer.contents.forEach(function (e) {
+    const mapped = mapVideoRenderer(e.videoRenderer);
+    if (mapped) cards.push(mapped);
+  });
+  if (contents[1] && contents[1].continuationItemRenderer) {
+    const token =
+      contents[1].continuationItemRenderer.continuationEndpoint
+        .continuationCommand.token;
+    storageSet("home_continuation_token", token);
+  }
+  return cards;
 }
 
 async function browseCategory(categoryKey, params) {
   const pageNum = Number((params && params.page) || 1);
-  const browseId = BROWSE_MAP[categoryKey];
-  const tokenKey = "browse_token:" + categoryKey;
-  const context = getContext();
-  let data;
+  const keyword = SEARCH_FALLBACK[categoryKey] || categoryKey;
+  const feedPath = HTML_FEEDS[categoryKey];
 
-  if (pageNum === 1) {
-    data = await postInnertube(
-      "/youtubei/v1/browse",
-      { context, browseId },
-      params
-    );
-  } else {
-    const continuation = storageGet(tokenKey);
-    if (!continuation) return [];
-    data = await postInnertube(
-      "/youtubei/v1/browse",
-      { context, continuation },
-      params
-    );
+  if (pageNum === 1 && feedPath) {
+    try {
+      const htmlItems = await loadListFromHtml(feedPath, params);
+      if (htmlItems.length) return htmlItems;
+    } catch (e) {
+      console.error("[browseCategory] HTML 失败:", categoryKey, e.message || e);
+    }
   }
 
-  const collected = [];
-  extractAllVideoRenderers(data, collected);
-  saveContinuationFromData(data, tokenKey);
-  let items = dedupeItems(collected);
-
-  if (!items.length && pageNum === 1 && SEARCH_FALLBACK[categoryKey]) {
-    items = await searchVideosInternal(
-      SEARCH_FALLBACK[categoryKey],
-      1,
-      params
-    );
+  try {
+    return await searchVideosInternal(keyword, pageNum, params);
+  } catch (e) {
+    console.error("[browseCategory] 搜索失败:", categoryKey, e.message || e);
+    if (pageNum === 1 && feedPath) {
+      return loadListFromHtml(feedPath, params);
+    }
+    return [];
   }
-  return items;
 }
 
 async function searchVideosInternal(keyword, page, params) {
@@ -734,76 +847,123 @@ async function searchVideosInternal(keyword, page, params) {
   const context = getContext();
   const tokenKey = "search_token:" + keyword;
 
-  if (pageNum === 1) {
+  try {
+    if (pageNum === 1) {
+      const data = await postInnertube(
+        "/youtubei/v1/search",
+        {
+          context: context,
+          params: getSearchParam(),
+          query: keyword,
+        },
+        params
+      );
+      const contents =
+        data.contents &&
+        data.contents.twoColumnSearchResultsRenderer &&
+        data.contents.twoColumnSearchResultsRenderer.primaryContents &&
+        data.contents.twoColumnSearchResultsRenderer.primaryContents
+          .sectionListRenderer &&
+        data.contents.twoColumnSearchResultsRenderer.primaryContents
+          .sectionListRenderer.contents;
+      if (!contents || !contents[0]) return [];
+      const videos = contents[0].itemSectionRenderer.contents;
+      const cards = [];
+      videos.forEach(function (e) {
+        const mapped = mapVideoRenderer(e.videoRenderer);
+        if (mapped) cards.push(mapped);
+      });
+      if (contents[1] && contents[1].continuationItemRenderer) {
+        const token =
+          contents[1].continuationItemRenderer.continuationEndpoint
+            .continuationCommand.token;
+        storageSet(tokenKey, token);
+      }
+      return cards;
+    }
+
+    const continuation = storageGet(tokenKey);
+    if (!continuation) return [];
     const data = await postInnertube(
       "/youtubei/v1/search",
-      {
-        context,
-        params: getSearchParam(),
-        query: keyword,
-      },
+      { context: context, continuation: continuation },
       params
     );
-    const contents =
-      data.contents &&
-      data.contents.twoColumnSearchResultsRenderer &&
-      data.contents.twoColumnSearchResultsRenderer.primaryContents &&
-      data.contents.twoColumnSearchResultsRenderer.primaryContents
-        .sectionListRenderer &&
-      data.contents.twoColumnSearchResultsRenderer.primaryContents
-        .sectionListRenderer.contents;
-    if (!contents || !contents[0]) return [];
-    const videos = contents[0].itemSectionRenderer.contents;
+    const cmds = data.onResponseReceivedCommands || [];
+    if (!cmds.length) return [];
+    const videos =
+      cmds[0].appendContinuationItemsAction.continuationItems[0]
+        .itemSectionRenderer.contents;
     const cards = [];
     videos.forEach(function (e) {
       const mapped = mapVideoRenderer(e.videoRenderer);
       if (mapped) cards.push(mapped);
     });
-    if (contents[1]) {
+    const contItems =
+      cmds[0].appendContinuationItemsAction.continuationItems;
+    if (contItems[1] && contItems[1].continuationItemRenderer) {
       const token =
-        contents[1].continuationItemRenderer.continuationEndpoint
+        contItems[1].continuationItemRenderer.continuationEndpoint
           .continuationCommand.token;
       storageSet(tokenKey, token);
     }
     return cards;
+  } catch (e) {
+    console.error("[searchVideosInternal] 失败:", keyword, e.message || e);
+    return [];
   }
-
-  const continuation = storageGet(tokenKey);
-  if (!continuation) return [];
-  const data = await postInnertube(
-    "/youtubei/v1/search",
-    { context, continuation },
-    params
-  );
-  const cmds = data.onResponseReceivedCommands || [];
-  if (!cmds.length) return [];
-  const videos =
-    cmds[0].appendContinuationItemsAction.continuationItems[0]
-      .itemSectionRenderer.contents;
-  const cards = [];
-  videos.forEach(function (e) {
-    const mapped = mapVideoRenderer(e.videoRenderer);
-    if (mapped) cards.push(mapped);
-  });
-  const contItems =
-    cmds[0].appendContinuationItemsAction.continuationItems;
-  if (contItems[1]) {
-    const token =
-      contItems[1].continuationItemRenderer.continuationEndpoint
-        .continuationCommand.token;
-    storageSet(tokenKey, token);
-  }
-  return cards;
 }
 
 async function parseHomeVideos(page, params) {
   const pageNum = Number(page || 1);
   if (pageNum === 1) {
-    let items = await browseCategory("home", params);
-    if (items.length) return items;
-    return searchVideosInternal("recommended", 1, params);
+    try {
+      const htmlItems = await loadHomeFromHtml(params);
+      if (htmlItems.length) return htmlItems;
+    } catch (e) {
+      console.error("[loadHome] HTML 失败:", e.message || e);
+    }
+    try {
+      return await searchVideosInternal(SEARCH_FALLBACK.home, 1, params);
+    } catch (e) {
+      console.error("[loadHome] 搜索失败:", e.message || e);
+      return [];
+    }
   }
-  return browseCategory("home", Object.assign({}, params, { page: pageNum }));
+
+  const continuationToken = storageGet("home_continuation_token");
+  if (!continuationToken) {
+    return searchVideosInternal(SEARCH_FALLBACK.home, pageNum, params);
+  }
+  try {
+    const context = getContext();
+    const data = await postInnertube(
+      "/youtubei/v1/search",
+      { context: context, continuation: continuationToken },
+      params
+    );
+    const cmds = data.onResponseReceivedCommands || [];
+    if (!cmds.length) return [];
+    const videos =
+      cmds[0].appendContinuationItemsAction.continuationItems[0]
+        .itemSectionRenderer.contents;
+    const cards = [];
+    videos.forEach(function (e) {
+      const mapped = mapVideoRenderer(e.videoRenderer);
+      if (mapped) cards.push(mapped);
+    });
+    const contItems =
+      cmds[0].appendContinuationItemsAction.continuationItems;
+    if (contItems[1] && contItems[1].continuationItemRenderer) {
+      const token =
+        contItems[1].continuationItemRenderer.continuationEndpoint
+          .continuationCommand.token;
+      storageSet("home_continuation_token", token);
+    }
+    return cards;
+  } catch (e) {
+    return searchVideosInternal(SEARCH_FALLBACK.home, pageNum, params);
+  }
 }
 
 async function parseTrendingVideos(params) {
@@ -831,7 +991,7 @@ async function parseChannelVideos(code, page, type) {
     type === "live"
       ? "EgdzdHJlYW1z8gYECgJ6AA%3D%3D"
       : "EgZ2aWRlb3MYAyAAMAE%3D";
-  const url = SITE + "/youtubei/v1/browse?key=" + apiKey;
+  const url = SITE + "/youtubei/v1/browse?key=" + encodeURIComponent(apiKey);
   const headers = {
     "User-Agent": UA,
     "Content-Type": "application/json",
@@ -961,16 +1121,25 @@ function parsePlayerResponseFromHtml(html) {
 
 async function requestPlayer(videoId, client, params) {
   const apiKey = getApiKey();
-  const headers = buildInnertubeHeaders(params || getAuthParams());
+  const headers = buildInnertubeHeaders(params || getAuthParams(), {
+    userAgent: client.userAgent,
+    clientVersion: client.clientVersion,
+    visitorData: getContext().client && getContext().client.visitorData,
+  });
   headers["X-YouTube-Client-Name"] = client.clientNameHeader;
   headers["X-YouTube-Client-Version"] = client.clientVersion;
   headers["User-Agent"] = client.userAgent;
   const res = await Widget.http.post(
-    SITE + "/youtubei/v1/player?key=" + apiKey + "&prettyPrint=false",
+    SITE + "/youtubei/v1/player?key=" + encodeURIComponent(apiKey),
     JSON.stringify(buildPlayerBody(videoId, client)),
-    { headers }
+    { headers: headers }
   );
-  return typeof res.data === "object" ? res.data : parseStoredJson(res.data);
+  const data =
+    typeof res.data === "object" ? res.data : parseStoredJson(res.data);
+  if (data && data.error) {
+    throw new Error(data.error.message || "player error");
+  }
+  return data;
 }
 
 async function fetchPlayerFromEmbedPage(videoId, params) {
@@ -1087,7 +1256,9 @@ async function loadTrending(params) {
     cacheAuthFromParams(params);
     await initSession(params);
     const page = Number(params.page || 1);
-    if (page > 1) return browseCategory("trending", params);
+    if (page > 1) {
+      return searchVideosInternal(SEARCH_FALLBACK.trending, page, params);
+    }
     return await parseTrendingVideos(params);
   } catch (error) {
     console.error("[loadTrending] 失败:", error.message || error);
