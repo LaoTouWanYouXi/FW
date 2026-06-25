@@ -4,6 +4,70 @@
   "icon": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/9331.jpeg",
   "widgets": [
     {
+      "id": "forward.javxx",
+      "title": "javxx",
+      "description": "javxx聚合模块",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javxx.js"
+    },
+    {
+      "id": "forward.javmove",
+      "title": "JavMove",
+      "description": "JavMove",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javmove.js"
+    },
+    {
+      "id": "forward.kanav",
+      "title": "KanAV",
+      "description": "KanAV 视频源",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.3",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/kanav.js"
+    },
+    {
+      "id": "forward.koreanpornmovie",
+      "title": "KoreaPornMovie",
+      "description": "KoreaPornMovie 韩国聚合模块",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/KoreaPornMovie.js"
+    },
+    {
+      "id": "forward.pppporn",
+      "title": "PppPorn",
+      "description": "PppPorn",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/ppp.js"
+    },
+    {
+      "id": "forward.rouvideo",
+      "title": "肉视频",
+      "description": "肉视频聚合模块",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/rou.js"
+    },
+    
+    {
+      "id": "bagua",
+      "title": "八卦",
+      "description": "八卦",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/bagua-v2.5.js"
+    },
+    {
       "id": "forward.tikporn",
       "title": "Tik.Porn",
       "description": "Tik.Porn — 短视频聚合",
@@ -20,15 +84,6 @@
       "version": "1.0.0",
       "author": "EL",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/xhamster.js"
-    },
-    {
-      "id": "bagua",
-      "title": "八卦",
-      "description": "八卦",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.0",
-      "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/bagua-v2.5.js"
     },
     {
       "id": "91porn_makka",
@@ -137,51 +192,6 @@
       "version": "0.9.6",
       "author": "網路",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/xvideos_int.js"
-    },
-    {
-      "id": "forward.koreanpornmovie",
-      "title": "KoreaPornMovie",
-      "description": "KoreaPornMovie 韩国聚合模块",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.0",
-      "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/KoreaPornMovie.js"
-    },
-    {
-      "id": "forward.javmove",
-      "title": "JavMove",
-      "description": "JavMove",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.0",
-      "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javmove.js"
-    },
-    {
-      "id": "forward.pppporn",
-      "title": "PppPorn",
-      "description": "PppPorn",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.0",
-      "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/ppp.js"
-    },
-    {
-      "id": "forward.rouvideo",
-      "title": "肉视频",
-      "description": "肉视频聚合模块",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.0",
-      "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/rou.js"
-    },
-    {
-      "id": "forward.kanav",
-      "title": "KanAV",
-      "description": "KanAV 视频源",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.3",
-      "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/kanav.js"
     }
   ]
 }
