@@ -3,63 +3,63 @@ WidgetMetadata = {
   title: "JavXX",
   version: "1.0.2",
   requiredVersion: "0.0.1",
-  description: "JavXX 视频聚合模块，支持热门影片、最新影片、最近更新、有码影片、无码影片、搜索",
+  description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u5f71\u7247\u3001\u6700\u65b0\u5f71\u7247\u3001\u6700\u8fd1\u66f4\u65b0\u3001\u6709\u7801\u5f71\u7247\u3001\u65e0\u7801\u5f71\u7247\u3001\u641c\u7d22",
   author: "Forward",
   site: "https://javxx.com",
   detailCacheDuration: 300,
   modules: [
     {
       id: "hot",
-      title: "热门影片",
+      title: "\u70ed\u95e8\u5f71\u7247",
       functionName: "loadHot",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "页码", type: "page" }
+        { name: "page", title: "\u9875\u7801", type: "page" }
       ]
     },
     {
       id: "new",
-      title: "最新影片",
+      title: "\u6700\u65b0\u5f71\u7247",
       functionName: "loadNew",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "页码", type: "page" }
+        { name: "page", title: "\u9875\u7801", type: "page" }
       ]
     },
     {
       id: "recent",
-      title: "最近更新",
+      title: "\u6700\u8fd1\u66f4\u65b0",
       functionName: "loadRecent",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "页码", type: "page" }
+        { name: "page", title: "\u9875\u7801", type: "page" }
       ]
     },
     {
       id: "censored",
-      title: "有码影片",
+      title: "\u6709\u7801\u5f71\u7247",
       functionName: "loadCensored",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "页码", type: "page" }
+        { name: "page", title: "\u9875\u7801", type: "page" }
       ]
     },
     {
       id: "uncensored",
-      title: "无码影片",
+      title: "\u65e0\u7801\u5f71\u7247",
       functionName: "loadUncensored",
       cacheDuration: 3600,
       params: [
-        { name: "page", title: "页码", type: "page" }
+        { name: "page", title: "\u9875\u7801", type: "page" }
       ]
     }
   ],
   search: {
-    title: "搜索",
+    title: "\u641c\u7d22",
     functionName: "search",
     params: [
-      { name: "keyword", title: "关键词", type: "input" },
-      { name: "page", title: "页码", type: "page" }
+      { name: "keyword", title: "\u5173\u952e\u8bcd", type: "input" },
+      { name: "page", title: "\u9875\u7801", type: "page" }
     ]
   }
 };
@@ -82,6 +82,128 @@ const CATEGORY_MAP = {
   censored: "/cn/censored",
   uncensored: "/cn/uncensored"
 };
+const VIDEO_CACHE_TTL = 3600;
+
+function sanitizeDurationText(text) {
+  if (!text) return undefined;
+  const t = String(text).trim();
+  return /^\d{1,2}:\d{2}(:\d{2})?$/.test(t) ? t : undefined;
+}
+
+function readVideoCache(link) {
+  try {
+    const raw = Widget.storage.get("vurl:v2:" + String(link));
+    if (!raw) return null;
+    const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (data && data.videoUrl && data.ts && Date.now() - data.ts < VIDEO_CACHE_TTL * 1000) {
+      return data;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function writeVideoCache(link, videoUrl, customHeaders) {
+  if (!videoUrl) return;
+  try {
+    Widget.storage.set("vurl:v2:" + String(link), JSON.stringify({
+      videoUrl,
+      customHeaders,
+      ts: Date.now(),
+    }));
+  } catch (e) {}
+}
+
+function buildPlayHeaders(videoUrl) {
+  const base = videoUrl && videoUrl.includes("surrit")
+    ? {
+        "User-Agent": HEADERS["User-Agent"],
+        "Origin": "https://surrit.store",
+        "Referer": "https://surrit.store/",
+      }
+    : {
+        "User-Agent": HEADERS["User-Agent"],
+        "Referer": "https://javxx.com/",
+        "Origin": "https://javxx.com",
+      };
+  return Object.assign({
+    "Accept": "*/*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+  }, base);
+}
+
+function resolveAbsoluteUrl(base, ref) {
+  if (!ref) return "";
+  if (ref.startsWith("http")) return ref;
+  if (ref.startsWith("//")) return "https:" + ref;
+  if (ref.startsWith("/")) {
+    const origin = String(base).match(/^(https?:\/\/[^/]+)/);
+    return origin ? origin[1] + ref : ref;
+  }
+  const root = String(base).substring(0, String(base).lastIndexOf("/") + 1);
+  return root + ref;
+}
+
+function parseStreamBandwidth(line) {
+  const m = String(line).match(/BANDWIDTH=(\d+)/i);
+  return m ? Number(m[1]) : 0;
+}
+
+async function optimizeM3u8Url(url, headers, depth) {
+  if (!url || !/\.m3u8(\?|$)/i.test(url) || depth > 2) return url;
+  try {
+    const res = await Widget.http.get(url, { headers });
+    const text = typeof res.data === "string" ? res.data : String(res.data || "");
+    if (!text.includes("#EXTM3U")) return url;
+
+    const lines = text.split(/\r?\n/);
+    const variants = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line.startsWith("#EXT-X-STREAM-INF")) continue;
+      const next = (lines[i + 1] || "").trim();
+      if (next && !next.startsWith("#")) {
+        variants.push({
+          bw: parseStreamBandwidth(line),
+          url: resolveAbsoluteUrl(url, next),
+        });
+      }
+    }
+    if (variants.length === 0) return url;
+
+    variants.sort((a, b) => a.bw - b.bw);
+    const picked = variants.length > 1 ? variants[1] : variants[0];
+    return await optimizeM3u8Url(picked.url, headers, depth + 1);
+  } catch (e) {
+    return url;
+  }
+}
+
+async function finalizeVideoUrl(url, headers) {
+  if (!url) return "";
+  if (/\.mp4(\?|$)/i.test(url)) return url;
+  if (/\.m3u8(\?|$)/i.test(url)) return await optimizeM3u8Url(url, headers, 0);
+  return url;
+}
+
+async function resolveSurritStream(videoId, surritBase) {
+  const token = encodeURIComponent(xorEncrypt(videoId, AES_KEY));
+  const streamHeaders = {
+    ...HEADERS,
+    "Referer": `${surritBase}/e/${videoId}?src=javxx`,
+    "X-Requested-With": "XMLHttpRequest",
+  };
+  const streamRes = await Widget.http.get(
+    `${surritBase}/stream?src=javxx&token=${token}`,
+    { headers: streamHeaders }
+  );
+  let streamJson = streamRes.data;
+  if (typeof streamJson === "string") streamJson = JSON.parse(streamJson);
+  const media = streamJson && streamJson.result && streamJson.result.media;
+  if (!media) return "";
+  const decryptedMedia = xorDecode(media, AES_KEY);
+  const parsed = JSON.parse(decryptedMedia);
+  return parsed.stream || parsed.mp4 || "";
+}
 
 function resolveUrl(href) {
   if (!href) return "";
@@ -161,15 +283,17 @@ function parseVideoList(html) {
 
     if (!title || !href) return;
 
-    items.push({
+    const item = {
       id: href,
       type: "url",
       title,
       backdropPath: cover || undefined,
-      durationText: duration,
       link: resolveUrl(href),
       mediaType: "movie",
-    });
+    };
+    const durationText = sanitizeDurationText(duration);
+    if (durationText) item.durationText = durationText;
+    items.push(item);
   });
 
   return items;
@@ -198,6 +322,7 @@ async function loadUncensored(params) { return loadCategory("uncensored", params
 async function loadDetail(link) {
   try {
     const detailUrl = String(link).startsWith("http") ? String(link) : BASE_URL + String(link);
+    const cached = readVideoCache(detailUrl);
     const res = await Widget.http.get(detailUrl, { headers: HEADERS });
     const html = res.data || "";
     const $ = Widget.html.load(html);
@@ -205,131 +330,85 @@ async function loadDetail(link) {
     const title = $("h1").first().text().trim() || $('meta[property="og:title"]').attr("content") || "";
     const cover = $('meta[property="og:image"]').attr("content") || $(".image > img").attr("src") || "";
 
-    let videoUrl = "";
+    let videoUrl = cached ? cached.videoUrl : "";
+    let playHeaders = cached ? cached.customHeaders : null;
 
-    // === 策略1：通过 data-url 解密 + stream API ===
-    const dataUrl = $("#video-files div").attr("data-url") || "";
-    if (dataUrl) {
-      try {
-        // XOR_KEY 解密 data-url → 得到 embed URL（如 https://surrit.store/e/2VPP3NN2）
-        const decodedUrl = xorDecode(dataUrl, XOR_KEY);
-
-        // 从 embed URL 提取 videoId（路径最后一段）
-        const urlPath = decodedUrl.replace(/https?:\/\/[^/]+/, "");
-        const videoId = urlPath.split("/").filter(Boolean).pop() || "";
-
-        if (videoId) {
-          // 用 AES_KEY 加密 videoId 生成 token
-          const token = encodeURIComponent(xorEncrypt(videoId, AES_KEY));
-
-          // 请求 stream API
-          const streamHeaders = {
-            ...HEADERS,
-            "Referer": `${SURRIT_BASE}/e/${videoId}?src=javxx`,
-            "X-Requested-With": "XMLHttpRequest",
-          };
-          const streamRes = await Widget.http.get(
-            `${SURRIT_BASE}/stream?src=javxx&token=${token}`,
-            { headers: streamHeaders }
-          );
-
-          // 解析响应（兼容字符串和对象格式）
-          let streamJson = streamRes.data;
-          if (typeof streamJson === "string") {
-            streamJson = JSON.parse(streamJson);
+    if (!videoUrl) {
+      const dataUrl = $("#video-files div").attr("data-url") || "";
+      if (dataUrl) {
+        try {
+          const decodedUrl = xorDecode(dataUrl, XOR_KEY);
+          const urlPath = decodedUrl.replace(/https?:\/\/[^/]+/, "");
+          const videoId = urlPath.split("/").filter(Boolean).pop() || "";
+          if (videoId) {
+            videoUrl = await resolveSurritStream(videoId, SURRIT_BASE);
           }
+        } catch (e) {}
+      }
 
-          const media = streamJson && streamJson.result && streamJson.result.media;
-          if (media) {
-            // 用 AES_KEY 解密 media → 得到 JSON { stream: "...", vtt: "..." }
-            const decryptedMedia = xorDecode(media, AES_KEY);
-            const parsed = JSON.parse(decryptedMedia);
-            videoUrl = parsed.stream || "";
+      if (!videoUrl) {
+        $("script").each((_, el) => {
+          const content = $(el).html() || "";
+          if (content.includes(".mp4")) {
+            const match = content.match(/https?:\/\/[\w./-]+\.mp4[\w./-]*/);
+            if (match) { videoUrl = match[0]; return false; }
+          }
+        });
+      }
+      if (!videoUrl) {
+        $("script").each((_, el) => {
+          const content = $(el).html() || "";
+          if (content.includes(".m3u8")) {
+            const match = content.match(/https?:\/\/[\w./-]+\.m3u8[\w./-]*/);
+            if (match) { videoUrl = match[0]; return false; }
+          }
+        });
+      }
+
+      if (!videoUrl) {
+        videoUrl = $('video source[type="video/mp4"]').attr("src")
+          || $("video source").attr("src")
+          || $("video").attr("src")
+          || "";
+      }
+      if (videoUrl && videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+
+      if (!videoUrl) {
+        const embedMatch = html.match(/https?:\/\/surrit\.\w+\/e\/[a-zA-Z0-9_]+/);
+        if (embedMatch) {
+          const embedUrl = embedMatch[0];
+          const surritBase = embedUrl.replace(/\/e\/.*/, "");
+          const vidMatch = embedUrl.match(/\/e\/([a-zA-Z0-9_]+)/);
+          if (vidMatch && vidMatch[1]) {
+            try {
+              videoUrl = await resolveSurritStream(vidMatch[1], surritBase);
+            } catch (e) {}
           }
         }
-      } catch (e) {}
-    }
+      }
 
-    // === 策略2：直接从 HTML 中提取 .m3u8 / .mp4 视频地址 ===
-    if (!videoUrl) {
-      $("script").each((_, el) => {
-        const content = $(el).html() || "";
-        if (content.includes(".m3u8")) {
-          const match = content.match(/https?:\/\/[\w./-]+\.m3u8[\w./-]*/);
-          if (match) { videoUrl = match[0]; return false; }
-        }
-      });
-    }
-    if (!videoUrl) {
-      $("script").each((_, el) => {
-        const content = $(el).html() || "";
-        if (content.includes(".mp4")) {
-          const match = content.match(/https?:\/\/[\w./-]+\.mp4[\w./-]*/);
-          if (match) { videoUrl = match[0]; return false; }
-        }
-      });
-    }
-
-    // === 策略3：从 video/source 标签提取 ===
-    if (!videoUrl) {
-      videoUrl = $('video source[type="video/mp4"]').attr("src")
-        || $("video source").attr("src")
-        || $("video").attr("src")
-        || "";
-    }
-    if (videoUrl && videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
-
-    // === 策略4：正则从 HTML 提取 surrit embed URL（surrit.store 可能已变更） ===
-    if (!videoUrl) {
-      const embedMatch = html.match(/https?:\/\/surrit\.\w+\/e\/[a-zA-Z0-9_]+/);
-      if (embedMatch) {
-        const embedUrl = embedMatch[0];
-        const surritBase = embedUrl.replace(/\/e\/.*/, "");
-        const vidMatch = embedUrl.match(/\/e\/([a-zA-Z0-9_]+)/);
-        if (vidMatch && vidMatch[1]) {
-          const videoId = vidMatch[1];
-          const token = encodeURIComponent(xorEncrypt(videoId, AES_KEY));
+      if (!videoUrl) {
+        const embedMatch = html.match(/https?:\/\/[a-z0-9.-]+\/e\/[a-zA-Z0-9_]+/);
+        if (embedMatch) {
           try {
-            const streamHeaders = {
-              ...HEADERS,
-              "Referer": `${surritBase}/e/${videoId}?src=javxx`,
-              "X-Requested-With": "XMLHttpRequest",
-            };
-            const streamRes = await Widget.http.get(
-              `${surritBase}/stream?src=javxx&token=${token}`,
-              { headers: streamHeaders }
-            );
-            let streamJson = streamRes.data;
-            if (typeof streamJson === "string") {
-              streamJson = JSON.parse(streamJson);
-            }
-            const media = streamJson && streamJson.result && streamJson.result.media;
-            if (media) {
-              const decryptedMedia = xorDecode(media, AES_KEY);
-              const parsed = JSON.parse(decryptedMedia);
-              videoUrl = parsed.stream || "";
-            }
+            const embedRes = await Widget.http.get(embedMatch[0], { headers: HEADERS });
+            const embedHtml = embedRes.data || "";
+            const m = embedHtml.match(/https?:\/\/[\w./-]+?\.mp4[\w./-]*/i)
+              || embedHtml.match(/https?:\/\/[\w./-]+?\.m3u8[\w./-]*/i);
+            if (m) videoUrl = m[0];
           } catch (e) {}
         }
       }
-    }
 
-    // === 策略5：尝试访问 embed 页面直接提取视频 ===
-    if (!videoUrl) {
-      const embedMatch = html.match(/https?:\/\/[a-z0-9.-]+\/e\/[a-zA-Z0-9_]+/);
-      if (embedMatch) {
-        try {
-          const embedRes = await Widget.http.get(embedMatch[0], { headers: HEADERS });
-          const embedHtml = embedRes.data || "";
-          // 从 embed 页面提取 m3u8/mp4
-          const m = embedHtml.match(/https?:\/\/[\w./-]+?\.(m3u8|mp4)[\w./-]*/);
-          if (m) videoUrl = m[0];
-        } catch (e) {}
+      if (videoUrl && !videoUrl.startsWith("http")) videoUrl = "";
+      if (videoUrl) {
+        playHeaders = buildPlayHeaders(videoUrl);
+        videoUrl = await finalizeVideoUrl(videoUrl, playHeaders);
+        writeVideoCache(detailUrl, videoUrl, playHeaders);
       }
     }
 
-    // 确保 videoUrl 是有效 URL
-    if (videoUrl && !videoUrl.startsWith("http")) videoUrl = "";
+    if (!playHeaders) playHeaders = buildPlayHeaders(videoUrl);
 
     const genreItems = [];
     $("a[href*='/genres/'], a[href*='/tag/'], .tags a").each((_, el) => {
@@ -350,7 +429,7 @@ async function loadDetail(link) {
       if (!rDetailLink || seenRelated.has(rDetailLink)) return;
       seenRelated.add(rDetailLink);
 
-      const rTitle = $rLink.text().trim() || "相关影片";
+      const rTitle = $rLink.text().trim() || "\u76f8\u5173\u5f71\u7247";
       const rCover = $el.find(".image > img").attr("src") || $el.find("img").attr("src") || "";
 
       relatedItems.push({
@@ -370,14 +449,12 @@ async function loadDetail(link) {
       backdropPath: cover || undefined,
       posterPath: cover || undefined,
       videoUrl: videoUrl || "",
-      playerType: videoUrl.includes(".m3u8") ? "system" : "system",
+      playerType: "system",
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
-      mediaType: "tv",
-      customHeaders: videoUrl && videoUrl.includes("surrit")
-        ? { "User-Agent": HEADERS["User-Agent"], "Origin": "https://surrit.store", "Referer": "https://surrit.store/" }
-        : { "User-Agent": HEADERS["User-Agent"], "Referer": "https://javxx.com/" }
+      mediaType: "movie",
+      customHeaders: playHeaders
     };
   } catch (e) {
     return null;

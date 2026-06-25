@@ -30,6 +30,110 @@ WidgetMetadata = {
 const BASE = "https://kanav.info";
 const CDN_REFERER = "https://kanav.ad/";  // CDN防盗链要求Referer为kanav.ad，而非kanav.info
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1";
+const VIDEO_CACHE_TTL = 3600;
+const PLAY_HEADERS = {
+  "User-Agent": UA,
+  "Referer": CDN_REFERER,
+  "Origin": "https://kanav.ad",
+  "Accept": "*/*",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+};
+
+function resolveAbsoluteUrl(base, ref) {
+  if (!ref) return "";
+  if (ref.startsWith("http")) return ref;
+  if (ref.startsWith("//")) return "https:" + ref;
+  if (ref.startsWith("/")) {
+    const origin = String(base).match(/^(https?:\/\/[^/]+)/);
+    return origin ? origin[1] + ref : ref;
+  }
+  const root = String(base).substring(0, String(base).lastIndexOf("/") + 1);
+  return root + ref;
+}
+
+function parseStreamBandwidth(line) {
+  const m = String(line).match(/BANDWIDTH=(\d+)/i);
+  return m ? Number(m[1]) : 0;
+}
+
+async function optimizeM3u8Url(url, headers, depth) {
+  if (!url || !/\.m3u8(\?|$)/i.test(url) || depth > 2) return url;
+  try {
+    const res = await Widget.http.get(url, { headers });
+    const text = typeof res.data === "string" ? res.data : String(res.data || "");
+    if (!text.includes("#EXTM3U")) return url;
+
+    const lines = text.split(/\r?\n/);
+    const variants = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line.startsWith("#EXT-X-STREAM-INF")) continue;
+      const next = (lines[i + 1] || "").trim();
+      if (next && !next.startsWith("#")) {
+        variants.push({
+          bw: parseStreamBandwidth(line),
+          url: resolveAbsoluteUrl(url, next),
+        });
+      }
+    }
+    if (variants.length === 0) return url;
+
+    variants.sort((a, b) => a.bw - b.bw);
+    const picked = variants.length > 1 ? variants[1] : variants[0];
+    return await optimizeM3u8Url(picked.url, headers, depth + 1);
+  } catch (e) {
+    return url;
+  }
+}
+
+async function finalizeVideoUrl(url, headers) {
+  if (!url) return "";
+  if (/\.mp4(\?|$)/i.test(url)) return url;
+  if (/\.m3u8(\?|$)/i.test(url)) return await optimizeM3u8Url(url, headers, 0);
+  return url;
+}
+
+async function deliverDetail(link, videoUrl) {
+  const headers = Object.assign({}, PLAY_HEADERS);
+  const finalUrl = await finalizeVideoUrl(videoUrl, headers);
+  writeVideoCache(link, finalUrl, headers);
+  return buildDetailItem(link, finalUrl, headers);
+}
+
+function readVideoCache(link) {
+  try {
+    const raw = Widget.storage.get("vurl:v2:" + String(link));
+    if (!raw) return null;
+    const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (data && data.videoUrl && data.ts && Date.now() - data.ts < VIDEO_CACHE_TTL * 1000) {
+      return data;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function writeVideoCache(link, videoUrl, customHeaders) {
+  if (!videoUrl) return;
+  try {
+    Widget.storage.set("vurl:v2:" + String(link), JSON.stringify({
+      videoUrl,
+      customHeaders,
+      ts: Date.now(),
+    }));
+  } catch (e) {}
+}
+
+function buildDetailItem(link, videoUrl, customHeaders) {
+  return {
+    id: link,
+    type: "url",
+    link,
+    videoUrl,
+    playerType: "system",
+    mediaType: "movie",
+    customHeaders,
+  };
+}
 
 function b64Decode(str) {
   str = str.replace(/-/g, "+").replace(/_/g, "/");
@@ -80,8 +184,10 @@ function isDirectStreamUrl(url) {
 }
 
 function extractVideoUrlFromHtml(html) {
-  // Strategy 1: Direct m3u8/mp4 URL in HTML (broadest match)
-  let m = html.match(/https?:\/\/[^\s"'<>\\,;)}\]]+?\.(m3u8|mp4)[^\s"'<>\\,;){\[]*/);
+  let m = html.match(/https?:\/\/[^\s"'<>\\,;)}\]]+?\.mp4[^\s"'<>\\,;){\[]*/i);
+  if (m) return m[0];
+
+  m = html.match(/https?:\/\/[^\s"'<>\\,;)}\]]+?\.(m3u8|mp4)[^\s"'<>\\,;){\[]*/i);
   if (m) return m[0];
 
   // Strategy 2: DPlayer / XGPlayer / CKPlayer / ArtPlayer config
@@ -146,20 +252,17 @@ function parseVideoList(html) {
     const title = entryTitle.find("a").text().trim();
     const posterPath = videoItem.find(".featured-content-image a img").attr("data-original");
     const remark = videoItem.find("span.model-view-left").text().trim();
-    const durationText = videoItem.find("span.model-view").text().trim();
-    const pubDate = entryTitle.text().trim().replace(title, "").trim();
     const detailUrl = href.startsWith("http") ? href : BASE + href;
-    items.push({
+    const item = {
       id: href,
       type: "url",
       title,
       backdropPath: posterPath || undefined,
       link: detailUrl,
-      durationText,
-      releaseDate: pubDate,
-      description: remark,
       mediaType: "movie",
-    });
+    };
+    if (remark) item.description = remark;
+    items.push(item);
   });
   return items;
 }
@@ -183,6 +286,9 @@ async function loadStreamer(params)  { return loadCategory("32", params); }
 async function loadAnime(params)     { return loadCategory("20", params); }
 
 async function loadDetail(link) {
+  const cached = readVideoCache(link);
+  if (cached) return buildDetailItem(link, cached.videoUrl, cached.customHeaders);
+
   const res = await Widget.http.get(String(link), { headers: { "User-Agent": UA } });
   const html = typeof res.data === "string" ? res.data : String(res.data);
 
@@ -265,42 +371,15 @@ async function loadDetail(link) {
     videoUrl = safeUriDecode(b64Decode(encodedUrl));
   }
 
-  // If direct stream URL, return immediately
   if (isDirectStreamUrl(videoUrl)) {
-    return {
-      id: link,
-      type: "url",
-      link,
-      videoUrl,
-      playerType: "system",
-      mediaType: "tv",
-      customHeaders: {
-        "User-Agent": UA,
-        "Referer": CDN_REFERER,
-        "Origin": "https://kanav.ad",
-      },
-    };
+    return deliverDetail(link, videoUrl);
   }
 
-  // --- Try to extract video URL from query parameters (parse API pattern) ---
   const queryVideo = extractVideoUrlFromQuery(videoUrl);
   if (queryVideo) {
-    return {
-      id: link,
-      type: "url",
-      link,
-      videoUrl: queryVideo,
-      playerType: "system",
-      mediaType: "tv",
-      customHeaders: {
-        "User-Agent": UA,
-        "Referer": CDN_REFERER,
-        "Origin": "https://kanav.ad",
-      },
-    };
+    return deliverDetail(link, queryVideo);
   }
 
-  // --- Fetch embed page and try multi-strategy extraction ---
   if (videoUrl && videoUrl.startsWith("http")) {
     try {
       const embedRes = await Widget.http.get(videoUrl, {
@@ -308,35 +387,14 @@ async function loadDetail(link) {
       });
       const embedHtml = typeof embedRes.data === "string" ? embedRes.data : JSON.stringify(embedRes.data);
       const extracted = extractVideoUrlFromHtml(embedHtml);
+      if (extracted && isDirectStreamUrl(extracted)) {
+        return deliverDetail(link, extracted);
+      }
       if (extracted) videoUrl = extracted;
     } catch (e) {}
-
-    // If the extracted URL is still an iframe embed, try one more level
-    if (videoUrl && !isDirectStreamUrl(videoUrl) && videoUrl.startsWith("http")) {
-      try {
-        const embedRes2 = await Widget.http.get(videoUrl, {
-          headers: { "User-Agent": UA, "Referer": CDN_REFERER },
-        });
-        const embedHtml2 = typeof embedRes2.data === "string" ? embedRes2.data : JSON.stringify(embedRes2.data);
-        const extracted2 = extractVideoUrlFromHtml(embedHtml2);
-        if (extracted2 && isDirectStreamUrl(extracted2)) videoUrl = extracted2;
-      } catch (e) {}
-    }
   }
 
-  return {
-    id: link,
-    type: "url",
-    link,
-    videoUrl,
-    playerType: "system",
-    mediaType: "tv",
-    customHeaders: {
-      "User-Agent": UA,
-      "Referer": CDN_REFERER,
-      "Origin": "https://kanav.ad",
-    },
-  };
+  return deliverDetail(link, videoUrl);
 }
 
 async function search(params = {}) {
