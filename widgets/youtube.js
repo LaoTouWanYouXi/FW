@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.youtube",
   title: "油管",
-  version: "1.1.0",
+  version: "1.2.0",
   requiredVersion: "0.0.1",
   description: "YouTube 视频源，支持推荐、热门、分类频道与搜索",
   author: "Forward",
@@ -10,13 +10,13 @@ WidgetMetadata = {
   globalParams: [
     {
       name: "cookie",
-      title: "Cookie（可选，用于登录态）",
+      title: "Cookie（粘贴 Cookie 值，不要带 Cookie: 前缀）",
       type: "input",
       value: "",
     },
     {
       name: "authorization",
-      title: "Authorization（可选）",
+      title: "Authorization（一般留空，有 Cookie 会自动生成）",
       type: "input",
       value: "",
     },
@@ -108,15 +108,34 @@ const STORAGE_KEY = "yt:";
 const PAGE_SIZE = 30;
 const VIDEO_CACHE_TTL = 3600;
 
-const FEED_MAP = {
-  music: "/feed/music",
-  gaming: "/gaming",
-  news: "/feed/news",
-  sports: "/feed/sports",
-  movies: "/feed/storefront",
+const BROWSE_MAP = {
+  home: "FEwhat_to_watch",
+  trending: "FEtrending",
+  music: "FEmusic",
+  gaming: "FEgaming",
+  news: "FEnews",
+  sports: "FEsports",
+  movies: "FEfilm",
+};
+
+const SEARCH_FALLBACK = {
+  home: "recommended",
+  trending: "trending",
+  music: "music",
+  gaming: "gaming",
+  news: "news",
+  sports: "sports",
+  movies: "movie",
 };
 
 const PLAYER_CLIENTS = [
+  {
+    clientName: "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+    clientVersion: "2.0",
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    clientNameHeader: "85",
+  },
   {
     clientName: "IOS",
     clientVersion: "19.45.4",
@@ -187,9 +206,129 @@ function parseFollows(params) {
   return Array.isArray(parsed) ? parsed : [];
 }
 
+function normalizeCookie(raw) {
+  if (!raw) return "";
+  let cookie = String(raw).trim();
+  if (/^cookie\s*:/i.test(cookie)) {
+    cookie = cookie.replace(/^cookie\s*:/i, "").trim();
+  }
+  return cookie;
+}
+
+function getCookieValue(cookie, name) {
+  if (!cookie) return "";
+  const parts = cookie.split(";");
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i].trim();
+    const eq = seg.indexOf("=");
+    if (eq <= 0) continue;
+    const key = seg.slice(0, eq).trim();
+    if (key === name) return decodeURIComponent(seg.slice(eq + 1));
+  }
+  return "";
+}
+
+function sha1Hex(message) {
+  const str = unescape(encodeURIComponent(String(message)));
+  const words = [];
+  for (let i = 0; i < str.length; i++) {
+    words[i >> 2] |= str.charCodeAt(i) << (24 - (i % 4) * 8);
+  }
+  words[str.length >> 2] |= 0x80 << (24 - (str.length % 4) * 8);
+  words[(((str.length + 8) >> 6) << 4) + 15] = str.length * 8;
+
+  let a = 1732584193;
+  let b = -271733879;
+  let c = -1732584194;
+  let d = 271733878;
+  let e = -1009589776;
+
+  for (let i = 0; i < words.length; i += 16) {
+    const oldA = a;
+    const oldB = b;
+    const oldC = c;
+    const oldD = d;
+    const oldE = e;
+    const w = new Array(80);
+
+    for (let t = 0; t < 16; t++) w[t] = words[i + t] | 0;
+    for (let t = 16; t < 80; t++) {
+      w[t] = ((w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]) << 1) |
+        ((w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]) >>> 31);
+    }
+
+    for (let t = 0; t < 80; t++) {
+      let f;
+      let k;
+      if (t < 20) {
+        f = (b & c) | (~b & d);
+        k = 1518500249;
+      } else if (t < 40) {
+        f = b ^ c ^ d;
+        k = 1859775393;
+      } else if (t < 60) {
+        f = (b & c) | (b & d) | (c & d);
+        k = -1894007588;
+      } else {
+        f = b ^ c ^ d;
+        k = -899497514;
+      }
+      const temp =
+        (((a << 5) | (a >>> 27)) + f + e + k + (w[t] | 0)) | 0;
+      e = d;
+      d = c;
+      c = ((b << 30) | (b >>> 2)) | 0;
+      b = a;
+      a = temp;
+    }
+
+    a = (a + oldA) | 0;
+    b = (b + oldB) | 0;
+    c = (c + oldC) | 0;
+    d = (d + oldD) | 0;
+    e = (e + oldE) | 0;
+  }
+
+  function hex(val) {
+    let out = "";
+    for (let i = 7; i >= 0; i--) {
+      out += ((val >>> (i * 4)) & 0x0f).toString(16);
+    }
+    return out;
+  }
+
+  return hex(a) + hex(b) + hex(c) + hex(d) + hex(e);
+}
+
+function buildSapisidHash(cookie) {
+  const names = ["__Secure-3PAPISID", "__Secure-1PAPISID", "SAPISID"];
+  let sapisid = "";
+  for (let i = 0; i < names.length; i++) {
+    sapisid = getCookieValue(cookie, names[i]);
+    if (sapisid) break;
+  }
+  if (!sapisid) return "";
+  const timestamp = Math.floor(Date.now() / 1000);
+  const origin = "https://www.youtube.com";
+  return (
+    "SAPISIDHASH " +
+    timestamp +
+    "_" +
+    sha1Hex(timestamp + " " + sapisid + " " + origin)
+  );
+}
+
 function cacheAuthFromParams(params) {
   if (!params) return;
-  if (params.cookie) storageSet("user_cookie", params.cookie);
+  const nextCookie = normalizeCookie(params.cookie || "");
+  const prevCookie = storageGet("user_cookie") || "";
+  if (nextCookie && nextCookie !== prevCookie) {
+    storageSet("session_tag", "");
+    storageSet("api_key", "");
+    storageSet("context", "");
+    storageSet("visitor_data", "");
+  }
+  if (nextCookie) storageSet("user_cookie", nextCookie);
   if (params.authorization) storageSet("user_authorization", params.authorization);
 }
 
@@ -203,8 +342,26 @@ function getAuthParams() {
 function buildAuthHeaders(params) {
   const headers = { "User-Agent": UA };
   const auth = params || getAuthParams();
-  if (auth.cookie) headers.Cookie = auth.cookie;
-  if (auth.authorization) headers.Authorization = auth.authorization;
+  const cookie = normalizeCookie(auth.cookie);
+  if (cookie) headers.Cookie = cookie;
+  let authorization = auth.authorization || "";
+  if (!authorization && cookie) authorization = buildSapisidHash(cookie);
+  if (authorization) headers.Authorization = authorization;
+  return headers;
+}
+
+function buildInnertubeHeaders(params) {
+  const headers = Object.assign(
+    {
+      "Content-Type": "application/json",
+      Accept: "*/*",
+      Origin: "https://www.youtube.com",
+      Referer: "https://www.youtube.com/",
+    },
+    buildAuthHeaders(params)
+  );
+  const visitorData = storageGet("visitor_data");
+  if (visitorData) headers["X-Goog-Visitor-Id"] = visitorData;
   return headers;
 }
 
@@ -303,12 +460,18 @@ function mapVideoRenderer(item) {
       item.title.runs &&
       item.title.runs[0] &&
       item.title.runs[0].text) ||
+    (item.headline && item.headline.simpleText) ||
     "";
   const pic = thumbUrl(item.thumbnail && item.thumbnail.thumbnails, videoId);
   const remarks =
-    (item.publishedTimeText && item.publishedTimeText.simpleText) || "";
+    (item.publishedTimeText && item.publishedTimeText.simpleText) ||
+    (item.viewCountText && item.viewCountText.simpleText) ||
+    "";
   const durationText = sanitizeDurationText(
-    item.lengthText && item.lengthText.simpleText
+    (item.lengthText && item.lengthText.simpleText) ||
+      (item.lengthText && item.lengthText.accessibility &&
+        item.lengthText.accessibility.accessibilityData &&
+        item.lengthText.accessibility.accessibilityData.label)
   );
   const mapped = {
     id: videoId,
@@ -341,6 +504,16 @@ function extractAllVideoRenderers(obj, out) {
     if (mapped) out.push(mapped);
     return;
   }
+  if (obj.compactVideoRenderer && obj.compactVideoRenderer.videoId) {
+    const mapped = mapVideoRenderer(obj.compactVideoRenderer);
+    if (mapped) out.push(mapped);
+    return;
+  }
+  if (obj.gridVideoRenderer && obj.gridVideoRenderer.videoId) {
+    const mapped = mapVideoRenderer(obj.gridVideoRenderer);
+    if (mapped) out.push(mapped);
+    return;
+  }
   if (
     obj.richItemRenderer &&
     obj.richItemRenderer.content &&
@@ -351,10 +524,14 @@ function extractAllVideoRenderers(obj, out) {
     return;
   }
   if (Array.isArray(obj)) {
-    obj.forEach((each) => extractAllVideoRenderers(each, out));
+    obj.forEach(function (each) {
+      extractAllVideoRenderers(each, out);
+    });
     return;
   }
-  Object.keys(obj).forEach((key) => extractAllVideoRenderers(obj[key], out));
+  Object.keys(obj).forEach(function (key) {
+    extractAllVideoRenderers(obj[key], out);
+  });
 }
 
 function mapRichGridVideos(videos) {
@@ -376,29 +553,111 @@ function mapRichGridVideos(videos) {
   return cards;
 }
 
-function parseInitialData(html) {
-  let matches = html.match(/var ytInitialData = (.*?);<\/script>/);
-  if (matches) return JSON.parse(matches[1]);
-  matches = html.match(/var ytInitialData = (.*)}}};/);
-  if (matches) return JSON.parse(matches[1] + "}}}");
+function extractJsonObject(str, start) {
+  if (!str || start < 0 || str.charAt(start) !== "{") return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < str.length; i++) {
+    const ch = str.charAt(i);
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      continue;
+    }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(str.slice(start, i + 1));
+        } catch (e) {
+          return null;
+        }
+      }
+    }
+  }
   return null;
 }
 
-async function initSession() {
-  const cachedKey = storageGet("api_key");
-  const cachedContext = storageGet("context");
-  if (cachedKey && cachedContext) return;
+function parseInitialData(html) {
+  const markers = ["var ytInitialData = ", "window[\"ytInitialData\"] = "];
+  for (let i = 0; i < markers.length; i++) {
+    const idx = html.indexOf(markers[i]);
+    if (idx >= 0) {
+      const parsed = extractJsonObject(html, idx + markers[i].length);
+      if (parsed) return parsed;
+    }
+  }
+  let matches = html.match(/var ytInitialData = (.*?);<\/script>/);
+  if (matches) {
+    try {
+      return JSON.parse(matches[1]);
+    } catch (e) {}
+  }
+  matches = html.match(/var ytInitialData = (.*)}}};/);
+  if (matches) {
+    try {
+      return JSON.parse(matches[1] + "}}}");
+    } catch (e) {}
+  }
+  return null;
+}
+
+function saveContinuationFromData(data, storageKey) {
+  const collected = [];
+  extractAllVideoRenderers(data, collected);
+  function walk(obj) {
+    if (!obj || typeof obj !== "object") return;
+    if (obj.continuationItemRenderer) {
+      const token =
+        obj.continuationItemRenderer.continuationEndpoint &&
+        obj.continuationItemRenderer.continuationEndpoint.continuationCommand &&
+        obj.continuationItemRenderer.continuationEndpoint.continuationCommand
+          .token;
+      if (token) storageSet(storageKey, token);
+    }
+    if (Array.isArray(obj)) {
+      obj.forEach(walk);
+      return;
+    }
+    Object.keys(obj).forEach(function (key) {
+      walk(obj[key]);
+    });
+  }
+  walk(data);
+}
+
+async function initSession(params) {
+  cacheAuthFromParams(params || {});
+  const auth = getAuthParams();
+  const sessionTag =
+    normalizeCookie(auth.cookie) + "|" + (auth.authorization || "");
+  if (
+    storageGet("session_tag") === sessionTag &&
+    storageGet("api_key") &&
+    storageGet("context")
+  ) {
+    return;
+  }
 
   const res = await Widget.http.get(SITE, {
-    headers: buildAuthHeaders(),
+    headers: buildAuthHeaders(auth),
   });
   const html = typeof res.data === "string" ? res.data : String(res.data || "");
-  const regex = /window.*?ytplayer=\{\};ytcfg\.set\((.*?)\);/;
+  const regex = /ytcfg\.set\((\{.*?\})\);/;
   const match = html.replace(/\n/g, "").match(regex);
   if (!match) throw new Error("无法解析 YouTube 会话配置");
   const ytcfg = JSON.parse(match[1]);
-  storageSet("api_key", ytcfg.INNERTUBE_API_KEY);
-  storageSet("context", JSON.stringify(ytcfg.INNERTUBE_CONTEXT));
+  storageSet("api_key", ytcfg.INNERTUBE_API_KEY || FALLBACK_API_KEY);
+  storageSet("context", JSON.stringify(ytcfg.INNERTUBE_CONTEXT || {}));
+  if (ytcfg.VISITOR_DATA) storageSet("visitor_data", ytcfg.VISITOR_DATA);
+  storageSet("session_tag", sessionTag);
 }
 
 function getApiKey() {
@@ -406,84 +665,149 @@ function getApiKey() {
 }
 
 function getContext() {
-  return parseStoredJson(storageGet("context")) || {};
+  const ctx = parseStoredJson(storageGet("context")) || {};
+  if (!ctx.client) {
+    ctx.client = {
+      clientName: "WEB",
+      clientVersion: "2.20241218.01.00",
+      hl: "zh-CN",
+      gl: "US",
+      userAgent: UA,
+      timeZone: "Asia/Shanghai",
+      utcOffsetMinutes: 480,
+    };
+  }
+  return ctx;
 }
 
-async function parseHomeVideos(page) {
-  const pageNum = Number(page || 1);
+async function postInnertube(path, body, params) {
+  const apiKey = getApiKey();
+  const res = await Widget.http.post(
+    SITE + path + "?key=" + apiKey + "&prettyPrint=false",
+    JSON.stringify(body),
+    { headers: buildInnertubeHeaders(params || getAuthParams()) }
+  );
+  return typeof res.data === "object" ? res.data : parseStoredJson(res.data);
+}
+
+async function browseCategory(categoryKey, params) {
+  const pageNum = Number((params && params.page) || 1);
+  const browseId = BROWSE_MAP[categoryKey];
+  const tokenKey = "browse_token:" + categoryKey;
+  const context = getContext();
+  let data;
+
   if (pageNum === 1) {
-    const url =
-      SITE + "/results?search_query=" + encodeURIComponent("最新|推薦");
-    const res = await Widget.http.get(url, {
-      headers: buildAuthHeaders(),
-    });
-    const html = typeof res.data === "string" ? res.data : String(res.data || "");
-    const parsedResponse = parseInitialData(html);
-    if (!parsedResponse) return [];
+    data = await postInnertube(
+      "/youtubei/v1/browse",
+      { context, browseId },
+      params
+    );
+  } else {
+    const continuation = storageGet(tokenKey);
+    if (!continuation) return [];
+    data = await postInnertube(
+      "/youtubei/v1/browse",
+      { context, continuation },
+      params
+    );
+  }
+
+  const collected = [];
+  extractAllVideoRenderers(data, collected);
+  saveContinuationFromData(data, tokenKey);
+  let items = dedupeItems(collected);
+
+  if (!items.length && pageNum === 1 && SEARCH_FALLBACK[categoryKey]) {
+    items = await searchVideosInternal(
+      SEARCH_FALLBACK[categoryKey],
+      1,
+      params
+    );
+  }
+  return items;
+}
+
+async function searchVideosInternal(keyword, page, params) {
+  await initSession(params);
+  const pageNum = Number(page || 1);
+  const context = getContext();
+  const tokenKey = "search_token:" + keyword;
+
+  if (pageNum === 1) {
+    const data = await postInnertube(
+      "/youtubei/v1/search",
+      {
+        context,
+        params: getSearchParam(),
+        query: keyword,
+      },
+      params
+    );
     const contents =
-      parsedResponse.contents.twoColumnSearchResultsRenderer.primaryContents
+      data.contents &&
+      data.contents.twoColumnSearchResultsRenderer &&
+      data.contents.twoColumnSearchResultsRenderer.primaryContents &&
+      data.contents.twoColumnSearchResultsRenderer.primaryContents
+        .sectionListRenderer &&
+      data.contents.twoColumnSearchResultsRenderer.primaryContents
         .sectionListRenderer.contents;
-    const items = contents[0].itemSectionRenderer.contents;
+    if (!contents || !contents[0]) return [];
+    const videos = contents[0].itemSectionRenderer.contents;
     const cards = [];
-    items.forEach((e) => {
+    videos.forEach(function (e) {
       const mapped = mapVideoRenderer(e.videoRenderer);
       if (mapped) cards.push(mapped);
     });
-    const token =
-      contents[1].continuationItemRenderer.continuationEndpoint
-        .continuationCommand.token;
-    storageSet("continuation_token", token);
+    if (contents[1]) {
+      const token =
+        contents[1].continuationItemRenderer.continuationEndpoint
+          .continuationCommand.token;
+      storageSet(tokenKey, token);
+    }
     return cards;
   }
 
-  const apiKey = getApiKey();
-  const context = getContext();
-  const continuationToken = storageGet("continuation_token");
-  const res = await Widget.http.post(
-    SITE + "/youtubei/v1/search?key=" + apiKey,
-    JSON.stringify({ context, continuation: continuationToken }),
-    {
-      headers: {
-        "User-Agent": UA,
-        "Content-Type": "application/json",
-      },
-    }
+  const continuation = storageGet(tokenKey);
+  if (!continuation) return [];
+  const data = await postInnertube(
+    "/youtubei/v1/search",
+    { context, continuation },
+    params
   );
-  const data = typeof res.data === "object" ? res.data : parseStoredJson(res.data);
+  const cmds = data.onResponseReceivedCommands || [];
+  if (!cmds.length) return [];
   const videos =
-    data.onResponseReceivedCommands[0].appendContinuationItemsAction
-      .continuationItems[0].itemSectionRenderer.contents;
+    cmds[0].appendContinuationItemsAction.continuationItems[0]
+      .itemSectionRenderer.contents;
   const cards = [];
-  videos.forEach((e) => {
+  videos.forEach(function (e) {
     const mapped = mapVideoRenderer(e.videoRenderer);
     if (mapped) cards.push(mapped);
   });
-  const token =
-    data.onResponseReceivedCommands[0].appendContinuationItemsAction
-      .continuationItems[1].continuationItemRenderer.continuationEndpoint
-      .continuationCommand.token;
-  storageSet("continuation_token", token);
+  const contItems =
+    cmds[0].appendContinuationItemsAction.continuationItems;
+  if (contItems[1]) {
+    const token =
+      contItems[1].continuationItemRenderer.continuationEndpoint
+        .continuationCommand.token;
+    storageSet(tokenKey, token);
+  }
   return cards;
 }
 
-async function parseFeedVideos(feedPath, page) {
+async function parseHomeVideos(page, params) {
   const pageNum = Number(page || 1);
-  if (pageNum > 1) return [];
-
-  const res = await Widget.http.get(SITE + feedPath, {
-    headers: Object.assign({ Origin: SITE }, buildAuthHeaders()),
-  });
-  const html = typeof res.data === "string" ? res.data : String(res.data || "");
-  const parsedResponse = parseInitialData(html);
-  if (!parsedResponse) return [];
-
-  const collected = [];
-  extractAllVideoRenderers(parsedResponse, collected);
-  return dedupeItems(collected);
+  if (pageNum === 1) {
+    let items = await browseCategory("home", params);
+    if (items.length) return items;
+    return searchVideosInternal("recommended", 1, params);
+  }
+  return browseCategory("home", Object.assign({}, params, { page: pageNum }));
 }
 
-async function parseTrendingVideos() {
-  return parseFeedVideos("/feed/trending", 1);
+async function parseTrendingVideos(params) {
+  return browseCategory("trending", { page: 1, cookie: params && params.cookie, authorization: params && params.authorization });
 }
 
 async function getChannelId(code) {
@@ -527,7 +851,9 @@ async function parseChannelVideos(code, page, type) {
     };
   }
 
-  const res = await Widget.http.post(url, JSON.stringify(postData), { headers });
+  const res = await Widget.http.post(url, JSON.stringify(postData), {
+    headers: buildInnertubeHeaders(getAuthParams()),
+  });
   const data = typeof res.data === "object" ? res.data : parseStoredJson(res.data);
   let videos;
   if (pageNum === 1) {
@@ -560,7 +886,8 @@ async function fetchChannelVideosFromHtml(code) {
 }
 
 function buildPlayerBody(videoId, client) {
-  const clientObj = {
+  const context = getContext();
+  const clientObj = Object.assign({}, context.client || {}, {
     clientName: client.clientName,
     clientVersion: client.clientVersion,
     userAgent: client.userAgent,
@@ -568,12 +895,12 @@ function buildPlayerBody(videoId, client) {
     gl: "US",
     timeZone: "Asia/Shanghai",
     utcOffsetMinutes: 480,
-  };
+  });
   if (client.deviceModel) clientObj.deviceModel = client.deviceModel;
   if (client.androidSdkVersion) clientObj.androidSdkVersion = client.androidSdkVersion;
 
   return {
-    context: { client: clientObj },
+    context: Object.assign({}, context, { client: clientObj }),
     videoId,
     playbackContext: {
       contentPlaybackContext: { html5Preference: "HTML5_PREF_WANTS" },
@@ -618,41 +945,40 @@ function extractPlayUrl(playerData) {
 }
 
 function parsePlayerResponseFromHtml(html) {
-  const patterns = [
-    /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/,
-    /var ytInitialPlayerResponse = (\{.+?\});/,
-    /"playerResponse":"(\{.+?\})"/,
+  const markers = [
+    "ytInitialPlayerResponse = ",
+    "var ytInitialPlayerResponse = ",
   ];
-  for (let i = 0; i < patterns.length; i++) {
-    const match = html.match(patterns[i]);
-    if (!match) continue;
-    try {
-      const raw = match[1].replace(/\\u0026/g, "&").replace(/\\"/g, '"');
-      return JSON.parse(raw);
-    } catch (e) {}
+  for (let i = 0; i < markers.length; i++) {
+    const idx = html.indexOf(markers[i]);
+    if (idx >= 0) {
+      const parsed = extractJsonObject(html, idx + markers[i].length);
+      if (parsed) return parsed;
+    }
   }
   return null;
 }
 
 async function requestPlayer(videoId, client, params) {
   const apiKey = getApiKey();
-  const authHeaders = buildAuthHeaders(params);
-  const headers = {
-    "Content-Type": "application/json",
-    "X-YouTube-Client-Name": client.clientNameHeader,
-    "X-YouTube-Client-Version": client.clientVersion,
-    Origin: "https://www.youtube.com",
-    "User-Agent": client.userAgent,
-  };
-  if (authHeaders.Cookie) headers.Cookie = authHeaders.Cookie;
-  if (authHeaders.Authorization) headers.Authorization = authHeaders.Authorization;
-
+  const headers = buildInnertubeHeaders(params || getAuthParams());
+  headers["X-YouTube-Client-Name"] = client.clientNameHeader;
+  headers["X-YouTube-Client-Version"] = client.clientVersion;
+  headers["User-Agent"] = client.userAgent;
   const res = await Widget.http.post(
     SITE + "/youtubei/v1/player?key=" + apiKey + "&prettyPrint=false",
     JSON.stringify(buildPlayerBody(videoId, client)),
     { headers }
   );
   return typeof res.data === "object" ? res.data : parseStoredJson(res.data);
+}
+
+async function fetchPlayerFromEmbedPage(videoId, params) {
+  const res = await Widget.http.get(SITE + "/embed/" + videoId, {
+    headers: Object.assign({ Origin: SITE }, buildAuthHeaders(params)),
+  });
+  const html = typeof res.data === "string" ? res.data : String(res.data || "");
+  return parsePlayerResponseFromHtml(html);
 }
 
 async function fetchPlayerFromWatchPage(videoId, params) {
@@ -665,33 +991,53 @@ async function fetchPlayerFromWatchPage(videoId, params) {
 
 async function fetchPlayerData(videoId, params) {
   let lastError = null;
+  const authParams = params || getAuthParams();
+  const clients = PLAYER_CLIENTS.slice();
+  if (normalizeCookie(authParams.cookie)) {
+    const webClient = clients.find(function (c) {
+      return c.clientName === "WEB";
+    });
+    if (webClient) {
+      clients.unshift(webClient);
+    }
+  }
 
-  for (let i = 0; i < PLAYER_CLIENTS.length; i++) {
+  for (let i = 0; i < clients.length; i++) {
     try {
-      const data = await requestPlayer(videoId, PLAYER_CLIENTS[i], params);
+      const data = await requestPlayer(videoId, clients[i], authParams);
       const status =
-        data &&
-        data.playabilityStatus &&
-        data.playabilityStatus.status;
+        data && data.playabilityStatus && data.playabilityStatus.status;
       const playUrl = extractPlayUrl(data);
-      if (playUrl && status !== "LOGIN_REQUIRED") {
+      if (playUrl && status !== "LOGIN_REQUIRED" && status !== "UNPLAYABLE") {
         return { playerData: data, playUrl };
       }
-      if (data && !playUrl) lastError = new Error("客户端无可用流: " + PLAYER_CLIENTS[i].clientName);
+      if (data && data.playabilityStatus && data.playabilityStatus.reason) {
+        lastError = new Error(data.playabilityStatus.reason);
+      }
     } catch (e) {
       lastError = e;
     }
   }
 
-  try {
-    const data = await fetchPlayerFromWatchPage(videoId, params);
-    const playUrl = extractPlayUrl(data);
-    if (playUrl) return { playerData: data, playUrl };
-  } catch (e) {
-    lastError = e;
+  const htmlFallbacks = [
+    function () {
+      return fetchPlayerFromWatchPage(videoId, authParams);
+    },
+    function () {
+      return fetchPlayerFromEmbedPage(videoId, authParams);
+    },
+  ];
+  for (let j = 0; j < htmlFallbacks.length; j++) {
+    try {
+      const data = await htmlFallbacks[j]();
+      const playUrl = extractPlayUrl(data);
+      if (playUrl) return { playerData: data, playUrl };
+    } catch (e) {
+      lastError = e;
+    }
   }
 
-  throw lastError || new Error("无法获取播放地址");
+  throw lastError || new Error("无法获取播放地址，请检查 Cookie 是否有效");
 }
 
 async function fetchPlayInfo(videoId, params) {
@@ -718,19 +1064,18 @@ function parseChannelLink(link) {
   return { code, type };
 }
 
-async function loadCategory(feedKey, params) {
+async function loadCategory(categoryKey, params) {
   cacheAuthFromParams(params);
-  await initSession();
-  const page = Number(params.page || 1);
-  return parseFeedVideos(FEED_MAP[feedKey], page);
+  await initSession(params);
+  return browseCategory(categoryKey, params);
 }
 
 async function loadHome(params) {
   try {
     cacheAuthFromParams(params);
-    await initSession();
+    await initSession(params);
     const page = Number(params.page || 1);
-    return await parseHomeVideos(page);
+    return await parseHomeVideos(page, params);
   } catch (error) {
     console.error("[loadHome] 失败:", error.message || error);
     throw error;
@@ -740,10 +1085,10 @@ async function loadHome(params) {
 async function loadTrending(params) {
   try {
     cacheAuthFromParams(params);
-    await initSession();
+    await initSession(params);
     const page = Number(params.page || 1);
-    if (page > 1) return [];
-    return await parseTrendingVideos();
+    if (page > 1) return browseCategory("trending", params);
+    return await parseTrendingVideos(params);
   } catch (error) {
     console.error("[loadTrending] 失败:", error.message || error);
     throw error;
@@ -798,7 +1143,7 @@ async function loadMovies(params) {
 async function loadFollow(params) {
   try {
     cacheAuthFromParams(params);
-    await initSession();
+    await initSession(params);
     const page = Number(params.page || 1);
     if (page > 1) return [];
 
@@ -823,7 +1168,8 @@ async function loadDetail(link) {
     const key = String(link);
 
     if (key.startsWith("yt-channel:")) {
-      await initSession();
+      cacheAuthFromParams(getAuthParams());
+      await initSession(getAuthParams());
       const { code, type } = parseChannelLink(key);
       let childItems = [];
       try {
@@ -844,6 +1190,7 @@ async function loadDetail(link) {
 
     if (key.startsWith("yt:")) {
       const videoId = key.replace(/^yt:/, "");
+      const authParams = getAuthParams();
       const cached = readVideoCache(key);
       if (cached) {
         return {
@@ -858,7 +1205,8 @@ async function loadDetail(link) {
         };
       }
 
-      const play = await fetchPlayInfo(videoId, getAuthParams());
+      await initSession(authParams);
+      const play = await fetchPlayInfo(videoId, authParams);
       writeVideoCache(key, play.playUrl, PLAY_HEADERS);
       return {
         id: videoId,
@@ -883,70 +1231,8 @@ async function loadDetail(link) {
   }
 }
 
-async function searchVideos(keyword, page) {
-  await initSession();
-  const pageNum = Number(page || 1);
-
-  if (pageNum === 1) {
-    const apiKey = getApiKey();
-    const context = getContext();
-    const url = SITE + "/youtubei/v1/search?key=" + apiKey;
-    const postData = {
-      context,
-      params: getSearchParam(),
-      query: keyword,
-    };
-    const res = await Widget.http.post(url, JSON.stringify(postData), {
-      headers: {
-        "User-Agent": UA,
-        "Content-Type": "application/json",
-      },
-    });
-    const data =
-      typeof res.data === "object" ? res.data : parseStoredJson(res.data);
-    const videos =
-      data.contents.twoColumnSearchResultsRenderer.primaryContents
-        .sectionListRenderer.contents[0].itemSectionRenderer.contents;
-    const cards = [];
-    videos.forEach((e) => {
-      const mapped = mapVideoRenderer(e.videoRenderer);
-      if (mapped) cards.push(mapped);
-    });
-    const token =
-      data.contents.twoColumnSearchResultsRenderer.primaryContents
-        .sectionListRenderer.contents[1].continuationItemRenderer
-        .continuationEndpoint.continuationCommand.token;
-    storageSet("search_continuation_token", token);
-    return cards;
-  }
-
-  const context = getContext();
-  const continuation = storageGet("search_continuation_token");
-  const res = await Widget.http.post(
-    SITE + "/youtubei/v1/search?prettyPrint=false",
-    JSON.stringify({ context, continuation }),
-    {
-      headers: {
-        "User-Agent": UA,
-        "Content-Type": "application/json",
-      },
-    }
-  );
-  const data = typeof res.data === "object" ? res.data : parseStoredJson(res.data);
-  const videos =
-    data.onResponseReceivedCommands[0].appendContinuationItemsAction
-      .continuationItems[0].itemSectionRenderer.contents;
-  const cards = [];
-  videos.forEach((e) => {
-    const mapped = mapVideoRenderer(e.videoRenderer);
-    if (mapped) cards.push(mapped);
-  });
-  const token =
-    data.onResponseReceivedCommands[0].appendContinuationItemsAction
-      .continuationItems[1].continuationItemRenderer.continuationEndpoint
-      .continuationCommand.token;
-  storageSet("search_continuation_token", token);
-  return cards;
+async function searchVideos(keyword, page, params) {
+  return searchVideosInternal(keyword, page, params);
 }
 
 async function search(params) {
@@ -954,7 +1240,7 @@ async function search(params) {
     cacheAuthFromParams(params);
     const keyword = (params.keyword || "").trim();
     if (!keyword) return [];
-    return await searchVideos(keyword, params.page);
+    return await searchVideos(keyword, params.page, params);
   } catch (error) {
     console.error("[search] 失败:", error.message || error);
     throw error;
