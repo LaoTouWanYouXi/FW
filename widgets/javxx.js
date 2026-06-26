@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.3.0",
+  version: "1.3.1",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
@@ -88,34 +88,70 @@ WidgetMetadata = {
     {
       id: "genres",
       title: "\u7c7b\u522b",
+      description: "\u6309\u7c7b\u522b\u6d4f\u89c8\u5f71\u7247",
+      requiresWebView: false,
       functionName: "loadGenres",
-      sectionMode: true,
       cacheDuration: 3600,
-      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+      params: [
+        {
+          name: "url",
+          title: "\u9009\u62e9\u7c7b\u522b",
+          type: "enumeration",
+          enumOptions: [{ title: "\u8bf7\u9009\u62e9", value: "" }]
+        },
+        { name: "page", title: "\u9875\u7801", type: "page" }
+      ]
     },
     {
       id: "actresses",
       title: "\u5973\u6f14\u5458",
+      description: "\u6309\u5973\u6f14\u5458\u6d4f\u89c8\u5f71\u7247",
+      requiresWebView: false,
       functionName: "loadActresses",
-      sectionMode: true,
       cacheDuration: 3600,
-      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+      params: [
+        {
+          name: "url",
+          title: "\u9009\u62e9\u5973\u6f14\u5458",
+          type: "enumeration",
+          enumOptions: [{ title: "\u8bf7\u9009\u62e9", value: "" }]
+        },
+        { name: "page", title: "\u9875\u7801", type: "page" }
+      ]
     },
     {
       id: "makers",
       title: "\u5236\u4f5c\u5546",
+      description: "\u6309\u5236\u4f5c\u5546\u6d4f\u89c8\u5f71\u7247",
+      requiresWebView: false,
       functionName: "loadMakers",
-      sectionMode: true,
       cacheDuration: 3600,
-      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+      params: [
+        {
+          name: "url",
+          title: "\u9009\u62e9\u5236\u4f5c\u5546",
+          type: "enumeration",
+          enumOptions: [{ title: "\u8bf7\u9009\u62e9", value: "" }]
+        },
+        { name: "page", title: "\u9875\u7801", type: "page" }
+      ]
     },
     {
       id: "series",
       title: "\u7cfb\u5217",
+      description: "\u6309\u7cfb\u5217\u6d4f\u89c8\u5f71\u7247",
+      requiresWebView: false,
       functionName: "loadSeries",
-      sectionMode: true,
       cacheDuration: 3600,
-      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+      params: [
+        {
+          name: "url",
+          title: "\u9009\u62e9\u7cfb\u5217",
+          type: "enumeration",
+          enumOptions: [{ title: "\u8bf7\u9009\u62e9", value: "" }]
+        },
+        { name: "page", title: "\u9875\u7801", type: "page" }
+      ]
     }
   ],
   search: {
@@ -163,12 +199,14 @@ const DIRECTORY_INDEX_MAP = {
   series: "/series"
 };
 
-const DIRECTORY_SECTION_TITLES = {
-  genres: "\u5168\u90e8\u7c7b\u522b",
-  actresses: "\u5168\u90e8\u5973\u6f14\u5458",
-  makers: "\u5168\u90e8\u5236\u4f5c\u5546",
-  series: "\u5168\u90e8\u7cfb\u5217"
+const BROWSE_ENUM_MAX_PAGES = {
+  genres: 20,
+  actresses: 10,
+  makers: 25,
+  series: 25
 };
+
+const BROWSE_ENUM_CACHE_TTL = 86400;
 
 function isVideoDetailUrl(url) {
   return /\/v\/[^/?#]+/i.test(String(url || ""));
@@ -258,53 +296,83 @@ function parseDirectoryList(html, indexPath) {
   return parseDirectoryListRegex(html, indexPath);
 }
 
-function getBrowseFilterId(moduleKey, params) {
-  if (!params) return "";
-  if (moduleKey === "actresses") {
-    return String(params.peopleId || params.genreId || "").trim();
-  }
-  return String(params.genreId || params.peopleId || "").trim();
+function getBrowseFilterUrl(params) {
+  return String((params && (params.url || params.genreId || params.peopleId)) || "").trim();
 }
 
-function toBrowseNavItem(entry, moduleKey) {
-  const url = entry.link || entry.url || entry.id;
-  const title = entry.title || url;
-  const item = {
-    id: url,
-    type: "url",
-    title,
-    link: url,
-    mediaType: "movie",
-  };
-  if (entry.posterPath) {
-    item.posterPath = entry.posterPath;
-    item.backdropPath = entry.backdropPath || entry.posterPath;
+function applyBrowseEnumOptions(moduleKey, options) {
+  if (!WidgetMetadata || !WidgetMetadata.modules || !options || !options.length) return;
+  for (let i = 0; i < WidgetMetadata.modules.length; i++) {
+    const mod = WidgetMetadata.modules[i];
+    if (mod.id !== moduleKey) continue;
+    for (let j = 0; j < mod.params.length; j++) {
+      if (mod.params[j].name === "url") {
+        mod.params[j].enumOptions = options;
+        return;
+      }
+    }
   }
-  if (moduleKey === "actresses") {
-    item.peoples = [{ id: url, title, role: "actress" }];
-  } else {
-    item.genreItems = [{ id: url, title }];
-  }
-  return item;
 }
 
-function buildBrowseSections(moduleKey, entries) {
-  if (!entries || !entries.length) return [];
-  const chunkSize = 36;
-  const baseTitle = DIRECTORY_SECTION_TITLES[moduleKey] || "\u5206\u7c7b";
-  const sections = [];
-  for (let i = 0; i < entries.length; i += chunkSize) {
-    const chunk = entries.slice(i, i + chunkSize);
-    sections.push({
-      id: "javxx-" + moduleKey + "-" + i,
-      type: "url",
-      title: i === 0 ? baseTitle : baseTitle + " (" + (i + 1) + "+)",
-      childItems: chunk.map(function (entry) {
-        return toBrowseNavItem(entry, moduleKey);
-      }),
-    });
+function readBrowseEnumCache(moduleKey) {
+  try {
+    const raw = Widget.storage.get("javxx:enum:" + moduleKey);
+    if (!raw) return null;
+    const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!data || !data.options || !data.ts) return null;
+    if (Date.now() - data.ts > BROWSE_ENUM_CACHE_TTL * 1000) return null;
+    return data.options;
+  } catch (e) {
+    return null;
   }
-  return sections;
+}
+
+function writeBrowseEnumCache(moduleKey, options) {
+  try {
+    Widget.storage.set("javxx:enum:" + moduleKey, JSON.stringify({ options: options, ts: Date.now() }));
+  } catch (e) {}
+}
+
+async function fetchBrowseEnumOptions(moduleKey) {
+  const indexPath = DIRECTORY_INDEX_MAP[moduleKey];
+  if (!indexPath) return [];
+  const maxPages = BROWSE_ENUM_MAX_PAGES[moduleKey] || 10;
+  const options = [];
+  const seen = new Set();
+
+  for (let page = 1; page <= maxPages; page++) {
+    let url = `${BASE_URL}${LANG_PREFIX}${indexPath}`;
+    if (page > 1) url += (url.includes("?") ? "&" : "?") + "page=" + page;
+    const res = await Widget.http.get(url, { headers: HEADERS });
+    const html = res.data || "";
+    if (isMigrationPage(html)) break;
+    const entries = parseDirectoryList(html, indexPath);
+    let added = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const value = entry.link || entry.id;
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      options.push({ title: entry.title || value, value: value });
+      added++;
+    }
+    if (added === 0) break;
+  }
+  return options;
+}
+
+async function ensureBrowseEnumOptions(moduleKey) {
+  let options = readBrowseEnumCache(moduleKey);
+  if (!options || !options.length) {
+    try {
+      options = await fetchBrowseEnumOptions(moduleKey);
+      if (options.length) writeBrowseEnumCache(moduleKey, options);
+    } catch (e) {
+      options = [];
+    }
+  }
+  if (options.length) applyBrowseEnumOptions(moduleKey, options);
+  return options;
 }
 
 function buildBrowseDetailMeta(detailUrl, title, moduleKey) {
@@ -922,7 +990,7 @@ async function loadCategory(categoryId, params) {
 }
 
 async function loadFilterList(params) {
-  const filterId = String((params && (params.genreId || params.peopleId)) || "").trim();
+  const filterId = getBrowseFilterUrl(params);
   if (!filterId) return [];
   const page = Number(params.page || 1);
   let url = filterId.startsWith("http") ? filterId : resolveUrl(filterId);
@@ -940,24 +1008,11 @@ async function loadFilterList(params) {
   }
 }
 
-async function loadBrowseModule(moduleKey, params) {
-  const filterId = getBrowseFilterId(moduleKey, params);
-  if (filterId) return loadFilterList(params);
-
-  const indexPath = DIRECTORY_INDEX_MAP[moduleKey];
-  if (!indexPath) return [];
-  const page = Number((params && params.page) || 1);
-  let url = `${BASE_URL}${LANG_PREFIX}${indexPath}`;
-  if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
-  try {
-    const res = await Widget.http.get(url, { headers: HEADERS });
-    const html = res.data || "";
-    if (isMigrationPage(html)) return [];
-    const entries = parseDirectoryList(html, indexPath);
-    return buildBrowseSections(moduleKey, entries);
-  } catch (e) {
-    return [];
-  }
+async function loadBrowseByUrl(moduleKey, params) {
+  await ensureBrowseEnumOptions(moduleKey);
+  const filterUrl = getBrowseFilterUrl(params);
+  if (!filterUrl) return [];
+  return loadFilterList(params);
 }
 
 async function loadGenreList(params) {
@@ -975,10 +1030,10 @@ async function loadUncensored(params) { return loadCategory("uncensored", params
 async function loadLeaked(params) { return loadCategory("leaked", params); }
 async function loadFc2(params) { return loadCategory("fc2", params); }
 async function loadSiro(params) { return loadCategory("siro", params); }
-async function loadGenres(params) { return loadBrowseModule("genres", params); }
-async function loadActresses(params) { return loadBrowseModule("actresses", params); }
-async function loadMakers(params) { return loadBrowseModule("makers", params); }
-async function loadSeries(params) { return loadBrowseModule("series", params); }
+async function loadGenres(params) { return loadBrowseByUrl("genres", params); }
+async function loadActresses(params) { return loadBrowseByUrl("actresses", params); }
+async function loadMakers(params) { return loadBrowseByUrl("makers", params); }
+async function loadSeries(params) { return loadBrowseByUrl("series", params); }
 
 async function resolveVideoUrl(html, detailUrl) {
   let videoUrl = extractM3u8FromHtml(html);
@@ -1070,17 +1125,12 @@ async function loadDetail(link) {
     }
 
     if (isDirectoryIndexUrl(detailUrl)) {
-      const indexPath = detailUrl.replace(BASE_URL + LANG_PREFIX, "").split("?")[0];
-      const moduleKey = detectBrowseModuleKey(detailUrl);
-      const dirItems = parseDirectoryList(html, indexPath);
-      const sections = moduleKey ? buildBrowseSections(moduleKey, dirItems) : [];
       return {
         id: link,
         type: "url",
-        title: title || indexPath,
+        title: title || detailUrl,
         link: detailUrl,
-        childItems: sections.length === 1 ? sections[0].childItems : undefined,
-        relatedItems: sections.length > 1 ? sections : undefined,
+        description: "\u8bf7\u5728\u6a21\u5757\u4e2d\u9009\u62e9\u5206\u7c7b\u540e\u67e5\u770b\u5f71\u7247",
         mediaType: "movie",
       };
     }
@@ -1165,7 +1215,7 @@ async function loadDetail(link) {
 }
 
 async function search(params) {
-  if (params && (params.genreId || params.peopleId)) return loadFilterList(params);
+  if (params && getBrowseFilterUrl(params)) return loadFilterList(params);
   const keyword = (params && params.keyword) || "";
   const page = Number((params && params.page) || 1);
   if (!keyword) return [];
