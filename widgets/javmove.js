@@ -1,13 +1,20 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.15",
+  version: "1.0.16",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
   site: "https://javmove.com",
   detailCacheDuration: 300,
   modules: [
+    {
+      id: "loadResource",
+      title: "\u52a0\u8f7d\u8d44\u6e90",
+      functionName: "loadResource",
+      type: "stream",
+      params: [],
+    },
     {
       id: "latest",
       title: "\u6700\u65b0\u5f71\u7247",
@@ -399,13 +406,6 @@ WidgetMetadata = {
         { name: "page", title: "\u9875\u7801", type: "page" },
       ],
     },
-    {
-      id: "loadResource",
-      title: "\u52a0\u8f7d\u8d44\u6e90",
-      functionName: "loadResource",
-      type: "stream",
-      params: [],
-    },
   ],
   search: {
     title: "\u641c\u7d22",
@@ -586,6 +586,68 @@ async function fetchMoviePartsBundle(baseUrl) {
   });
 
   return partsBundleInflight[key];
+}
+
+function extractResourceLink(params) {
+  if (!params) return "";
+  const keys = ["link", "id", "videoUrl", "tmdbId"];
+  for (let i = 0; i < keys.length; i++) {
+    const raw = params[keys[i]];
+    if (!raw) continue;
+    const u = normalizeMoviePageUrl(String(raw));
+    if (u && u.indexOf("/movie/") >= 0) return u;
+  }
+  return "";
+}
+
+async function resolveFreshPlayableParts(baseUrl) {
+  const key = normalizeMoviePageUrl(baseUrl);
+  if (!key) return [];
+
+  let html = "";
+  let parts = [];
+  const cached = readPartsBundle(key);
+  if (cached && cached.html && cached.parts && cached.parts.length) {
+    html = cached.html;
+    parts = cached.parts;
+  } else {
+    html = await fetchHtml(key, BASE_URL + "/");
+    const $ = safeLoadHtml(html);
+    parts = collectVideoParts($, key, html);
+  }
+
+  const resolvedParts = await resolvePartPlayback(parts, key);
+  writePartsBundle(key, {
+    html: html,
+    parts: parts,
+    resolvedParts: resolvedParts,
+    ts: Date.now(),
+  });
+  return resolvedParts.filter(function (part) {
+    return part && part.videoUrl;
+  });
+}
+
+function buildStreamResources(playable) {
+  const resources = [];
+  for (let i = 0; i < playable.length; i++) {
+    const part = playable[i];
+    const headers = part.customHeaders || buildPlayHeaders(part.videoUrl);
+    writeVideoCache(part.pageUrl, part.videoUrl, headers);
+    resources.push({
+      name:
+        playable.length > 1
+          ? "\u7b2c" + part.label + "\u96c6"
+          : "HD",
+      description:
+        playable.length > 1
+          ? "\u5206\u6bb5 " + part.label + " | MP4"
+          : "MP4",
+      url: part.videoUrl,
+      headers: headers,
+    });
+  }
+  return resources;
 }
 
 function buildPlayHeaders(videoUrl) {
@@ -1112,6 +1174,32 @@ async function measurePartDurations(resolvedParts) {
   return Promise.all(tasks);
 }
 
+function buildPartChildItems(baseUrl, resolvedParts, durations, cover) {
+  if (!resolvedParts || resolvedParts.length <= 1) return [];
+  const movieUrl = normalizeMoviePageUrl(baseUrl);
+  const items = [];
+  for (let i = 0; i < resolvedParts.length; i++) {
+    const part = resolvedParts[i];
+    if (!part || !part.videoUrl) continue;
+    const sec = durations[i] || 0;
+    items.push({
+      id: buildEpisodeItemId(movieUrl, part.label),
+      type: "url",
+      title: "\u7b2c" + part.label + "\u96c6",
+      videoUrl: part.videoUrl,
+      customHeaders: part.customHeaders || buildPlayHeaders(part.videoUrl),
+      duration: sec > 0 ? Math.round(sec) : undefined,
+      durationText: sec > 0 ? formatDurationSeconds(sec) : undefined,
+      backdropPath: cover || undefined,
+      posterPath: cover || undefined,
+      coverUrl: cover || undefined,
+      mediaType: "movie",
+      playerType: "system",
+    });
+  }
+  return items.length > 1 ? items : [];
+}
+
 function buildEpisodeItems(baseUrl, resolvedParts, durations, cover) {
   if (!resolvedParts || resolvedParts.length <= 1) return [];
   const movieUrl = normalizeMoviePageUrl(baseUrl);
@@ -1122,7 +1210,7 @@ function buildEpisodeItems(baseUrl, resolvedParts, durations, cover) {
     const sec = durations[i] || 0;
     const epNum = Number(part.label) || i + 1;
     items.push({
-      id: movieUrl,
+      id: buildEpisodeItemId(movieUrl, part.label),
       type: "url",
       title: "\u7b2c" + part.label + "\u96c6",
       link: movieUrl,
@@ -1831,6 +1919,12 @@ async function loadDetailInternal(link) {
       partDurations,
       cover
     );
+    const childItems = buildPartChildItems(
+      baseUrl,
+      resolvedParts,
+      partDurations,
+      cover
+    );
     const backdropPaths = extractDetailStills(html, $, cover);
     const description = buildDetailDescription(
       detailInfo,
@@ -1873,8 +1967,8 @@ async function loadDetailInternal(link) {
     const relatedItems = await enrichRelatedItems(html, $, baseUrl, 12);
 
     const displayDurationSec = totalDurationSec || partDurations[0] || 0;
-    const isSeries = episodeItems.length > 1;
-    const firstEpisode = episodeItems[0];
+    const isSeries = childItems.length > 1;
+    const firstEpisode = childItems[0] || episodeItems[0];
 
     return {
       id: baseUrl,
@@ -1883,7 +1977,7 @@ async function loadDetailInternal(link) {
       backdropPath: cover || undefined,
       posterPath: cover || undefined,
       backdropPaths: backdropPaths,
-      videoUrl: isSeries ? firstEpisode.videoUrl : videoUrl,
+      videoUrl: isSeries && firstEpisode ? firstEpisode.videoUrl : videoUrl,
       playerType: "system",
       description: description || undefined,
       duration: displayDurationSec > 0 ? Math.round(displayDurationSec) : undefined,
@@ -1892,11 +1986,12 @@ async function loadDetailInternal(link) {
       releaseDate: detailInfo.releaseDate || undefined,
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       peoples: peoples.length > 0 ? peoples : undefined,
+      childItems: isSeries ? childItems : undefined,
       episodeItems: isSeries ? episodeItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: baseUrl,
-      mediaType: "movie",
-      customHeaders: isSeries
+      mediaType: isSeries ? "tv" : "movie",
+      customHeaders: isSeries && firstEpisode
         ? firstEpisode.customHeaders || playHeaders
         : playHeaders,
     };
@@ -1907,36 +2002,21 @@ async function loadDetailInternal(link) {
 }
 
 async function loadResource(params) {
-  const link =
-    (params && (params.link || params.id || params.videoUrl)) || "";
-  const baseUrl = normalizeMoviePageUrl(String(link));
-  if (!baseUrl || baseUrl.indexOf("/movie/") < 0) return [];
+  const baseUrl = extractResourceLink(params || {});
+  if (!baseUrl) return [];
 
   try {
-    const bundle = await fetchMoviePartsBundle(baseUrl);
-    const playable = (bundle.resolvedParts || []).filter(function (part) {
-      return part && part.videoUrl;
-    });
+    let playable = await resolveFreshPlayableParts(baseUrl);
+    if (!playable.length) {
+      try {
+        Widget.storage.set("parts:v1:" + baseUrl, "");
+      } catch (e) {}
+      playable = await resolveFreshPlayableParts(baseUrl);
+    }
     if (!playable.length) return [];
 
+    const resources = buildStreamResources(playable);
     const epNum = Number((params && params.episode) || 0);
-    const resources = [];
-    for (let i = 0; i < playable.length; i++) {
-      const part = playable[i];
-      writeVideoCache(part.pageUrl, part.videoUrl, part.customHeaders);
-      resources.push({
-        name:
-          playable.length > 1
-            ? "\u7b2c" + part.label + "\u96c6"
-            : "HD",
-        description:
-          playable.length > 1
-            ? "\u5206\u6bb5 " + part.label + " | MP4"
-            : "MP4",
-        url: part.videoUrl,
-      });
-    }
-
     if (epNum > 0) {
       for (let j = 0; j < playable.length; j++) {
         const partEp = Number(playable[j].label) || j + 1;
