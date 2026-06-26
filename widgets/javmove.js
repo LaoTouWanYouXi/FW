@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.19",
+  version: "1.0.20",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -499,7 +499,7 @@ function resolveAbsoluteUrl(base, ref) {
 
 function readVideoCache(link) {
   try {
-    const raw = Widget.storage.get("vurl:v2:" + String(link));
+    const raw = Widget.storage.get("vurl:v3:" + String(link));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (
@@ -518,7 +518,7 @@ function writeVideoCache(link, videoUrl, customHeaders) {
   if (!videoUrl) return;
   try {
     Widget.storage.set(
-      "vurl:v2:" + String(link),
+      "vurl:v3:" + String(link),
       JSON.stringify({
         videoUrl: videoUrl,
         customHeaders: customHeaders,
@@ -530,7 +530,7 @@ function writeVideoCache(link, videoUrl, customHeaders) {
 
 function readPartsBundle(baseUrl) {
   try {
-    const raw = Widget.storage.get("parts:v1:" + String(baseUrl));
+    const raw = Widget.storage.get("parts:v2:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (
@@ -549,7 +549,7 @@ function readPartsBundle(baseUrl) {
 function writePartsBundle(baseUrl, bundle) {
   try {
     Widget.storage.set(
-      "parts:v1:" + String(baseUrl),
+      "parts:v2:" + String(baseUrl),
       JSON.stringify({
         html: bundle.html,
         parts: bundle.parts,
@@ -564,15 +564,20 @@ async function fetchMoviePartsBundle(baseUrl) {
   const key = normalizeMoviePageUrl(baseUrl);
   if (!key) throw new Error("invalid movie url");
 
-  const cached = readPartsBundle(key);
-  if (cached) return cached;
-
   if (partsBundleInflight[key]) return partsBundleInflight[key];
 
   partsBundleInflight[key] = (async function () {
-    const html = await fetchHtml(key, BASE_URL + "/");
-    const $ = safeLoadHtml(html);
-    const parts = collectVideoParts($, key, html);
+    let html = "";
+    let parts = [];
+    const cached = readPartsBundle(key);
+    if (cached && cached.html && cached.parts && cached.parts.length) {
+      html = cached.html;
+      parts = cached.parts;
+    } else {
+      html = await fetchHtml(key, BASE_URL + "/");
+      const $ = safeLoadHtml(html);
+      parts = collectVideoParts($, key, html);
+    }
     const resolvedParts = await resolvePartPlayback(parts, key);
     const bundle = {
       html: html,
@@ -591,7 +596,7 @@ async function fetchMoviePartsBundle(baseUrl) {
 
 function extractResourceLink(params) {
   if (!params) return "";
-  const keys = ["link", "id", "videoUrl", "tmdbId"];
+  const keys = ["link", "id", "tmdbId"];
   for (let i = 0; i < keys.length; i++) {
     const raw = params[keys[i]];
     if (!raw) continue;
@@ -629,11 +634,12 @@ async function resolveFreshPlayableParts(baseUrl) {
   });
 }
 
-function buildStreamResources(playable, seriesTitle) {
+function buildStreamResources(playable) {
   const resources = [];
   for (let i = 0; i < playable.length; i++) {
     const part = playable[i];
-    const headers = part.customHeaders || buildPlayHeaders(part.videoUrl);
+    const headers =
+      part.customHeaders || buildPlayHeaders(part.videoUrl, part.pageUrl);
     writeVideoCache(part.pageUrl, part.videoUrl, headers);
     resources.push({
       name:
@@ -646,16 +652,18 @@ function buildStreamResources(playable, seriesTitle) {
           : "MP4",
       url: part.videoUrl,
       headers: headers,
+      customHeaders: headers,
     });
   }
   return resources;
 }
 
-function buildPlayHeaders(videoUrl) {
+function buildPlayHeaders(videoUrl, pageReferer) {
+  const ref = pageReferer || BASE_URL + "/";
   return mergeHeaders({
     Accept: "*/*",
     Origin: "https://javmove.com",
-    Referer: "https://javmove.com/",
+    Referer: ref,
   });
 }
 
@@ -782,14 +790,14 @@ async function resolveVideoUrlForPage(pageUrl, referer) {
   if (cached && cached.videoUrl) {
     return {
       videoUrl: cached.videoUrl,
-      customHeaders: cached.customHeaders || buildPlayHeaders(cached.videoUrl),
+      customHeaders: buildPlayHeaders(cached.videoUrl, pageUrl),
     };
   }
   const html = await fetchHtml(pageUrl, referer || pageUrl);
   const $ = safeLoadHtml(html);
   const videoUrl = await resolveVideoUrlFromHtml($, pageUrl, html);
   if (!videoUrl) return null;
-  const customHeaders = buildPlayHeaders(videoUrl);
+  const customHeaders = buildPlayHeaders(videoUrl, pageUrl);
   writeVideoCache(pageUrl, videoUrl, customHeaders);
   return { videoUrl: videoUrl, customHeaders: customHeaders };
 }
@@ -1140,31 +1148,30 @@ function buildDetailDescription(info, partCount, totalSec, partSec, synopsisText
 
 async function resolvePartPlayback(parts, baseUrl) {
   const referer = baseUrl || BASE_URL + "/";
-  const tasks = parts.map(function (part, index) {
-    return resolveVideoUrlForPage(part.pageUrl, referer)
-      .then(function (playback) {
-        if (!playback && index === 0) {
-          return resolveVideoUrlForPage(part.pageUrl, part.pageUrl);
-        }
-        return playback;
-      })
-      .then(function (playback) {
-        return playback
-          ? {
-              label: part.label,
-              pageUrl: part.pageUrl,
-              videoUrl: playback.videoUrl,
-              customHeaders: playback.customHeaders,
-            }
-          : {
-              label: part.label,
-              pageUrl: part.pageUrl,
-              videoUrl: "",
-              customHeaders: null,
-            };
-      });
-  });
-  return Promise.all(tasks);
+  const resolved = [];
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    let playback = await resolveVideoUrlForPage(part.pageUrl, referer);
+    if (!playback && index === 0) {
+      playback = await resolveVideoUrlForPage(part.pageUrl, part.pageUrl);
+    }
+    resolved.push(
+      playback
+        ? {
+            label: part.label,
+            pageUrl: part.pageUrl,
+            videoUrl: playback.videoUrl,
+            customHeaders: buildPlayHeaders(playback.videoUrl, part.pageUrl),
+          }
+        : {
+            label: part.label,
+            pageUrl: part.pageUrl,
+            videoUrl: "",
+            customHeaders: null,
+          }
+    );
+  }
+  return resolved;
 }
 
 async function measurePartDurations(resolvedParts) {
@@ -1184,9 +1191,10 @@ function stripUndefined(obj) {
   return out;
 }
 
-function buildPartChildItems(baseUrl, displayTitle, resolvedParts, durations, cover) {
+function buildEpisodeItems(baseUrl, displayTitle, resolvedParts, durations, cover) {
   if (!resolvedParts || resolvedParts.length <= 1) return [];
   const movieUrl = normalizeMoviePageUrl(baseUrl);
+  const seriesTitle = displayTitle || formatMovieCode("", "");
   const items = [];
   for (let i = 0; i < resolvedParts.length; i++) {
     const part = resolvedParts[i];
@@ -1197,10 +1205,12 @@ function buildPartChildItems(baseUrl, displayTitle, resolvedParts, durations, co
       stripUndefined({
         id: buildEpisodeItemId(movieUrl, part.label),
         type: "url",
+        title: seriesTitle,
         episodeName: "\u7b2c" + part.label + "\u96c6",
         episode: epNum,
         videoUrl: part.videoUrl,
-        customHeaders: part.customHeaders || buildPlayHeaders(part.videoUrl),
+        customHeaders:
+          part.customHeaders || buildPlayHeaders(part.videoUrl, part.pageUrl),
         duration: sec > 0 ? Math.round(sec) : undefined,
         durationText: sec > 0 ? formatDurationSeconds(sec) : undefined,
         backdropPath: cover || undefined,
@@ -1216,7 +1226,7 @@ function buildPartChildItems(baseUrl, displayTitle, resolvedParts, durations, co
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v4:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v5:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1230,7 +1240,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v4:" + String(baseUrl),
+      "detail:v5:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1245,13 +1255,13 @@ function mergeFreshPlayback(item, resolvedParts) {
 
   const merged = Object.assign({}, item);
   merged.videoUrl = playable[0].videoUrl;
-  merged.customHeaders =
-    playable[0].customHeaders || buildPlayHeaders(playable[0].videoUrl);
+  merged.customHeaders = buildPlayHeaders(playable[0].videoUrl, playable[0].pageUrl);
 
-  if (merged.childItems && merged.childItems.length > 1) {
-    const nextChildren = [];
-    for (let i = 0; i < merged.childItems.length; i++) {
-      const child = Object.assign({}, merged.childItems[i]);
+  function refreshEpisodeList(listKey) {
+    if (!merged[listKey] || merged[listKey].length <= 1) return;
+    const nextItems = [];
+    for (let i = 0; i < merged[listKey].length; i++) {
+      const child = Object.assign({}, merged[listKey][i]);
       const label = extractActivePartLabel(child.id || "");
       let part = null;
       for (let j = 0; j < playable.length; j++) {
@@ -1263,17 +1273,19 @@ function mergeFreshPlayback(item, resolvedParts) {
       if (!part && playable[i]) part = playable[i];
       if (part && part.videoUrl) {
         child.videoUrl = part.videoUrl;
-        child.customHeaders =
-          part.customHeaders || buildPlayHeaders(part.videoUrl);
+        child.customHeaders = buildPlayHeaders(part.videoUrl, part.pageUrl);
       }
-      nextChildren.push(child);
+      nextItems.push(child);
     }
-    merged.childItems = nextChildren;
-    if (nextChildren[0] && nextChildren[0].videoUrl) {
-      merged.videoUrl = nextChildren[0].videoUrl;
-      merged.customHeaders = nextChildren[0].customHeaders || merged.customHeaders;
+    merged[listKey] = nextItems;
+    if (nextItems[0] && nextItems[0].videoUrl) {
+      merged.videoUrl = nextItems[0].videoUrl;
+      merged.customHeaders = nextItems[0].customHeaders || merged.customHeaders;
     }
   }
+
+  refreshEpisodeList("episodeItems");
+  refreshEpisodeList("childItems");
   return stripUndefined(merged);
 }
 
@@ -1946,7 +1958,6 @@ async function loadDetailInternal(link) {
     const mainPart = playableParts[0];
 
     const videoUrl = mainPart.videoUrl;
-    const playHeaders = mainPart.customHeaders || buildPlayHeaders(videoUrl);
 
     const partDurations =
       resolvedParts.length > 1
@@ -1955,7 +1966,7 @@ async function loadDetailInternal(link) {
           })
         : await measurePartDurations(resolvedParts);
 
-    const childItems = buildPartChildItems(
+    const childItems = buildEpisodeItems(
       baseUrl,
       displayTitle,
       resolvedParts,
@@ -2026,13 +2037,15 @@ async function loadDetailInternal(link) {
       releaseDate: detailInfo.releaseDate || undefined,
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       peoples: peoples.length > 0 ? peoples : undefined,
-      childItems: isSeries ? childItems : undefined,
+      episodeItems: isSeries ? childItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: baseUrl,
       mediaType: "movie",
-      customHeaders: isSeries && firstEpisode
-        ? firstEpisode.customHeaders || playHeaders
-        : playHeaders,
+      customHeaders:
+        isSeries && firstEpisode
+          ? firstEpisode.customHeaders ||
+            buildPlayHeaders(firstEpisode.videoUrl, playableParts[0].pageUrl)
+          : buildPlayHeaders(videoUrl, mainPart.pageUrl),
     });
     writeDetailItemCache(baseUrl, detailItem);
     return detailItem;
@@ -2050,7 +2063,7 @@ async function loadResource(params) {
     let playable = await resolveFreshPlayableParts(baseUrl);
     if (!playable.length) {
       try {
-        Widget.storage.set("parts:v1:" + baseUrl, "");
+        Widget.storage.set("parts:v2:" + baseUrl, "");
       } catch (e) {}
       playable = await resolveFreshPlayableParts(baseUrl);
     }

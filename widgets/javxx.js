@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.8.0",
+  version: "1.8.1",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
@@ -505,8 +505,6 @@ function parseDirectoryList(html, indexPath) {
       type: "url",
       title,
       backdropPath: cover,
-      posterPath: cover,
-      coverUrl: cover,
       link: detailLink,
       mediaType: "movie",
     });
@@ -985,8 +983,6 @@ function makeListVideoItem(href, title, coverUrl, durationText, scopeHtml) {
     type: "url",
     title: finalTitle,
     backdropPath: backdrop,
-    posterPath: backdrop,
-    coverUrl: backdrop,
     link: detailLink,
     mediaType: "movie",
   };
