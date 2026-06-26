@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.17",
+  version: "1.0.18",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -1175,7 +1175,7 @@ async function measurePartDurations(resolvedParts) {
   return Promise.all(tasks);
 }
 
-function buildPartChildItems(baseUrl, displayTitle, resolvedParts, durations, cover) {
+function buildEpisodeItems(baseUrl, displayTitle, resolvedParts, durations, cover) {
   if (!resolvedParts || resolvedParts.length <= 1) return [];
   const movieUrl = normalizeMoviePageUrl(baseUrl);
   const seriesTitle = displayTitle || formatMovieCode("", "");
@@ -1192,6 +1192,7 @@ function buildPartChildItems(baseUrl, displayTitle, resolvedParts, durations, co
       title: seriesTitle,
       episodeName: epLabel,
       episode: epNum,
+      link: movieUrl,
       videoUrl: part.videoUrl,
       customHeaders: part.customHeaders || buildPlayHeaders(part.videoUrl),
       duration: sec > 0 ? Math.round(sec) : undefined,
@@ -1208,7 +1209,7 @@ function buildPartChildItems(baseUrl, displayTitle, resolvedParts, durations, co
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v2:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v3:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1222,7 +1223,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v2:" + String(baseUrl),
+      "detail:v3:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1240,11 +1241,11 @@ function mergeFreshPlayback(item, resolvedParts) {
   merged.customHeaders =
     playable[0].customHeaders || buildPlayHeaders(playable[0].videoUrl);
 
-  if (merged.childItems && merged.childItems.length > 1) {
-    const nextChildren = [];
-    for (let i = 0; i < merged.childItems.length; i++) {
-      const child = Object.assign({}, merged.childItems[i]);
-      const label = extractActivePartLabel(child.id || "");
+  if (merged.episodeItems && merged.episodeItems.length > 1) {
+    const nextEpisodes = [];
+    for (let i = 0; i < merged.episodeItems.length; i++) {
+      const ep = Object.assign({}, merged.episodeItems[i]);
+      const label = extractActivePartLabel(ep.id || "");
       let part = null;
       for (let j = 0; j < playable.length; j++) {
         if (String(playable[j].label) === String(label)) {
@@ -1254,16 +1255,16 @@ function mergeFreshPlayback(item, resolvedParts) {
       }
       if (!part && playable[i]) part = playable[i];
       if (part && part.videoUrl) {
-        child.videoUrl = part.videoUrl;
-        child.customHeaders =
+        ep.videoUrl = part.videoUrl;
+        ep.customHeaders =
           part.customHeaders || buildPlayHeaders(part.videoUrl);
       }
-      nextChildren.push(child);
+      nextEpisodes.push(ep);
     }
-    merged.childItems = nextChildren;
-    if (nextChildren[0] && nextChildren[0].videoUrl) {
-      merged.videoUrl = nextChildren[0].videoUrl;
-      merged.customHeaders = nextChildren[0].customHeaders || merged.customHeaders;
+    merged.episodeItems = nextEpisodes;
+    if (nextEpisodes[0] && nextEpisodes[0].videoUrl) {
+      merged.videoUrl = nextEpisodes[0].videoUrl;
+      merged.customHeaders = nextEpisodes[0].customHeaders || merged.customHeaders;
     }
   }
   return merged;
@@ -1960,7 +1961,7 @@ async function loadDetailInternal(link) {
       avgPartSec = counted > 0 ? sum / counted : 0;
     }
 
-    const childItems = buildPartChildItems(
+    const episodeItems = buildEpisodeItems(
       baseUrl,
       displayTitle,
       resolvedParts,
@@ -2009,8 +2010,8 @@ async function loadDetailInternal(link) {
     const relatedItems = await enrichRelatedItems(html, $, baseUrl, 12);
 
     const displayDurationSec = totalDurationSec || partDurations[0] || 0;
-    const isSeries = childItems.length > 1;
-    const firstEpisode = childItems[0];
+    const isSeries = episodeItems.length > 1;
+    const firstEpisode = episodeItems[0];
 
     const detailItem = {
       id: baseUrl,
@@ -2029,10 +2030,12 @@ async function loadDetailInternal(link) {
       releaseDate: detailInfo.releaseDate || undefined,
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       peoples: peoples.length > 0 ? peoples : undefined,
-      childItems: isSeries ? childItems : undefined,
+      episodeItems: isSeries ? episodeItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: baseUrl,
       mediaType: isSeries ? "tv" : "movie",
+      season: isSeries ? 1 : undefined,
+      episode: isSeries ? 1 : undefined,
       customHeaders: isSeries && firstEpisode
         ? firstEpisode.customHeaders || playHeaders
         : playHeaders,

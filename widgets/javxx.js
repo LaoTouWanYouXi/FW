@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.7.2",
+  version: "1.7.3",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
@@ -301,11 +301,12 @@ const AES_KEY = "ym1eS4t0jTLakZYQ";
 const STREAM_SOURCES = ["123av", "javxx", "missav"];
 const SURRIT_BASES = ["https://surrit.store", "https://surrit.com"];
 const VIDEO_CACHE_TTL = 3600;
+const COOKIE_STORE_KEY = "http:cookies:123av";
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-  "Referer": "https://123av.com/"
+  Referer: "https://123av.com/",
 };
 const CATEGORY_MAP = {
   hot: "/hot",
@@ -339,6 +340,82 @@ function decodeHtml(text) {
 
 function mergeHeaders(extra) {
   return Object.assign({}, HEADERS, extra || {});
+}
+
+function loadStoredCookies() {
+  try {
+    return String(Widget.storage.get(COOKIE_STORE_KEY) || "").trim();
+  } catch (e) {
+    return "";
+  }
+}
+
+function saveStoredCookies(cookieStr) {
+  const text = String(cookieStr || "").trim();
+  if (!text) return;
+  try {
+    Widget.storage.set(COOKIE_STORE_KEY, text);
+  } catch (e) {}
+}
+
+function mergeCookieStrings(oldCookie, setCookieLines) {
+  const jar = {};
+  String(oldCookie || "")
+    .split(";")
+    .forEach(function (part) {
+      const piece = part.trim();
+      if (!piece) return;
+      const eq = piece.indexOf("=");
+      if (eq <= 0) return;
+      jar[piece.slice(0, eq).trim()] = piece.slice(eq + 1).trim();
+    });
+  (setCookieLines || []).forEach(function (line) {
+    const piece = String(line || "").split(";")[0].trim();
+    if (!piece) return;
+    const eq = piece.indexOf("=");
+    if (eq <= 0) return;
+    jar[piece.slice(0, eq).trim()] = piece.slice(eq + 1).trim();
+  });
+  return Object.keys(jar)
+    .map(function (k) {
+      return k + "=" + jar[k];
+    })
+    .join("; ");
+}
+
+function absorbResponseCookies(res) {
+  if (!res || !res.headers) return;
+  const h = res.headers;
+  let setCookies = h["set-cookie"] || h["Set-Cookie"];
+  if (!setCookies) return;
+  if (!Array.isArray(setCookies)) setCookies = [setCookies];
+  const merged = mergeCookieStrings(loadStoredCookies(), setCookies);
+  if (merged) saveStoredCookies(merged);
+}
+
+function buildMobileHeaders(referer, extra) {
+  const cookies = loadStoredCookies();
+  const headers = mergeHeaders({
+    Referer: referer || BASE_URL + LANG_PREFIX + "/",
+    Origin: BASE_URL,
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+    "Cache-Control": "no-cache",
+    ...(extra || {}),
+  });
+  if (cookies) headers.Cookie = cookies;
+  return headers;
+}
+
+function scoreFetchedHtml(html, url) {
+  if (!html || isMigrationPage(html) || isErrorPage(html)) return -1;
+  let score = Math.min(html.length, 300000);
+  if (isChallengePage(html)) score -= 900000;
+  if (hasPlaybackMarkers(html)) score += 3000000;
+  if (extractSurritEmbedIds(html).length > 0) score += 1500000;
+  if (isVideoDetailUrl(url) && extractDetailTitle(html)) score += 50000;
+  return score;
 }
 
 function isErrorPage(body) {
@@ -1385,44 +1462,48 @@ function parseVideoList(html) {
 async function fetchHtmlText(url, referer) {
   const ref = referer || BASE_URL + LANG_PREFIX + "/";
   const attempts = [
-    mergeHeaders({
-      Referer: ref,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-      "Cache-Control": "no-cache",
-    }),
-    {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-      Referer: ref,
-      Origin: BASE_URL,
-    },
-    {
-      "User-Agent": HEADERS["User-Agent"],
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      Referer: ref,
-      Origin: BASE_URL,
-    },
+    buildMobileHeaders(ref),
+    buildMobileHeaders(ref, { "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7" }),
+    buildMobileHeaders(BASE_URL + LANG_PREFIX + "/hot", { Referer: BASE_URL + "/" }),
   ];
-  let html = "";
-  let best = "";
+  let best = { html: "", score: -1 };
+  let fallback = "";
   for (let i = 0; i < attempts.length; i++) {
     try {
       const res = await Widget.http.get(url, { headers: attempts[i] });
-      html = typeof res.data === "string" ? res.data : String(res.data || "");
+      absorbResponseCookies(res);
+      const html = typeof res.data === "string" ? res.data : String(res.data || "");
       if (!html || html.length < 200 || isMigrationPage(html) || isErrorPage(html)) continue;
       if (isVideoDetailUrl(url) && hasPlaybackMarkers(html) && !isChallengePage(html)) return html;
-      if (!best || html.length > best.length) best = html;
+      const score = scoreFetchedHtml(html, url);
+      if (score > best.score) best = { html: html, score: score };
+      if (!fallback) fallback = html;
     } catch (e) {}
   }
-  if (best) return best;
-  return html && !isMigrationPage(html) ? html : "";
+  if (best.html) return best.html;
+  return fallback && !isMigrationPage(fallback) ? fallback : "";
+}
+
+let siteSessionReady = false;
+
+async function ensureSiteSession() {
+  if (siteSessionReady) return;
+  siteSessionReady = true;
+  try {
+    await fetchHtmlText(BASE_URL + LANG_PREFIX + "/hot", BASE_URL + "/");
+  } catch (e) {}
 }
 
 async function fetchDetailHtml(url) {
-  return fetchHtmlText(url, BASE_URL + LANG_PREFIX + "/");
+  await ensureSiteSession();
+  let html = await fetchHtmlText(url, BASE_URL + LANG_PREFIX + "/");
+  if (!html || !isVideoDetailUrl(url)) return html;
+  if (hasPlaybackMarkers(html) && extractSurritEmbedIds(html).length > 0) return html;
+
+  const retry = await fetchHtmlText(url, url);
+  if (!retry) return html;
+  if (scoreFetchedHtml(retry, url) > scoreFetchedHtml(html, url)) return retry;
+  return html;
 }
 
 async function fetchBrowseVideoList(browseRef, page) {
@@ -1638,9 +1719,9 @@ async function loadDetail(link) {
     }
     if (!playHeaders && videoUrl) playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
 
-    if (!videoUrl && (!hasPlaybackMarkers(html) || isChallengePage(html))) {
+    if (!videoUrl && !hasPlaybackMarkers(html)) {
       const hint =
-        "【提示】页面有标题/简介但未解析到播放器数据，通常是 123AV 人机验证拦截。请用 Safari/Chrome 打开 123av.com 完成验证后，清除本模块缓存并重新进入详情。";
+        "【提示】已读取标题/简介，但未拿到播放器数据。手机浏览器能正常打开，但 Forward 模块的请求可能返回了不完整的页面。请清除本模块缓存后重试；若仍失败，把详情页链接反馈给模块作者。";
       description = description ? description + "\n\n" + hint : hint;
     } else if (!videoUrl && hasPlaybackMarkers(html)) {
       const hint = "【提示】已检测到播放器信息但拉流失败，请清除模块缓存后重试。";
