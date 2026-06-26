@@ -4,7 +4,7 @@ WidgetMetadata = {
   version: "1.1.2",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u5f71\u7247\u3001\u6700\u65b0\u5f71\u7247\u3001\u6700\u8fd1\u66f4\u65b0\u3001\u6709\u7801\u5f71\u7247\u3001\u65e0\u7801\u5f71\u7247\u3001\u641c\u7d22",
-  author: "Forward",
+  author: "老头",
   site: "https://123av.com",
   detailCacheDuration: 300,
   modules: [
