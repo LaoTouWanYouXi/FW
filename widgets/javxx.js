@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.8.1",
+  version: "1.8.2",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
@@ -587,15 +587,31 @@ function isIcdnCoverUrl(url) {
   return /icdn[^/]*\/img2\/s\d+\/[^/?#]+\/cover(?:-n|-t)?\.(?:webp|jpg|jpeg)/i.test(String(url || ""));
 }
 
-function buildCoverFallbackUrl(href) {
+function buildCoverFallbackUrl(href, variant) {
   const slug = extractVideoSlug(resolveUrl(href));
   if (!slug) return "";
   const code = extractVideoCode(slug) || slug;
-  return `https://fourhoi.com/${code}/cover-t.jpg?class=normal`;
+  const suffix = variant === "t" ? "cover-t.jpg" : variant === "jpg" ? "cover.jpg" : "cover-n.jpg";
+  return `https://fourhoi.com/${code}/${suffix}?class=normal`;
+}
+
+function extractPreviewFromScope(scopeHtml) {
+  const text = String(scopeHtml || "");
+  const patterns = [
+    /data-preview=["'](https?:\/\/icdn[^"']+\/preview\/[^"']+\/preview\.(?:png|webp|jpg)(?:\?[^"']*)?)["']/i,
+    /background-image:\s*url\(["']?(https?:\/\/icdn[^"')]+\/preview\/[^"')]+\/preview\.(?:png|webp|jpg)(?:\?[^"')]*)?)["']?\)/i,
+    /https?:\/\/icdn[^"'\s<>]*\/preview\/[^"'\s<>]+\/preview\.(?:png|webp|jpg)(?:\?[^"'\s<>]*)?/i,
+  ];
+  for (let i = 0; i < patterns.length; i++) {
+    const m = text.match(patterns[i]);
+    if (m && isValidImageUrl(normalizeImageUrl(m[1] || m[0]))) {
+      return normalizeImageUrl(m[1] || m[0]);
+    }
+  }
+  return "";
 }
 
 function buildListCoverCandidates(href, coverUrl, scopeHtml) {
-  const slug = extractVideoSlug(resolveUrl(href));
   const out = [];
   const seen = new Set();
   function add(url) {
@@ -604,23 +620,43 @@ function buildListCoverCandidates(href, coverUrl, scopeHtml) {
     seen.add(u);
     out.push(u);
   }
-  add(buildCoverFallbackUrl(href));
-  if (slug) add(`https://fourhoi.com/${slug}/cover-t.jpg?class=normal`);
+
+  const scopePreview = extractPreviewFromScope(scopeHtml);
+  if (scopePreview) add(scopePreview);
+
   if (coverUrl) add(coverUrl);
+
   const fromScope = toListCoverUrl(undefined, scopeHtml, href);
   if (fromScope) add(fromScope);
+
+  const derivedPreview = derivePreviewUrl(coverUrl || fromScope || "");
+  if (derivedPreview) add(derivedPreview);
+
+  add(buildCoverFallbackUrl(href, "n"));
+  add(buildCoverFallbackUrl(href, "jpg"));
+  add(buildCoverFallbackUrl(href, "t"));
   return out;
 }
 
 function resolveListCover(href, coverUrl, scopeHtml) {
   const candidates = buildListCoverCandidates(href, coverUrl, scopeHtml);
   if (!candidates.length) return "";
-  // icdn 图在 Forward 列表里常因防盗链无法显示，优先 fourhoi
-  const fourhoi = candidates.find(function (u) {
-    return /fourhoi\.com/i.test(u);
-  });
-  if (fourhoi) return fourhoi;
-  return candidates[0];
+
+  function pick(re) {
+    return candidates.find(function (u) {
+      return re.test(u);
+    });
+  }
+
+  // 横版双列：backdropPath 优先 preview / cover 横图，避免 cover-t 竖图
+  return (
+    pick(/icdn[^"']*\/preview\//i) ||
+    pick(/icdn[^"']*\/img2\/[^"']+\/cover\.(?:webp|jpg|jpeg)/i) ||
+    pick(/fourhoi\.com\/[^"']+\/cover-n\.jpg/i) ||
+    pick(/fourhoi\.com\/[^"']+\/cover\.jpg/i) ||
+    pick(/fourhoi\.com/i) ||
+    candidates[0]
+  );
 }
 
 function normalizeListCoverSize(url) {
@@ -1470,11 +1506,17 @@ async function resolveSurritStreamAny(videoId, html, pageReferer, embedUrl) {
 }
 
 function pickItemCover(scopeHtml, href, $img) {
+  const preview = extractPreviewFromScope(scopeHtml);
+  if (preview) return normalizeListCoverSize(preview);
   const fromImg = pickImageUrl($img);
-  if (fromImg && !isLogoImage(fromImg)) return normalizeListCoverSize(fromImg);
+  if (fromImg && !isLogoImage(fromImg) && !/\/cover-t\./i.test(fromImg)) {
+    return normalizeListCoverSize(fromImg);
+  }
   const fromPoster = extractPosterFromHtml(scopeHtml, resolveUrl(href));
-  if (fromPoster) return normalizeListCoverSize(fromPoster);
-  return buildCoverFallbackUrl(href);
+  if (fromPoster && !/\/cover-t\./i.test(fromPoster)) {
+    return normalizeListCoverSize(fromPoster);
+  }
+  return buildCoverFallbackUrl(href, "n");
 }
 
 function extractVideoListHtml(html) {
