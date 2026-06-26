@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.8.2",
+  version: "1.8.3",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
@@ -595,6 +595,27 @@ function buildCoverFallbackUrl(href, variant) {
   return `https://fourhoi.com/${code}/${suffix}?class=normal`;
 }
 
+function isPortraitCoverUrl(url) {
+  return /\/cover-t[\.\?]/i.test(String(url || ""));
+}
+
+function isLandscapeListCoverUrl(url) {
+  const u = String(url || "");
+  if (!u || isPortraitCoverUrl(u)) return false;
+  if (/\/preview\//i.test(u)) return true;
+  if (/\/cover-n[\.\?]/i.test(u)) return true;
+  if (/\/img2\/[^"'\s<>]+\/cover\.(?:webp|jpg|jpeg)/i.test(u)) return true;
+  if (/fourhoi\.com\/[^"'\s<>]+\/cover\.jpg/i.test(u)) return true;
+  return false;
+}
+
+function buildSlugLandscapeBackdrop(href) {
+  const slug = extractVideoSlug(resolveUrl(href));
+  const code = extractVideoCode(slug) || slug;
+  if (!code) return "";
+  return `https://fourhoi.com/${code}/cover-n.jpg?class=normal`;
+}
+
 function extractPreviewFromScope(scopeHtml) {
   const text = String(scopeHtml || "");
   const patterns = [
@@ -611,36 +632,62 @@ function extractPreviewFromScope(scopeHtml) {
   return "";
 }
 
+function extractBackgroundCoverFromScope(scopeHtml) {
+  const text = String(scopeHtml || "");
+  const patterns = [
+    /background-image:\s*url\(["']?(https?:\/\/icdn[^"')]+\/img2\/s\d+\/[^"')]+\/cover(?:\.webp|-n\.(?:webp|jpg|jpeg)|\.jpg|\.jpeg)(?:\?[^"')]*)?)["']?\)/gi,
+    /https?:\/\/icdn[^"'\s<>]*\/img2\/s\d+\/[^"'\s<>]+\/cover(?:\.webp|-n\.(?:webp|jpg|jpeg)|\.jpg|\.jpeg)(?:\?[^"'\s<>]*)?/gi,
+  ];
+  for (let i = 0; i < patterns.length; i++) {
+    const re = new RegExp(patterns[i].source, patterns[i].flags);
+    let m;
+    while ((m = re.exec(text))) {
+      const url = normalizeImageUrl(m[1] || m[0]);
+      if (isValidImageUrl(url) && !isPortraitCoverUrl(url)) return url;
+    }
+  }
+  return "";
+}
+
+function extractLandscapeCoverFromScope(scopeHtml, href) {
+  const preview = extractPreviewFromScope(scopeHtml);
+  if (preview) return normalizeListCoverSize(preview);
+  const bgCover = extractBackgroundCoverFromScope(scopeHtml);
+  if (bgCover) return normalizeListCoverSize(bgCover);
+  const fromScope = toListCoverUrl(undefined, scopeHtml, href);
+  if (fromScope && !isPortraitCoverUrl(fromScope)) return fromScope;
+  return "";
+}
+
 function buildListCoverCandidates(href, coverUrl, scopeHtml) {
   const out = [];
   const seen = new Set();
   function add(url) {
     const u = normalizeListCoverSize(normalizeImageUrl(url));
-    if (!u || seen.has(u) || !isValidImageUrl(u) || isLogoImage(u)) return;
+    if (!u || seen.has(u) || !isValidImageUrl(u) || isLogoImage(u) || isPortraitCoverUrl(u)) return;
     seen.add(u);
     out.push(u);
   }
 
-  const scopePreview = extractPreviewFromScope(scopeHtml);
-  if (scopePreview) add(scopePreview);
+  add(extractPreviewFromScope(scopeHtml));
+  add(extractBackgroundCoverFromScope(scopeHtml));
 
-  if (coverUrl) add(coverUrl);
+  if (coverUrl && !isPortraitCoverUrl(coverUrl)) add(coverUrl);
 
   const fromScope = toListCoverUrl(undefined, scopeHtml, href);
   if (fromScope) add(fromScope);
 
-  const derivedPreview = derivePreviewUrl(coverUrl || fromScope || "");
+  const derivedPreview = derivePreviewUrl(coverUrl || fromScope || extractBackgroundCoverFromScope(scopeHtml) || "");
   if (derivedPreview) add(derivedPreview);
 
   add(buildCoverFallbackUrl(href, "n"));
   add(buildCoverFallbackUrl(href, "jpg"));
-  add(buildCoverFallbackUrl(href, "t"));
   return out;
 }
 
 function resolveListCover(href, coverUrl, scopeHtml) {
   const candidates = buildListCoverCandidates(href, coverUrl, scopeHtml);
-  if (!candidates.length) return "";
+  if (!candidates.length) return buildSlugLandscapeBackdrop(href);
 
   function pick(re) {
     return candidates.find(function (u) {
@@ -648,15 +695,19 @@ function resolveListCover(href, coverUrl, scopeHtml) {
     });
   }
 
-  // 横版双列：backdropPath 优先 preview / cover 横图，避免 cover-t 竖图
-  return (
+  const picked =
     pick(/icdn[^"']*\/preview\//i) ||
     pick(/icdn[^"']*\/img2\/[^"']+\/cover\.(?:webp|jpg|jpeg)/i) ||
+    pick(/icdn[^"']*\/img2\/[^"']+\/cover-n\.(?:webp|jpg|jpeg)/i) ||
     pick(/fourhoi\.com\/[^"']+\/cover-n\.jpg/i) ||
     pick(/fourhoi\.com\/[^"']+\/cover\.jpg/i) ||
-    pick(/fourhoi\.com/i) ||
-    candidates[0]
-  );
+    candidates.find(function (u) {
+      return isLandscapeListCoverUrl(u);
+    }) ||
+    candidates[0];
+
+  if (picked && !isPortraitCoverUrl(picked)) return picked;
+  return buildSlugLandscapeBackdrop(href);
 }
 
 function normalizeListCoverSize(url) {
@@ -675,7 +726,7 @@ function toListCoverUrl(coverUrl, scopeHtml, href) {
   function accept(url, scoped) {
     if (!url) return "";
     const u = normalizeListCoverSize(url);
-    if (!isValidImageUrl(u) || isLogoImage(u)) return "";
+    if (!isValidImageUrl(u) || isLogoImage(u) || isPortraitCoverUrl(u)) return "";
     if (!scoped && slug && !belongsToVideo(u, slug) && !isIcdnCoverUrl(u)) return "";
     return u;
   }
@@ -684,8 +735,8 @@ function toListCoverUrl(coverUrl, scopeHtml, href) {
   if (direct) return direct;
 
   const coverPatterns = [
-    /https?:\/\/icdn[^"'\s<>]+\/img2\/s\d+\/[^"'\s<>]+\/cover(?:-n|-t)?\.(?:webp|jpg|jpeg)(?:\?[^"'\s<>]*)?/gi,
-    /https?:\/\/icdn[^"'\s<>]+cover(?:-n|-t)?\.(?:webp|jpg|jpeg)(?:\?[^"'\s<>]*)?/gi,
+    /https?:\/\/icdn[^"'\s<>]+\/img2\/s\d+\/[^"'\s<>]+\/cover(?:\.webp|-n\.(?:webp|jpg|jpeg)|\.jpg|\.jpeg)(?:\?[^"'\s<>]*)?/gi,
+    /https?:\/\/icdn[^"'\s<>]+cover(?:\.webp|-n\.(?:webp|jpg|jpeg)|\.jpg|\.jpeg)(?:\?[^"'\s<>]*)?/gi,
   ];
   for (let pi = 0; pi < coverPatterns.length; pi++) {
     let coverM;
@@ -1047,7 +1098,9 @@ function parseVideoListRegex(html) {
     if (!title || looksLikeDuration(title)) title = slugToDisplayTitle(href);
     if (!title) continue;
     seen.add(detailLink);
-    const coverM = window.match(/https?:\/\/icdn[^"'\s<>]+cover(?:-n|-t)?\.(?:webp|jpg|jpeg)/i);
+    const coverM =
+      window.match(/https?:\/\/icdn[^"'\s<>]+\/preview\/[^"'\s<>]+\/preview\.(?:png|webp|jpg)/i) ||
+      window.match(/https?:\/\/icdn[^"'\s<>]+\/img2\/s\d+\/[^"'\s<>]+\/cover(?:\.webp|-n\.(?:webp|jpg|jpeg)|\.jpg|\.jpeg)/i);
     const durationM = window.match(/\b(\d{1,2}:\d{2}:\d{2})\b/);
     const item = makeListVideoItem(
       href,
@@ -1506,17 +1559,24 @@ async function resolveSurritStreamAny(videoId, html, pageReferer, embedUrl) {
 }
 
 function pickItemCover(scopeHtml, href, $img) {
-  const preview = extractPreviewFromScope(scopeHtml);
-  if (preview) return normalizeListCoverSize(preview);
+  const fromScope = extractLandscapeCoverFromScope(scopeHtml, href);
+  if (fromScope) return fromScope;
   const fromImg = pickImageUrl($img);
-  if (fromImg && !isLogoImage(fromImg) && !/\/cover-t\./i.test(fromImg)) {
+  if (fromImg && !isLogoImage(fromImg) && !isPortraitCoverUrl(fromImg)) {
     return normalizeListCoverSize(fromImg);
   }
-  const fromPoster = extractPosterFromHtml(scopeHtml, resolveUrl(href));
-  if (fromPoster && !/\/cover-t\./i.test(fromPoster)) {
-    return normalizeListCoverSize(fromPoster);
-  }
   return buildCoverFallbackUrl(href, "n");
+}
+
+function countVideoCards($, selector) {
+  let count = 0;
+  const $cards = $(selector);
+  for (let i = 0; i < $cards.length; i++) {
+    const $scope = resolveListScope($, $cards.get(i));
+    const href = $scope.find('a[href*="/v/"]').first().attr("href") || "";
+    if (/\/v\//.test(href)) count++;
+  }
+  return count;
 }
 
 function extractVideoListHtml(html) {
@@ -1562,12 +1622,18 @@ function parseVideoList(html) {
     pushItem(href, title, pickItemCover($scope.html(), href, $img), duration, $scope.html(), $img);
   }
 
-  const cardSelectors = [".grid .group", ".vid-items > div.item", "div.thumbnail", "article"];
-  for (let i = 0; i < cardSelectors.length; i++) {
-    const $cards = $(cardSelectors[i]);
-    if ($cards.length === 0) continue;
-    $cards.each((_, el) => parseCard(el));
-    if (items.length > 0) break;
+  const cardSelectors = [".vid-items > div.item", ".grid .group", "div.thumbnail", "article"];
+  let bestSelector = "";
+  let bestCount = 0;
+  for (let si = 0; si < cardSelectors.length; si++) {
+    const n = countVideoCards($, cardSelectors[si]);
+    if (n > bestCount) {
+      bestCount = n;
+      bestSelector = cardSelectors[si];
+    }
+  }
+  if (bestSelector) {
+    $(bestSelector).each((_, el) => parseCard(el));
   }
 
   if (items.length === 0) {
