@@ -34,7 +34,6 @@ WidgetMetadata = {
           title: "\u5feb\u6377\u5206\u7c7b",
           type: "enumeration",
           enumOptions: [
-            { title: "\u5206\u7c7b\u5bfc\u822a", value: "" },
             { title: "\u65e0\u7801", value: "uncensored" },
             { title: "\u5355\u4f53", value: "solowork" },
             { title: "\u4e2d\u51fa", value: "creampie" },
