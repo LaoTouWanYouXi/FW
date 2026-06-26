@@ -1,10 +1,10 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.1",
+  version: "1.0.2",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u5f71\u7247\u3001\u5373\u5c06\u4e0a\u6620\u3001\u641c\u7d22",
-  author: "Forward",
+  author: "老头",
   site: "https://javmove.com",
   detailCacheDuration: 300,
   modules: [
