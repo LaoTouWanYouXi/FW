@@ -1,10 +1,10 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.1.2",
+  version: "1.2.1",
   requiredVersion: "0.0.1",
-  description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u5f71\u7247\u3001\u6700\u65b0\u5f71\u7247\u3001\u6700\u8fd1\u66f4\u65b0\u3001\u6709\u7801\u5f71\u7247\u3001\u65e0\u7801\u5f71\u7247\u3001\u641c\u7d22",
-  author: "老头",
+  description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001\u7d20\u4eba\u5236\u4f5c\u5546\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u7d22\u5f15\u4e0e\u641c\u7d22",
+  author: "Forward",
   site: "https://123av.com",
   detailCacheDuration: 300,
   modules: [
@@ -17,15 +17,36 @@ WidgetMetadata = {
     },
     {
       id: "new",
-      title: "\u6700\u65b0\u5f71\u7247",
+      title: "\u65b0\u53d1\u5e03",
       functionName: "loadNew",
       cacheDuration: 3600,
       params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
     },
     {
       id: "recent",
-      title: "\u6700\u8fd1\u66f4\u65b0",
+      title: "\u6700\u8fd1\u6dfb\u52a0",
       functionName: "loadRecent",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "today",
+      title: "\u4eca\u65e5\u89c2\u770b",
+      functionName: "loadToday",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "week",
+      title: "\u672c\u5468\u89c2\u770b",
+      functionName: "loadWeek",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "month",
+      title: "\u672c\u6708\u89c2\u770b",
+      functionName: "loadMonth",
       cacheDuration: 3600,
       params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
     },
@@ -40,6 +61,83 @@ WidgetMetadata = {
       id: "uncensored",
       title: "\u65e0\u7801\u5f71\u7247",
       functionName: "loadUncensored",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "leaked",
+      title: "\u65e0\u7801\u6cc4\u9732",
+      functionName: "loadLeaked",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "vr",
+      title: "VR",
+      functionName: "loadVr",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "fc2",
+      title: "FC2",
+      functionName: "loadFc2",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "siro",
+      title: "SIRO \u7d20\u4eba",
+      functionName: "loadSiro",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "luxu",
+      title: "LUXU \u7d20\u4eba",
+      functionName: "loadLuxu",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "gana",
+      title: "200GANA",
+      functionName: "loadGana",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "heyzo",
+      title: "HEYZO",
+      functionName: "loadHeyzo",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "genres",
+      title: "\u7c7b\u522b",
+      functionName: "loadGenres",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "actresses",
+      title: "\u5973\u6f14\u5458",
+      functionName: "loadActresses",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "makers",
+      title: "\u5236\u4f5c\u5546",
+      functionName: "loadMakers",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
+    },
+    {
+      id: "series",
+      title: "\u7cfb\u5217",
+      functionName: "loadSeries",
       cacheDuration: 3600,
       params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
     }
@@ -72,9 +170,114 @@ const CATEGORY_MAP = {
   hot: "/hot",
   new: "/new",
   recent: "/recent",
+  today: "/all?sort=today",
+  week: "/all?sort=week",
+  month: "/all?sort=month",
   censored: "/censored",
-  uncensored: "/uncensored"
+  uncensored: "/uncensored",
+  leaked: "/uncensored-leaked",
+  vr: "/vr",
+  fc2: "/makers/fc2",
+  siro: "/tags/siro",
+  luxu: "/tags/259luxu",
+  gana: "/tags/200gana",
+  heyzo: "/makers/heyzo"
 };
+
+const DIRECTORY_INDEX_MAP = {
+  genres: "/genres",
+  actresses: "/actresses",
+  makers: "/makers",
+  series: "/series"
+};
+
+function isVideoDetailUrl(url) {
+  return /\/v\/[^/?#]+/i.test(String(url || ""));
+}
+
+function isDirectoryListingUrl(url) {
+  return /\/(genres|actresses|makers|series)\/[^/?#]+/i.test(String(url || "")) && !isVideoDetailUrl(url);
+}
+
+function isDirectoryIndexUrl(url) {
+  const u = String(url || "").replace(/\/+$/, "");
+  return new RegExp(`${LANG_PREFIX.replace("/", "\\/")}\\/(genres|actresses|makers|series)$`, "i").test(u);
+}
+
+function cleanDirectoryTitle(text, slug) {
+  let t = normalizeListText(text);
+  t = t.replace(/\s+\+\s*\u5173\u6ce8.*$/i, "").replace(/\s*\u5df2\u5173\u6ce8.*$/i, "");
+  t = t.replace(/\s+\d[\d,.\sKk\u4e07\u4e2a\u89c6\u9891\u4f4d\u6b21\u89c2\u770b\u5173\u6ce8]*$/i, "").trim();
+  if (!t || t.length > 80 || looksLikeDuration(t) || /^\d/.test(t)) {
+    t = String(slug || "").replace(/-/g, " ");
+  }
+  return t || String(slug || "").replace(/-/g, " ");
+}
+
+function parseDirectoryListRegex(html, indexPath) {
+  const items = [];
+  const seen = new Set();
+  const prefix = LANG_PREFIX + indexPath;
+  const esc = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`href="((?:https?:\\/\\/[^"']+)?${esc}\\/([^"#?/]+))"`, "gi");
+  let m;
+  while ((m = re.exec(String(html || ""))) && items.length < 120) {
+    const href = m[1];
+    const slug = m[2];
+    const detailLink = resolveUrl(href);
+    if (seen.has(detailLink)) continue;
+    seen.add(detailLink);
+    const window = String(html).slice(m.index, m.index + 400);
+    const titleM = window.match(/>([^<]{2,100})</);
+    const title = cleanDirectoryTitle(titleM ? titleM[1] : "", slug);
+    items.push({
+      id: detailLink,
+      type: "url",
+      title,
+      link: detailLink,
+      mediaType: "movie",
+    });
+  }
+  return items;
+}
+
+function parseDirectoryList(html, indexPath) {
+  if (!html || isMigrationPage(html)) return [];
+  const $ = Widget.html.load(html);
+  const items = [];
+  const seen = new Set();
+  const prefix = LANG_PREFIX + indexPath;
+
+  $("a[href]").each((_, el) => {
+    if (items.length >= 120) return false;
+    const $a = $(el);
+    let href = $a.attr("href") || "";
+    if (!href) return;
+    let path = href;
+    if (path.startsWith("http")) path = path.replace(BASE_URL, "");
+    if (!path.startsWith(prefix + "/")) return;
+    const slug = path.slice(prefix.length + 1).split(/[?#]/)[0];
+    if (!slug || slug.includes("/")) return;
+    const detailLink = resolveUrl(href);
+    if (seen.has(detailLink)) return;
+    seen.add(detailLink);
+    const title = cleanDirectoryTitle($a.text(), slug);
+    const $scope = $a.closest("article, .group, div").length ? $a.closest("article, .group, div") : $a;
+    const cover = pickImageUrl($scope.find("img").first()) || pickImageUrl($a.find("img").first());
+    items.push({
+      id: detailLink,
+      type: "url",
+      title,
+      backdropPath: cover || undefined,
+      posterPath: cover || undefined,
+      link: detailLink,
+      mediaType: "movie",
+    });
+  });
+
+  if (items.length > 0) return items;
+  return parseDirectoryListRegex(html, indexPath);
+}
 
 function isMigrationPage(html) {
   return /We have moved to 123av\.com|我们已迁移至 123av\.com|Please remember our new domain and update/i.test(String(html || ""));
@@ -311,9 +514,58 @@ function extractListDuration($scope) {
 
 function resolveListScope($, el) {
   const $el = $(el);
-  if ($el.hasClass("group") || $el.is("article")) return $el;
-  const $group = $el.closest(".group, article");
+  if ($el.is("div.thumbnail, .thumbnail")) {
+    const $parent = $el.parent();
+    if ($parent.length && ($parent.find("h3, .truncate, .text-secondary").length > 0)) return $parent;
+    const $group = $el.closest(".grid .group, article, .vid-items > div.item");
+    if ($group.length) return $group;
+    return $parent.length ? $parent : $el;
+  }
+  if ($el.hasClass("group") && $el.parent().hasClass("grid")) return $el;
+  if ($el.hasClass("group") || $el.is("article")) {
+    const $gridGroup = $el.closest(".grid .group");
+    return $gridGroup.length ? $gridGroup : $el;
+  }
+  const $group = $el.closest(".grid .group, article, .vid-items > div.item");
   return $group.length ? $group : $el;
+}
+
+function parseVideoListRegex(html) {
+  const items = [];
+  const seen = new Set();
+  const text = String(html || "");
+  const linkRe = /href="((?:https?:\/\/[^"']+)?\/cn\/v\/[^"#?]+)"/gi;
+  let m;
+  while ((m = linkRe.exec(text)) && items.length < 60) {
+    const href = m[1];
+    if (!/\/v\//.test(href)) continue;
+    const detailLink = resolveUrl(href);
+    if (seen.has(detailLink)) continue;
+    const window = text.slice(Math.max(0, m.index - 1200), m.index + 600);
+    const titleM =
+      window.match(/<h3[^>]*>[\s\S]*?<a[^>]+href="[^"]*\/v\/[^"]+"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h3>/i) ||
+      window.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i) ||
+      window.match(/class="[^"]*truncate[^"]*"[^>]*>([\s\S]*?)<\//i);
+    let title = titleM ? normalizeListText(titleM[1].replace(/<[^>]+>/g, "")) : "";
+    if (!title || looksLikeDuration(title)) title = slugToDisplayTitle(href);
+    if (!title) continue;
+    seen.add(detailLink);
+    const coverM = window.match(/https?:\/\/icdn[^"'\s<>]+cover(?:-n|-t)?\.(?:webp|jpg|jpeg)/i);
+    const durationM = window.match(/\b(\d{1,2}:\d{2}:\d{2})\b/);
+    const item = {
+      id: href,
+      type: "url",
+      title,
+      backdropPath: coverM ? upgradeCoverUrl(coverM[0]) : undefined,
+      posterPath: coverM ? upgradeCoverUrl(coverM[0]) : undefined,
+      link: detailLink,
+      mediaType: "movie",
+    };
+    const durationText = durationM ? sanitizeDurationText(durationM[1]) : undefined;
+    if (durationText) item.durationText = durationText;
+    items.push(item);
+  }
+  return items;
 }
 
 function readVideoCache(link) {
@@ -564,7 +816,10 @@ function parseVideoList(html) {
 
   function parseCard(el) {
     const $scope = resolveListScope($, el);
-    const href = $scope.find('a[href*="/v/"]').first().attr("href") || "";
+    const href =
+      $scope.find('a[href*="/v/"]').first().attr("href") ||
+      $scope.find("a[href*='/v/']").first().attr("href") ||
+      "";
     if (!/\/v\//.test(href)) return;
     const title = extractListTitle($scope, href);
     const duration = extractListDuration($scope);
@@ -572,20 +827,20 @@ function parseVideoList(html) {
     pushItem(href, title, pickItemCover($scope.html(), href, $img), duration, $scope.html(), $img);
   }
 
-  if ($(".group").length > 0) {
-    $(".group").each((_, el) => parseCard(el));
-  } else if ($(".vid-items > div.item").length > 0) {
-    $(".vid-items > div.item").each((_, el) => parseCard(el));
-  } else {
-    $("div.thumbnail").each((_, el) => parseCard(el));
+  const cardSelectors = [".grid .group", ".vid-items > div.item", "div.thumbnail"];
+  for (let i = 0; i < cardSelectors.length; i++) {
+    const $cards = $(cardSelectors[i]);
+    if ($cards.length === 0) continue;
+    $cards.each((_, el) => parseCard(el));
+    if (items.length > 0) break;
   }
 
   if (items.length === 0) {
-    $('a[href*="/v/"]').each((_, el) => {
+    $('a[href*="/v/"], a[href*="/cn/v/"]').each((_, el) => {
       const $a = $(el);
       const href = $a.attr("href") || "";
       if (!/\/v\//.test(href)) return;
-      const $scope = $a.closest("div.group, div.thumbnail, div.item, article, .group");
+      const $scope = $a.closest(".grid .group, div.thumbnail, div.item, article");
       const $root = $scope.length ? $scope : $a.parent();
       const title = extractListTitle($root, href);
       const duration = extractListDuration($root);
@@ -593,6 +848,8 @@ function parseVideoList(html) {
       pushItem(href, title, pickItemCover($root.html() || $a.html(), href, $img), duration, $root.html() || $a.html(), $img);
     });
   }
+
+  if (items.length === 0) return parseVideoListRegex(html);
 
   return items;
 }
@@ -604,8 +861,8 @@ async function fetchHtml(pathOrUrl) {
 }
 
 async function loadCategory(categoryId, params) {
-  if (params.genreId) return loadGenreList(params);
-  const page = Number(params.page || 1);
+  if (params && (params.genreId || params.peopleId)) return loadFilterList(params);
+  const page = Number((params && params.page) || 1);
   const path = CATEGORY_MAP[categoryId] || "/new";
   let url = `${BASE_URL}${LANG_PREFIX}${path}`;
   if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
@@ -617,11 +874,11 @@ async function loadCategory(categoryId, params) {
   }
 }
 
-async function loadGenreList(params) {
-  const genreId = String(params.genreId || "").trim();
-  if (!genreId) return [];
+async function loadFilterList(params) {
+  const filterId = String((params && (params.genreId || params.peopleId)) || "").trim();
+  if (!filterId) return [];
   const page = Number(params.page || 1);
-  let url = genreId.startsWith("http") ? genreId : resolveUrl(genreId);
+  let url = filterId.startsWith("http") ? filterId : resolveUrl(filterId);
   if (url.includes("javxx.com")) url = url.replace("https://javxx.com", BASE_URL).replace("http://javxx.com", BASE_URL);
   if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
   try {
@@ -632,11 +889,44 @@ async function loadGenreList(params) {
   }
 }
 
+async function loadBrowseModule(moduleKey, params) {
+  if (params && (params.genreId || params.peopleId)) return loadFilterList(params);
+  const indexPath = DIRECTORY_INDEX_MAP[moduleKey];
+  if (!indexPath) return [];
+  const page = Number((params && params.page) || 1);
+  let url = `${BASE_URL}${LANG_PREFIX}${indexPath}`;
+  if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
+  try {
+    const res = await Widget.http.get(url, { headers: HEADERS });
+    return parseDirectoryList(res.data, indexPath);
+  } catch (e) {
+    return [];
+  }
+}
+
+async function loadGenreList(params) {
+  return loadFilterList(params);
+}
+
 async function loadHot(params) { return loadCategory("hot", params); }
 async function loadNew(params) { return loadCategory("new", params); }
 async function loadRecent(params) { return loadCategory("recent", params); }
+async function loadToday(params) { return loadCategory("today", params); }
+async function loadWeek(params) { return loadCategory("week", params); }
+async function loadMonth(params) { return loadCategory("month", params); }
 async function loadCensored(params) { return loadCategory("censored", params); }
 async function loadUncensored(params) { return loadCategory("uncensored", params); }
+async function loadLeaked(params) { return loadCategory("leaked", params); }
+async function loadVr(params) { return loadCategory("vr", params); }
+async function loadFc2(params) { return loadCategory("fc2", params); }
+async function loadSiro(params) { return loadCategory("siro", params); }
+async function loadLuxu(params) { return loadCategory("luxu", params); }
+async function loadGana(params) { return loadCategory("gana", params); }
+async function loadHeyzo(params) { return loadCategory("heyzo", params); }
+async function loadGenres(params) { return loadBrowseModule("genres", params); }
+async function loadActresses(params) { return loadBrowseModule("actresses", params); }
+async function loadMakers(params) { return loadBrowseModule("makers", params); }
+async function loadSeries(params) { return loadBrowseModule("series", params); }
 
 async function resolveVideoUrl(html, detailUrl) {
   let videoUrl = extractM3u8FromHtml(html);
@@ -707,6 +997,35 @@ async function loadDetail(link) {
       || $('meta[property="og:title"]').attr("content")
       || $("title").text().trim()
       || "";
+
+    if (isDirectoryListingUrl(detailUrl)) {
+      const videos = parseVideoList(html);
+      const firstCover = videos[0] && (videos[0].posterPath || videos[0].backdropPath);
+      return {
+        id: link,
+        type: "url",
+        title,
+        backdropPath: firstCover || undefined,
+        posterPath: firstCover || undefined,
+        link: detailUrl,
+        relatedItems: videos.length > 0 ? videos : undefined,
+        mediaType: "movie",
+      };
+    }
+
+    if (isDirectoryIndexUrl(detailUrl)) {
+      const indexPath = detailUrl.replace(BASE_URL + LANG_PREFIX, "").split("?")[0];
+      const dirItems = parseDirectoryList(html, indexPath);
+      return {
+        id: link,
+        type: "url",
+        title: title || indexPath,
+        link: detailUrl,
+        relatedItems: dirItems.length > 0 ? dirItems : undefined,
+        mediaType: "movie",
+      };
+    }
+
     let cover = extractPosterFromHtml(html, detailUrl, $)
       || pickImageUrl($(".video-cover img, .movie-cover img, .image img, img[data-src*='icdn'], img[src*='icdn']").first())
       || pickImageUrl($("video").first());
@@ -725,11 +1044,19 @@ async function loadDetail(link) {
     if (!playHeaders) playHeaders = buildPlayHeaders(videoUrl);
 
     const genreItems = [];
-    $("a[href*='/genres/'], a[href*='/tags/'], a[href*='/tag/']").each((_, el) => {
+    $("a[href*='/genres/'], a[href*='/tags/'], a[href*='/tag/'], a[href*='/makers/'], a[href*='/series/']").each((_, el) => {
       const $a = $(el);
       const href = resolveUrl($a.attr("href") || "");
       const text = $a.text().trim();
-      if (text && href && /\/(genres|tags|tag)\//.test(href)) genreItems.push({ id: href, title: text });
+      if (text && href && /\/(genres|tags|tag|makers|series)\//.test(href)) genreItems.push({ id: href, title: text });
+    });
+
+    const peoples = [];
+    $("a[href*='/actresses/']").each((_, el) => {
+      const $a = $(el);
+      const href = resolveUrl($a.attr("href") || "");
+      const text = $a.text().trim();
+      if (text && href && /\/actresses\//.test(href)) peoples.push({ id: href, title: text, role: "actress" });
     });
 
     const relatedItems = [];
@@ -767,6 +1094,7 @@ async function loadDetail(link) {
       videoUrl: videoUrl || "",
       playerType: "system",
       genreItems: genreItems.length > 0 ? genreItems : undefined,
+      peoples: peoples.length > 0 ? peoples : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
       mediaType: "movie",
@@ -778,9 +1106,9 @@ async function loadDetail(link) {
 }
 
 async function search(params) {
-  if (params.genreId) return loadGenreList(params);
-  const keyword = params.keyword || "";
-  const page = Number(params.page || 1);
+  if (params && (params.genreId || params.peopleId)) return loadFilterList(params);
+  const keyword = (params && params.keyword) || "";
+  const page = Number((params && params.page) || 1);
   if (!keyword) return [];
   try {
     let url = `${BASE_URL}${LANG_PREFIX}/search/?keyword=${encodeURIComponent(keyword)}`;
