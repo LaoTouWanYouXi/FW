@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.16",
+  version: "1.0.17",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -420,6 +420,7 @@ WidgetMetadata = {
 const BASE_URL = "https://javmove.com";
 const VIDEO_CACHE_TTL = 3600;
 const PARTS_BUNDLE_TTL = 3600;
+const DETAIL_ITEM_CACHE_TTL = 300;
 var partsBundleInflight = {};
 var detailInflight = {};
 const HEADERS = {
@@ -628,7 +629,7 @@ async function resolveFreshPlayableParts(baseUrl) {
   });
 }
 
-function buildStreamResources(playable) {
+function buildStreamResources(playable, seriesTitle) {
   const resources = [];
   for (let i = 0; i < playable.length; i++) {
     const part = playable[i];
@@ -637,11 +638,11 @@ function buildStreamResources(playable) {
     resources.push({
       name:
         playable.length > 1
-          ? "\u7b2c" + part.label + "\u96c6"
+          ? (seriesTitle ? seriesTitle + " " : "") + "P" + part.label
           : "HD",
       description:
         playable.length > 1
-          ? "\u5206\u6bb5 " + part.label + " | MP4"
+          ? "\u7b2c" + part.label + "\u96c6 | MP4"
           : "MP4",
       url: part.videoUrl,
       headers: headers,
@@ -1174,18 +1175,23 @@ async function measurePartDurations(resolvedParts) {
   return Promise.all(tasks);
 }
 
-function buildPartChildItems(baseUrl, resolvedParts, durations, cover) {
+function buildPartChildItems(baseUrl, displayTitle, resolvedParts, durations, cover) {
   if (!resolvedParts || resolvedParts.length <= 1) return [];
   const movieUrl = normalizeMoviePageUrl(baseUrl);
+  const seriesTitle = displayTitle || formatMovieCode("", "");
   const items = [];
   for (let i = 0; i < resolvedParts.length; i++) {
     const part = resolvedParts[i];
     if (!part || !part.videoUrl) continue;
     const sec = durations[i] || 0;
+    const epNum = Number(part.label) || i + 1;
+    const epLabel = "\u7b2c" + part.label + "\u96c6";
     items.push({
       id: buildEpisodeItemId(movieUrl, part.label),
       type: "url",
-      title: "\u7b2c" + part.label + "\u96c6",
+      title: seriesTitle,
+      episodeName: epLabel,
+      episode: epNum,
       videoUrl: part.videoUrl,
       customHeaders: part.customHeaders || buildPlayHeaders(part.videoUrl),
       duration: sec > 0 ? Math.round(sec) : undefined,
@@ -1200,32 +1206,67 @@ function buildPartChildItems(baseUrl, resolvedParts, durations, cover) {
   return items.length > 1 ? items : [];
 }
 
-function buildEpisodeItems(baseUrl, resolvedParts, durations, cover) {
-  if (!resolvedParts || resolvedParts.length <= 1) return [];
-  const movieUrl = normalizeMoviePageUrl(baseUrl);
-  const items = [];
-  for (let i = 0; i < resolvedParts.length; i++) {
-    const part = resolvedParts[i];
-    if (!part || !part.videoUrl) continue;
-    const sec = durations[i] || 0;
-    const epNum = Number(part.label) || i + 1;
-    items.push({
-      id: buildEpisodeItemId(movieUrl, part.label),
-      type: "url",
-      title: "\u7b2c" + part.label + "\u96c6",
-      link: movieUrl,
-      episode: epNum,
-      videoUrl: part.videoUrl,
-      customHeaders: part.customHeaders || buildPlayHeaders(part.videoUrl),
-      duration: sec > 0 ? Math.round(sec) : undefined,
-      durationText: sec > 0 ? formatDurationSeconds(sec) : undefined,
-      backdropPath: cover || undefined,
-      posterPath: cover || undefined,
-      mediaType: "movie",
-      playerType: "system",
-    });
+function readDetailItemCache(baseUrl) {
+  try {
+    const raw = Widget.storage.get("detail:v2:" + String(baseUrl));
+    if (!raw) return null;
+    const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
+      return data.item;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function writeDetailItemCache(baseUrl, item) {
+  if (!item) return;
+  try {
+    Widget.storage.set(
+      "detail:v2:" + String(baseUrl),
+      JSON.stringify({ item: item, ts: Date.now() })
+    );
+  } catch (e) {}
+}
+
+function mergeFreshPlayback(item, resolvedParts) {
+  if (!item || !resolvedParts || !resolvedParts.length) return item;
+  const playable = resolvedParts.filter(function (part) {
+    return part && part.videoUrl;
+  });
+  if (!playable.length) return item;
+
+  const merged = Object.assign({}, item);
+  merged.videoUrl = playable[0].videoUrl;
+  merged.customHeaders =
+    playable[0].customHeaders || buildPlayHeaders(playable[0].videoUrl);
+
+  if (merged.childItems && merged.childItems.length > 1) {
+    const nextChildren = [];
+    for (let i = 0; i < merged.childItems.length; i++) {
+      const child = Object.assign({}, merged.childItems[i]);
+      const label = extractActivePartLabel(child.id || "");
+      let part = null;
+      for (let j = 0; j < playable.length; j++) {
+        if (String(playable[j].label) === String(label)) {
+          part = playable[j];
+          break;
+        }
+      }
+      if (!part && playable[i]) part = playable[i];
+      if (part && part.videoUrl) {
+        child.videoUrl = part.videoUrl;
+        child.customHeaders =
+          part.customHeaders || buildPlayHeaders(part.videoUrl);
+      }
+      nextChildren.push(child);
+    }
+    merged.childItems = nextChildren;
+    if (nextChildren[0] && nextChildren[0].videoUrl) {
+      merged.videoUrl = nextChildren[0].videoUrl;
+      merged.customHeaders = nextChildren[0].customHeaders || merged.customHeaders;
+    }
   }
-  return items.length > 1 ? items : [];
+  return merged;
 }
 
 function extractDetailStills(html, $, cover) {
@@ -1858,6 +1899,12 @@ async function loadDetail(link) {
 async function loadDetailInternal(link) {
   try {
     const baseUrl = normalizeMoviePageUrl(String(link));
+    const cachedItem = readDetailItemCache(baseUrl);
+    if (cachedItem) {
+      const freshParts = await resolveFreshPlayableParts(baseUrl);
+      return mergeFreshPlayback(cachedItem, freshParts);
+    }
+
     const bundle = await fetchMoviePartsBundle(baseUrl);
     const html = bundle.html;
     const $ = safeLoadHtml(html);
@@ -1913,14 +1960,9 @@ async function loadDetailInternal(link) {
       avgPartSec = counted > 0 ? sum / counted : 0;
     }
 
-    const episodeItems = buildEpisodeItems(
-      baseUrl,
-      resolvedParts,
-      partDurations,
-      cover
-    );
     const childItems = buildPartChildItems(
       baseUrl,
+      displayTitle,
       resolvedParts,
       partDurations,
       cover
@@ -1968,12 +2010,13 @@ async function loadDetailInternal(link) {
 
     const displayDurationSec = totalDurationSec || partDurations[0] || 0;
     const isSeries = childItems.length > 1;
-    const firstEpisode = childItems[0] || episodeItems[0];
+    const firstEpisode = childItems[0];
 
-    return {
+    const detailItem = {
       id: baseUrl,
       type: "url",
       title: displayTitle,
+      seriesName: displayTitle,
       backdropPath: cover || undefined,
       posterPath: cover || undefined,
       backdropPaths: backdropPaths,
@@ -1987,7 +2030,6 @@ async function loadDetailInternal(link) {
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       peoples: peoples.length > 0 ? peoples : undefined,
       childItems: isSeries ? childItems : undefined,
-      episodeItems: isSeries ? episodeItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: baseUrl,
       mediaType: isSeries ? "tv" : "movie",
@@ -1995,6 +2037,8 @@ async function loadDetailInternal(link) {
         ? firstEpisode.customHeaders || playHeaders
         : playHeaders,
     };
+    writeDetailItemCache(baseUrl, detailItem);
+    return detailItem;
   } catch (e) {
     console.error("[loadDetail] 失败:", e.message || e);
     return null;
