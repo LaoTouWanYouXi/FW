@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.1.0",
+  version: "1.1.2",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u5f71\u7247\u3001\u6700\u65b0\u5f71\u7247\u3001\u6700\u8fd1\u66f4\u65b0\u3001\u6709\u7801\u5f71\u7247\u3001\u65e0\u7801\u5f71\u7247\u3001\u641c\u7d22",
   author: "Forward",
@@ -59,7 +59,8 @@ const LANG_PREFIX = "/cn";
 const SURRIT_BASE = "https://surrit.store";
 const XOR_KEY = "G9zhUyphqPWZGWzZ";
 const AES_KEY = "ym1eS4t0jTLakZYQ";
-const STREAM_SOURCES = ["123av", "javxx"];
+const STREAM_SOURCES = ["123av", "javxx", "missav"];
+const SURRIT_BASES = ["https://surrit.store", "https://surrit.com"];
 const VIDEO_CACHE_TTL = 3600;
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -94,10 +95,43 @@ function normalizeImageUrl(url) {
   return url;
 }
 
+function isLogoImage(url) {
+  if (!url) return true;
+  const u = String(url).toLowerCase();
+  return /\/assets\/|logo\.|favicon|avatar\.|\/logo[/_-]|123av\.png|brand|spinner|loading\.gif|1x1/i.test(u);
+}
+
+function extractVideoSlug(detailUrl) {
+  const m = String(detailUrl || "").match(/\/v\/([^/?#]+)/i);
+  return m ? decodeURIComponent(m[1]).toLowerCase() : "";
+}
+
+function extractVideoCode(slug) {
+  if (!slug) return "";
+  return slug.replace(/-(?:uncensored-leaked|chinese-subtitle|english-subtitle|censored|leaked|subtitle)$/gi, "");
+}
+
+function belongsToVideo(url, slug) {
+  if (!url || !slug) return false;
+  const u = String(url).toLowerCase();
+  const s = slug.toLowerCase();
+  if (u.includes("/" + s + "/") || u.includes("/" + s + ".") || u.includes("/" + s + "?")) return true;
+  const code = extractVideoCode(s);
+  if (code && code !== s) {
+    if (u.includes("/" + code + "/") || u.includes("/" + code + ".") || u.includes("/" + code + "?")) return true;
+  }
+  return false;
+}
+
+function isCoverImage(url) {
+  return /\/cover(?:-n|-t)?\.(?:webp|jpg|jpeg)/i.test(String(url || ""));
+}
+
 function isValidImageUrl(url) {
   if (!url || !url.startsWith("http")) return false;
-  if (/placeholder|loading|blank|data:image|1x1|spacer|avatar/i.test(url)) return false;
-  return /\.(webp|jpg|jpeg|png|gif)(\?|$)/i.test(url) || url.includes("icdn.");
+  if (isLogoImage(url)) return false;
+  if (/placeholder|loading|blank|data:image|spacer/i.test(url)) return false;
+  return /\.(webp|jpg|jpeg|png|gif)(\?|$)/i.test(url) || url.includes("icdn.") || url.includes("fourhoi.com");
 }
 
 function upgradeCoverUrl(url) {
@@ -120,35 +154,84 @@ function pickImageUrl($img) {
   return "";
 }
 
-function extractCoverFromHtml(html) {
-  if (!html) return "";
-  const og1 = String(html).match(/property=["']og:image["']\s+content=["']([^"']+)["']/i);
-  const og2 = String(html).match(/content=["']([^"']+)["']\s+property=["']og:image["']/i);
-  const og = (og1 && og1[1]) || (og2 && og2[1]) || "";
-  if (og && isValidImageUrl(normalizeImageUrl(og))) return upgradeCoverUrl(og);
+function extractPosterFromHtml(html, detailUrl, $) {
+  const slug = extractVideoSlug(detailUrl);
+  const text = String(html || "");
 
-  const ogBase = String(html).match(/og:image["']\s+content=["'](.*?)cover-n\.jpg/i);
-  if (ogBase && ogBase[1]) return upgradeCoverUrl(ogBase[1] + "cover-n.jpg");
+  if ($ && $.fn) {
+    const selectors = [
+      ".video-cover img",
+      ".movie-cover img",
+      ".detail img[src*='icdn'], .detail img[data-src*='icdn']",
+      "img[data-src*='icdn'][data-src*='cover']",
+      "img[src*='icdn'][src*='cover']",
+      "img[data-src*='cover.webp'], img[src*='cover.webp']",
+    ];
+    for (let i = 0; i < selectors.length; i++) {
+      const url = pickImageUrl($(selectors[i]).first());
+      if (url && !isLogoImage(url) && (!slug || belongsToVideo(url, slug))) return url;
+    }
+    const poster = normalizeImageUrl($("video[poster]").attr("poster") || "");
+    if (poster && isValidImageUrl(poster) && (!slug || belongsToVideo(poster, slug))) return upgradeCoverUrl(poster);
+  }
 
-  const icdn = String(html).match(/https?:\/\/icdn[^"'\s<>]+cover(?:-n)?\.(?:webp|jpg|jpeg)/i);
-  if (icdn) return upgradeCoverUrl(icdn[0]);
+  if (slug) {
+    const icdnRe = /https?:\/\/icdn[^"'\s<>]+cover(?:-n|-t)?\.(?:webp|jpg|jpeg)(?:\?[^"'\s<>]*)?/gi;
+    let m;
+    while ((m = icdnRe.exec(text))) {
+      if (belongsToVideo(m[0], slug) && !isLogoImage(m[0])) return upgradeCoverUrl(m[0]);
+    }
+    const code = extractVideoCode(slug);
+    if (code) return upgradeCoverUrl(`https://fourhoi.com/${code}/cover-t.jpg?class=normal`);
+    return upgradeCoverUrl(`https://fourhoi.com/${slug}/cover-t.jpg?class=normal`);
+  }
+
+  const og1 = text.match(/property=["']og:image["']\s+content=["']([^"']+)["']/i);
+  const og2 = text.match(/content=["']([^"']+)["']\s+property=["']og:image["']/i);
+  const og = normalizeImageUrl((og1 && og1[1]) || (og2 && og2[1]) || "");
+  if (og && isValidImageUrl(og) && !isLogoImage(og) && (!slug || belongsToVideo(og, slug))) return upgradeCoverUrl(og);
 
   return "";
 }
 
-function collectBackdropPaths(html, primaryCover) {
+function collectBackdropPaths(html, detailUrl, posterUrl, $) {
+  const slug = extractVideoSlug(detailUrl);
+  if (!slug) return undefined;
   const paths = [];
   const seen = new Set();
+  const posterNorm = posterUrl ? upgradeCoverUrl(normalizeImageUrl(posterUrl)) : "";
+
   function add(url) {
     const u = upgradeCoverUrl(normalizeImageUrl(url));
-    if (!isValidImageUrl(u) || seen.has(u)) return;
+    if (!isValidImageUrl(u) || isLogoImage(u) || seen.has(u)) return;
+    if (posterNorm && u === posterNorm) return;
+    if (isCoverImage(u)) return;
+    if (!belongsToVideo(u, slug)) return;
     seen.add(u);
     paths.push(u);
   }
-  if (primaryCover) add(primaryCover);
-  const re = /https?:\/\/icdn[^"'\s<>]+cover(?:-n)?\.(?:webp|jpg|jpeg)/gi;
+
+  const text = String(html || "");
+  const slugEsc = slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const icdnStillsRe = new RegExp(`https?:\\/\\/icdn[^"'\\s<>]*\\/${slugEsc}\\/[^"'\\s<>]+\\.(?:webp|jpg|jpeg)`, "gi");
   let m;
-  while ((m = re.exec(String(html || ""))) && paths.length < 12) add(m[0]);
+  while ((m = icdnStillsRe.exec(text)) && paths.length < 20) add(m[0]);
+
+  const previewRes = [
+    /https?:\/\/icdn[^"'\s<>]*\/(?:preview|sample|screen)[^"'\s<>]*\.(?:webp|jpg|jpeg)/gi,
+    /https?:\/\/fourhoi\.com\/[^"'\s<>]*\/(?:preview|sample|screen)[^"'\s<>]*\.(?:webp|jpg|jpeg|png)/gi,
+  ];
+  for (let i = 0; i < previewRes.length; i++) {
+    while ((m = previewRes[i].exec(text)) && paths.length < 20) add(m[0]);
+  }
+
+  if ($ && $.fn) {
+    $("#preview-show img, [id*='preview'] img, .preview img, .screenshots img").each((_, el) => {
+      if (paths.length >= 20) return false;
+      add(pickImageUrl($(el)));
+    });
+  }
+
   return paths.length > 0 ? paths : undefined;
 }
 
@@ -158,9 +241,84 @@ function sanitizeDurationText(text) {
   return /^\d{1,2}:\d{2}(:\d{2})?$/.test(t) ? t : undefined;
 }
 
+function looksLikeDuration(text) {
+  return /^\d{1,2}:\d{2}(:\d{2})?$/.test(String(text || "").trim());
+}
+
+function normalizeListText(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function slugToDisplayTitle(href) {
+  const slug = extractVideoSlug(resolveUrl(href));
+  if (!slug) return "";
+  return slug.toUpperCase();
+}
+
+function extractListTitle($scope, href) {
+  function pick(text) {
+    const t = normalizeListText(text);
+    if (!t || looksLikeDuration(t)) return "";
+    return t;
+  }
+
+  const tries = [
+    () => pick($scope.find("h3 a[href*='/v/']").first().text()),
+    () => pick($scope.find("h3").first().text()),
+    () => pick($scope.find(".truncate a[href*='/v/']").first().text()),
+    () => pick($scope.find(".truncate").first().text()),
+    () => pick($scope.find(".text-secondary a[href*='/v/']").first().text()),
+    () => pick($scope.find(".text-secondary").first().text()),
+    () => pick($scope.find(".title a[href*='/v/']").first().text()),
+    () => pick($scope.find(".title").first().text()),
+    () => {
+      let found = "";
+      $scope.find("a[href*='/v/']").each((_, el) => {
+        const t = pick($(el).text());
+        if (t && t.length > (found.length || 0)) found = t;
+      });
+      return found;
+    },
+    () => pick($scope.find("img").first().attr("alt")),
+    () => pick($scope.find('a[href*="/v/"]').first().attr("title")),
+  ];
+
+  for (let i = 0; i < tries.length; i++) {
+    const title = tries[i]();
+    if (title) return title;
+  }
+  return slugToDisplayTitle(href);
+}
+
+function extractListDuration($scope) {
+  function pick(text) {
+    const t = String(text || "").trim();
+    return looksLikeDuration(t) ? t : "";
+  }
+
+  const tries = [
+    () => pick($scope.find(".duration").first().text()),
+    () => pick($scope.find(".absolute.bottom-1").first().text()),
+    () => pick($scope.find(".text-nord9").first().text()),
+  ];
+  for (let i = 0; i < tries.length; i++) {
+    const d = tries[i]();
+    if (d) return d;
+  }
+  const m = normalizeListText($scope.text()).match(/\b(\d{1,2}:\d{2}:\d{2})\b/);
+  return m ? m[1] : "";
+}
+
+function resolveListScope($, el) {
+  const $el = $(el);
+  if ($el.hasClass("group") || $el.is("article")) return $el;
+  const $group = $el.closest(".group, article");
+  return $group.length ? $group : $el;
+}
+
 function readVideoCache(link) {
   try {
-    const raw = Widget.storage.get("vurl:v2:" + String(link));
+    const raw = Widget.storage.get("vurl:v3:" + String(link));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.videoUrl && data.ts && Date.now() - data.ts < VIDEO_CACHE_TTL * 1000) return data;
@@ -171,12 +329,13 @@ function readVideoCache(link) {
 function writeVideoCache(link, videoUrl, customHeaders) {
   if (!videoUrl) return;
   try {
-    Widget.storage.set("vurl:v2:" + String(link), JSON.stringify({ videoUrl, customHeaders, ts: Date.now() }));
+    Widget.storage.set("vurl:v3:" + String(link), JSON.stringify({ videoUrl, customHeaders, ts: Date.now() }));
   } catch (e) {}
 }
 
 function buildPlayHeaders(videoUrl) {
-  const base = videoUrl && videoUrl.includes("surrit")
+  const isSurrit = videoUrl && /surrit\.(?:com|store)/i.test(videoUrl);
+  const base = isSurrit
     ? { "User-Agent": HEADERS["User-Agent"], "Origin": "https://surrit.store", "Referer": "https://surrit.store/" }
     : { "User-Agent": HEADERS["User-Agent"], "Referer": "https://123av.com/", "Origin": "https://123av.com" };
   return Object.assign({ "Accept": "*/*", "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8" }, base);
@@ -276,15 +435,65 @@ function xorEncrypt(input, key) {
 }
 
 function extractM3u8FromHtml(html) {
-  const m = String(html || "").match(/'m3u8([\s\S]*?)video/);
-  if (!m) return "";
-  try {
-    const parts = m[1].split("|").reverse();
-    if (parts.length >= 9) {
-      return `${parts[1]}://${parts[2]}.${parts[3]}/${parts[4]}-${parts[5]}-${parts[6]}-${parts[7]}-${parts[8]}/playlist.m3u8`;
-    }
-  } catch (e) {}
+  const text = String(html || "");
+
+  const pipeMatch = text.match(/m3u8\|([a-f0-9|]+)\|com\|surrit\|https\|video/i);
+  if (pipeMatch) {
+    const uuid = pipeMatch[1].split("|").reverse().join("-");
+    if (/^[a-f0-9-]{36}$/i.test(uuid)) return `https://surrit.com/${uuid}/playlist.m3u8`;
+  }
+
+  const packed = text.match(/'m3u8([\s\S]*?)video/);
+  if (packed) {
+    try {
+      const parts = packed[1].split("|").reverse();
+      if (parts.length >= 9) {
+        return `${parts[1]}://${parts[2]}.${parts[3]}/${parts[4]}-${parts[5]}-${parts[6]}-${parts[7]}-${parts[8]}/playlist.m3u8`;
+      }
+    } catch (e) {}
+  }
+
+  const direct = text.match(/https?:\/\/surrit\.(?:com|store)\/[a-f0-9-]{36}\/playlist\.m3u8/i);
+  if (direct) return direct[0];
+
+  const generic = text.match(/https?:\/\/[^\s"'<>]+\.m3u8(?:\?[^\s"'<>]*)?/i);
+  if (generic && !/\.css|\.js/i.test(generic[0])) return generic[0];
+
   return "";
+}
+
+function extractSurritVideoId(html) {
+  const text = String(html || "");
+  const dataMatch = text.match(/data-url=["']([^"']+)["']/i);
+  if (dataMatch) {
+    try {
+      const decoded = xorDecode(dataMatch[1], XOR_KEY);
+      const id = decoded.replace(/https?:\/\/[^/]+/, "").split("/").filter(Boolean).pop();
+      if (id) return id;
+    } catch (e) {}
+  }
+  const embed = text.match(/surrit\.(?:com|store)\/e\/([a-zA-Z0-9_-]+)/i);
+  if (embed) return embed[1];
+  const uuid = text.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+  if (uuid) return uuid[1];
+  return "";
+}
+
+function detectSurritBases(html) {
+  const bases = [];
+  const text = String(html || "");
+  const embedMatch = text.match(/https?:\/\/surrit\.\w+/i);
+  if (embedMatch) bases.push(embedMatch[0].replace(/\/e\/.*$/, "").replace(/\/stream.*$/, ""));
+  for (let i = 0; i < SURRIT_BASES.length; i++) bases.push(SURRIT_BASES[i]);
+  const unique = [];
+  const seen = new Set();
+  for (let i = 0; i < bases.length; i++) {
+    const b = bases[i];
+    if (!b || seen.has(b)) continue;
+    seen.add(b);
+    unique.push(b);
+  }
+  return unique;
 }
 
 async function resolveSurritStream(videoId, surritBase, srcName) {
@@ -303,14 +512,26 @@ async function resolveSurritStream(videoId, surritBase, srcName) {
   return parsed.stream || parsed.mp4 || "";
 }
 
-async function resolveSurritStreamAny(videoId, surritBase) {
-  for (let i = 0; i < STREAM_SOURCES.length; i++) {
-    try {
-      const url = await resolveSurritStream(videoId, surritBase, STREAM_SOURCES[i]);
-      if (url) return url;
-    } catch (e) {}
+async function resolveSurritStreamAny(videoId, html) {
+  const bases = detectSurritBases(html);
+  for (let b = 0; b < bases.length; b++) {
+    for (let i = 0; i < STREAM_SOURCES.length; i++) {
+      try {
+        const url = await resolveSurritStream(videoId, bases[b], STREAM_SOURCES[i]);
+        if (url) return url;
+      } catch (e) {}
+    }
   }
   return "";
+}
+
+function pickItemCover(scopeHtml, href, $img) {
+  const slug = extractVideoSlug(resolveUrl(href));
+  const fromImg = pickImageUrl($img);
+  if (fromImg && !isLogoImage(fromImg) && (!slug || belongsToVideo(fromImg, slug))) return fromImg;
+  const fromPoster = extractPosterFromHtml(scopeHtml, resolveUrl(href));
+  if (fromPoster) return fromPoster;
+  return fromImg && !isLogoImage(fromImg) ? fromImg : "";
 }
 
 function parseVideoList(html) {
@@ -319,16 +540,18 @@ function parseVideoList(html) {
   const items = [];
   const seen = new Set();
 
-  function pushItem(href, title, cover, duration) {
-    if (!href || !title) return;
+  function pushItem(href, title, cover, duration, scopeHtml, $img) {
+    if (!href) return;
     const detailLink = resolveUrl(href);
     if (seen.has(detailLink)) return;
+    const finalTitle = normalizeListText(title) || slugToDisplayTitle(href);
+    if (!finalTitle || looksLikeDuration(finalTitle)) return;
     seen.add(detailLink);
-    const coverUrl = upgradeCoverUrl(cover) || undefined;
+    const coverUrl = upgradeCoverUrl(cover || pickItemCover(scopeHtml || "", href, $img)) || undefined;
     const item = {
       id: href,
       type: "url",
-      title: String(title).trim(),
+      title: finalTitle,
       backdropPath: coverUrl,
       posterPath: coverUrl,
       link: detailLink,
@@ -339,36 +562,35 @@ function parseVideoList(html) {
     items.push(item);
   }
 
-  $(".vid-items > div.item").each((_, el) => {
-    const $el = $(el);
-    const href = $el.find(".title").attr("href") || $el.find("a[href*='/v/']").attr("href") || "";
-    const title = $el.find(".title").text().trim() || $el.find("img").attr("alt") || "";
-    const cover = pickImageUrl($el.find(".image img, img").first()) || extractCoverFromHtml($el.html());
-    const duration = $el.find(".duration").text().trim() || "";
-    pushItem(href, title, cover, duration);
-  });
+  function parseCard(el) {
+    const $scope = resolveListScope($, el);
+    const href = $scope.find('a[href*="/v/"]').first().attr("href") || "";
+    if (!/\/v\//.test(href)) return;
+    const title = extractListTitle($scope, href);
+    const duration = extractListDuration($scope);
+    const $img = $scope.find("img").first();
+    pushItem(href, title, pickItemCover($scope.html(), href, $img), duration, $scope.html(), $img);
+  }
 
-  $("div.thumbnail").each((_, el) => {
-    const $el = $(el);
-    const $a = $el.find('a[href*="/v/"]').first();
-    const href = $a.attr("href") || "";
-    const $img = $el.find("img").first();
-    const cover = pickImageUrl($img) || extractCoverFromHtml($el.html());
-    const title = $img.attr("alt") || $a.attr("title") || $el.find(".truncate, h2").first().text().trim();
-    const duration = $el.find(".absolute.bottom-1, .duration, .text-nord9").first().text().trim();
-    pushItem(href, title, cover, duration);
-  });
+  if ($(".group").length > 0) {
+    $(".group").each((_, el) => parseCard(el));
+  } else if ($(".vid-items > div.item").length > 0) {
+    $(".vid-items > div.item").each((_, el) => parseCard(el));
+  } else {
+    $("div.thumbnail").each((_, el) => parseCard(el));
+  }
 
   if (items.length === 0) {
     $('a[href*="/v/"]').each((_, el) => {
       const $a = $(el);
       const href = $a.attr("href") || "";
       if (!/\/v\//.test(href)) return;
-      const $scope = $a.closest("div.thumbnail, div.item, article, .group");
-      const $img = $scope.length ? $scope.find("img").first() : $a.find("img").first();
-      const title = ($img.attr("alt") || $a.attr("title") || $a.text().trim() || "").trim();
-      const cover = pickImageUrl($img) || extractCoverFromHtml($scope.html() || $a.html());
-      pushItem(href, title, cover, "");
+      const $scope = $a.closest("div.group, div.thumbnail, div.item, article, .group");
+      const $root = $scope.length ? $scope : $a.parent();
+      const title = extractListTitle($root, href);
+      const duration = extractListDuration($root);
+      const $img = $root.find("img").first();
+      pushItem(href, title, pickItemCover($root.html() || $a.html(), href, $img), duration, $root.html() || $a.html(), $img);
     });
   }
 
@@ -421,13 +643,25 @@ async function resolveVideoUrl(html, detailUrl) {
   const $ = Widget.html.load(html);
 
   if (!videoUrl) {
-    const dataUrl = $("#video-files div").attr("data-url") || $("[data-url*='surrit']").attr("data-url") || "";
+    const dataUrl = $("#video-files div").attr("data-url")
+      || $("[data-url]").filter((_, el) => {
+        const val = $(el).attr("data-url") || "";
+        return val.length > 20;
+      }).first().attr("data-url")
+      || "";
     if (dataUrl) {
       try {
         const decodedUrl = xorDecode(dataUrl, XOR_KEY);
         const videoId = decodedUrl.replace(/https?:\/\/[^/]+/, "").split("/").filter(Boolean).pop() || "";
-        if (videoId) videoUrl = await resolveSurritStreamAny(videoId, SURRIT_BASE);
+        if (videoId) videoUrl = await resolveSurritStreamAny(videoId, html);
       } catch (e) {}
+    }
+  }
+
+  if (!videoUrl) {
+    const videoId = extractSurritVideoId(html);
+    if (videoId) {
+      try { videoUrl = await resolveSurritStreamAny(videoId, html); } catch (e) {}
     }
   }
 
@@ -435,7 +669,7 @@ async function resolveVideoUrl(html, detailUrl) {
     $("script").each((_, el) => {
       const content = $(el).html() || "";
       if (content.includes(".mp4")) {
-        const match = content.match(/https?:\/\/[\w./-]+\.mp4[\w./-]*/);
+        const match = content.match(/https?:\/\/[\w./-]+\.mp4[\w./?=-]*/);
         if (match) { videoUrl = match[0]; return false; }
       }
     });
@@ -444,7 +678,7 @@ async function resolveVideoUrl(html, detailUrl) {
     $("script").each((_, el) => {
       const content = $(el).html() || "";
       if (content.includes(".m3u8")) {
-        const match = content.match(/https?:\/\/[\w./-]+\.m3u8[\w./-]*/);
+        const match = content.match(/https?:\/\/[\w./-]+\.m3u8[\w./?=-]*/);
         if (match) { videoUrl = match[0]; return false; }
       }
     });
@@ -453,17 +687,6 @@ async function resolveVideoUrl(html, detailUrl) {
     videoUrl = $('video source[type="video/mp4"]').attr("src") || $("video source").attr("src") || $("video").attr("src") || "";
   }
   if (videoUrl && videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
-
-  if (!videoUrl) {
-    const embedMatch = html.match(/https?:\/\/surrit\.\w+\/e\/[a-zA-Z0-9_]+/);
-    if (embedMatch) {
-      const surritBase = embedMatch[0].replace(/\/e\/.*/, "");
-      const vidMatch = embedMatch[0].match(/\/e\/([a-zA-Z0-9_]+)/);
-      if (vidMatch && vidMatch[1]) {
-        try { videoUrl = await resolveSurritStreamAny(vidMatch[1], surritBase); } catch (e) {}
-      }
-    }
-  }
 
   if (videoUrl && !videoUrl.startsWith("http")) videoUrl = "";
   return videoUrl;
@@ -484,7 +707,7 @@ async function loadDetail(link) {
       || $('meta[property="og:title"]').attr("content")
       || $("title").text().trim()
       || "";
-    let cover = extractCoverFromHtml(html)
+    let cover = extractPosterFromHtml(html, detailUrl, $)
       || pickImageUrl($(".video-cover img, .movie-cover img, .image img, img[data-src*='icdn'], img[src*='icdn']").first())
       || pickImageUrl($("video").first());
 
@@ -520,7 +743,7 @@ async function loadDetail(link) {
       if (!rDetailLink || seenRelated.has(rDetailLink)) return;
       seenRelated.add(rDetailLink);
       const rTitle = $rLink.text().trim() || $el.find("img").attr("alt") || "\u76f8\u5173\u5f71\u7247";
-      const rCover = pickImageUrl($el.find("img").first()) || extractCoverFromHtml($el.html());
+      const rCover = pickItemCover($el.html(), rHref, $el.find("img").first());
       relatedItems.push({
         id: rHref,
         type: "url",
@@ -532,8 +755,7 @@ async function loadDetail(link) {
       });
     });
 
-    const backdropPaths = collectBackdropPaths(html, cover);
-    if (!cover && backdropPaths && backdropPaths.length > 0) cover = backdropPaths[0];
+    const backdropPaths = collectBackdropPaths(html, detailUrl, cover, $);
 
     return {
       id: link,
