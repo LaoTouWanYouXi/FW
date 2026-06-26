@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.3.1",
+  version: "1.4.3",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
@@ -94,10 +94,75 @@ WidgetMetadata = {
       cacheDuration: 3600,
       params: [
         {
-          name: "url",
+          name: "genreId",
           title: "\u9009\u62e9\u7c7b\u522b",
           type: "enumeration",
-          enumOptions: [{ title: "\u8bf7\u9009\u62e9", value: "" }]
+          enumOptions: [
+            { title: "\u5927\u80f8\u90e8", value: "https://123av.com/cn/genres/big-tits" },
+            { title: "\u4e2d\u51fa", value: "https://123av.com/cn/genres/creampie" },
+            { title: "\u5355\u4f53", value: "https://123av.com/cn/genres/solowork" },
+            { title: "\u4eba\u59bb", value: "https://123av.com/cn/genres/married-woman" },
+            { title: "\u719f\u5973", value: "https://123av.com/cn/genres/mature-woman" },
+            { title: "\u7d20\u4eba", value: "https://123av.com/cn/genres/amateur" },
+            { title: "\u7f8e\u5c11\u5973", value: "https://123av.com/cn/genres/beautiful-girl" },
+            { title: "\u6821\u56ed", value: "https://123av.com/cn/genres/school-girls" },
+            { title: "3P/4P", value: "https://123av.com/cn/genres/3p-4p" },
+            { title: "\u5267\u60c5", value: "https://123av.com/cn/genres/drama" },
+            { title: "NTR", value: "https://123av.com/cn/genres/cuckold" },
+            { title: "\u53e3\u4ea4", value: "https://123av.com/cn/genres/blowjob" },
+            { title: "\u75f4\u5973", value: "https://123av.com/cn/genres/slut" },
+            { title: "\u786c\u6838", value: "https://123av.com/cn/genres/nasty-hardcore" },
+            { title: "\u4e73\u4ea4", value: "https://123av.com/cn/genres/titty-fuck" },
+            { title: "\u4e3b\u89c2\u89c6\u89d2", value: "https://123av.com/cn/genres/pov" },
+            { title: "Cosplay", value: "https://123av.com/cn/genres/cosplay" },
+            { title: "\u5973\u540c", value: "https://123av.com/cn/genres/lesbian" },
+            { title: "\u4e1d\u8896", value: "https://123av.com/cn/genres/pantyhose" },
+            { title: "\u5973\u4ec6", value: "https://123av.com/cn/genres/maid" },
+            { title: "\u62a4\u58eb", value: "https://123av.com/cn/genres/nurse" },
+            { title: "\u989c\u5c04", value: "https://123av.com/cn/genres/facials" },
+            { title: "\u5de8\u81c0", value: "https://123av.com/cn/genres/huge-butt" },
+            { title: "\u4e0d\u4f26", value: "https://123av.com/cn/genres/affair" },
+            { title: "\u59d0\u59d0", value: "https://123av.com/cn/genres/older-sister" },
+            { title: "\u5077\u7aa5", value: "https://123av.com/cn/genres/voyeur" },
+            { title: "\u4fae\u8fb1", value: "https://123av.com/cn/genres/humiliation" },
+            { title: "\u642d\u8bbc", value: "https://123av.com/cn/genres/nampa" },
+            { title: "OL", value: "https://123av.com/cn/genres/ol" },
+            { title: "\u6df1\u5589", value: "https://123av.com/cn/genres/deep-throat" },
+            { title: "\u81ea\u6170", value: "https://123av.com/cn/genres/masturbation" },
+            { title: "\u624b\u4ea4", value: "https://123av.com/cn/genres/handjob" },
+            { title: "\u5236\u670d", value: "https://123av.com/cn/genres/uniform" },
+            { title: "\u8fa3\u59b9", value: "https://123av.com/cn/genres/gal" },
+            { title: "\u675f\u7f1a", value: "https://123av.com/cn/genres/restraint" },
+            { title: "\u809b\u4ea4", value: "https://123av.com/cn/genres/anal" },
+            { title: "\u6deb\u8bed", value: "https://123av.com/cn/genres/dirty-talk" },
+            { title: "\u5973\u5927\u5b66\u751f", value: "https://123av.com/cn/genres/female-college-student" },
+            { title: "\u65e0\u6bdb", value: "https://123av.com/cn/genres/shaved" },
+            { title: "\u4e71\u4ea4", value: "https://123av.com/cn/genres/promiscuity" },
+            { title: "\u98ce\u4fd7\u5a18", value: "https://123av.com/cn/genres/prostitutes" },
+            { title: "\u6821\u670d", value: "https://123av.com/cn/genres/school-uniform" },
+            { title: "\u5c11\u5973", value: "https://123av.com/cn/genres/girl" },
+            { title: "\u59b9\u59b9", value: "https://123av.com/cn/genres/sister" },
+            { title: "\u6309\u6469", value: "https://123av.com/cn/genres/massage" },
+            { title: "\u8c03\u6559", value: "https://123av.com/cn/genres/training" },
+            { title: "\u7edd\u9876\u9ad8\u6f6e", value: "https://123av.com/cn/genres/acme-orgasm" },
+            { title: "\u73a9\u5177", value: "https://123av.com/cn/genres/toy" },
+            { title: "\u6bcd\u4eb2", value: "https://123av.com/cn/genres/mother" },
+            { title: "M\u7537", value: "https://123av.com/cn/genres/submissive-men" },
+            { title: "SM", value: "https://123av.com/cn/genres/sm" },
+            { title: "\u653e\u5c3f", value: "https://123av.com/cn/genres/urination" },
+            { title: "\u5973\u6559\u5e08", value: "https://123av.com/cn/genres/female-teacher" },
+            { title: "\u6e29\u6cc9", value: "https://123av.com/cn/genres/hot-spring" },
+            { title: "\u6237\u5916", value: "https://123av.com/cn/genres/outdoors" },
+            { title: "\u65b0\u5a18", value: "https://123av.com/cn/genres/bride-young-wife" },
+            { title: "\u7ed1\u67b6", value: "https://123av.com/cn/genres/bondage" },
+            { title: "\u8f6e\u5978", value: "https://123av.com/cn/genres/gangbang" },
+            { title: "\u989c\u5c04\u7fa4\u4ea4", value: "https://123av.com/cn/genres/bukkake" },
+            { title: "BBW", value: "https://123av.com/cn/genres/bbw" },
+            { title: "\u5de8\u6839", value: "https://123av.com/cn/genres/huge-cock" },
+            { title: "\u8ff7\u4f60\u88d9", value: "https://123av.com/cn/genres/mini-skirt" },
+            { title: "\u732b\u5973\u90ce", value: "https://123av.com/cn/genres/catgirl" },
+            { title: "\u65e0\u7801", value: "https://123av.com/cn/genres/uncensored" }
+          ]
         },
         { name: "page", title: "\u9875\u7801", type: "page" }
       ]
@@ -111,10 +176,44 @@ WidgetMetadata = {
       cacheDuration: 3600,
       params: [
         {
-          name: "url",
+          name: "peopleId",
           title: "\u9009\u62e9\u5973\u6f14\u5458",
           type: "enumeration",
-          enumOptions: [{ title: "\u8bf7\u9009\u62e9", value: "" }]
+          enumOptions: [
+            { title: "\u6ce2\u591a\u91ce\u7ed3\u8863", value: "https://123av.com/cn/actresses/yui-hatano" },
+            { title: "\u7be0\u7530\u4f18", value: "https://123av.com/cn/actresses/shinoda-yu" },
+            { title: "\u5927\u69fb\u97ff", value: "https://123av.com/cn/actresses/hibiki-ohtsuki" },
+            { title: "\u6ee8\u5d0e\u771f\u7eea", value: "https://123av.com/cn/actresses/hamazaki-mao" },
+            { title: "\u68ee\u6cfd\u4f73\u5948", value: "https://123av.com/cn/actresses/kana-morisawa-kanako-iioka" },
+            { title: "\u83b2\u5b9e\u514b\u83b1\u513f", value: "https://123av.com/cn/actresses/hasumi-claire" },
+            { title: "\u677e\u672c\u4e00\u9999", value: "https://123av.com/cn/actresses/ichika-matsumoto" },
+            { title: "AIKA", value: "https://123av.com/cn/actresses/aika" },
+            { title: "\u65b0\u6751\u660e\u91cc", value: "https://123av.com/cn/actresses/niimura-akari" },
+            { title: "\u7f8e\u6708\u4f18\u82bd", value: "https://123av.com/cn/actresses/mizuki-yayoi-1" },
+            { title: "\u5c0f\u65e9\u5ddd\u601c\u5b50", value: "https://123av.com/cn/actresses/kobayakawa-reiko" },
+            { title: "\u6c34\u91ce\u671d\u9633", value: "https://123av.com/cn/actresses/asahi-mizuno" },
+            { title: "\u7f8e\u56ed\u548c\u82b1", value: "https://123av.com/cn/actresses/waka-misono" },
+            { title: "\u4f50\u4f50\u6728\u660e", value: "https://123av.com/cn/actresses/aki-sasaki" },
+            { title: "JULIA", value: "https://123av.com/cn/actresses/julia" },
+            { title: "\u98ce\u95f4\u7531\u7f8e", value: "https://123av.com/cn/actresses/yumi-kazama" },
+            { title: "\u6e1a\u5149\u5e0c", value: "https://123av.com/cn/actresses/mitsuki-nagisa" },
+            { title: "\u5317\u91ce\u672a\u5948", value: "https://123av.com/cn/actresses/kitano-mina" },
+            { title: "\u672c\u5e84\u9234", value: "https://123av.com/cn/actresses/honjo-suzu" },
+            { title: "\u661f\u5bab\u4e00\u82b1", value: "https://123av.com/cn/actresses/hoshino-ichika" },
+            { title: "\u6a31\u7a7a\u6843", value: "https://123av.com/cn/actresses/sakura-momo" },
+            { title: "\u9752\u7a7a\u5149", value: "https://123av.com/cn/actresses/aozora-hikari" },
+            { title: "\u590f\u76ee\u97ff", value: "https://123av.com/cn/actresses/natsume-iri" },
+            { title: "\u6a4b\u672c\u6709\u83dc", value: "https://123av.com/cn/actresses/arina-hashimoto" },
+            { title: "\u4e09\u4e0a\u60a0\u4e9a", value: "https://123av.com/cn/actresses/mikami-yua" },
+            { title: "\u6df1\u7530\u548c\u5f71", value: "https://123av.com/cn/actresses/fukada-eimi" },
+            { title: "\u660e\u91cc\u7d22", value: "https://123av.com/cn/actresses/arimura-suzu" },
+            { title: "\u5929\u4f7f\u840c", value: "https://123av.com/cn/actresses/angel-moe" },
+            { title: "\u7f8e\u8c37\u6731\u91cc", value: "https://123av.com/cn/actresses/akari-mitani" },
+            { title: "\u68a8\u5948\u5948", value: "https://123av.com/cn/actresses/rena-aoi" },
+            { title: "\u7be0\u7530\u6b65", value: "https://123av.com/cn/actresses/ayumi-shinoda" },
+            { title: "\u4e59\u963f\u4e3d\u65af", value: "https://123av.com/cn/actresses/alice-otsu" },
+            { title: "\u67a2\u6728\u8475", value: "https://123av.com/cn/actresses/aoi-kururugi" }
+          ]
         },
         { name: "page", title: "\u9875\u7801", type: "page" }
       ]
@@ -128,10 +227,31 @@ WidgetMetadata = {
       cacheDuration: 3600,
       params: [
         {
-          name: "url",
+          name: "genreId",
           title: "\u9009\u62e9\u5236\u4f5c\u5546",
           type: "enumeration",
-          enumOptions: [{ title: "\u8bf7\u9009\u62e9", value: "" }]
+          enumOptions: [
+            { title: "FC2", value: "https://123av.com/cn/makers/fc2" },
+            { title: "Moody's", value: "https://123av.com/cn/makers/moodys" },
+            { title: "SOD Create", value: "https://123av.com/cn/makers/sod-create" },
+            { title: "Madonna", value: "https://123av.com/cn/makers/madonna" },
+            { title: "Prestige", value: "https://123av.com/cn/makers/prestige" },
+            { title: "Attackers", value: "https://123av.com/cn/makers/attackers" },
+            { title: "Idea Pocket", value: "https://123av.com/cn/makers/idea-pocket" },
+            { title: "S1", value: "https://123av.com/cn/makers/s1-no-1-style" },
+            { title: "HEYZO", value: "https://123av.com/cn/makers/heyzo" },
+            { title: "10Musume", value: "https://123av.com/cn/makers/10musume" },
+            { title: "\u4e1c\u4eac\u70ed", value: "https://123av.com/cn/makers/tokyo-hot" },
+            { title: "Faleno", value: "https://123av.com/cn/makers/faleno" },
+            { title: "E-BODY", value: "https://123av.com/cn/makers/e-body" },
+            { title: "Kawaii", value: "https://123av.com/cn/makers/kawaii" },
+            { title: "Hunter", value: "https://123av.com/cn/makers/hunter" },
+            { title: "Venus", value: "https://123av.com/cn/makers/venus" },
+            { title: "Premium", value: "https://123av.com/cn/makers/premium" },
+            { title: "Natural High", value: "https://123av.com/cn/makers/natural-high" },
+            { title: "1Pondo", value: "https://123av.com/cn/makers/1pondo" },
+            { title: "Caribbeancom", value: "https://123av.com/cn/makers/caribbeancom" }
+          ]
         },
         { name: "page", title: "\u9875\u7801", type: "page" }
       ]
@@ -145,10 +265,19 @@ WidgetMetadata = {
       cacheDuration: 3600,
       params: [
         {
-          name: "url",
+          name: "genreId",
           title: "\u9009\u62e9\u7cfb\u5217",
           type: "enumeration",
-          enumOptions: [{ title: "\u8bf7\u9009\u62e9", value: "" }]
+          enumOptions: [
+            { title: "\u6742\u6280\u6027\u7231", value: "https://123av.com/cn/series/acrobatic-sex" },
+            { title: "\u4e1c\u4eac\u70ed", value: "https://123av.com/cn/series/tokyo-hot" },
+            { title: "NTR", value: "https://123av.com/cn/series/ntr" },
+            { title: "\u9b54\u955c", value: "https://123av.com/cn/series/magic-mirror" },
+            { title: "\u7d20\u4eba\u642d\u8bbc", value: "https://123av.com/cn/series/amateur-nanpa" },
+            { title: "S1\u5973\u513f\u7cfb\u5217", value: "https://123av.com/cn/series/s1-girl-series" },
+            { title: "\u7b2c\u4e00\u5370\u8c61", value: "https://123av.com/cn/series/first-impression" },
+            { title: "\u7981\u5fcc\u75c5\u623f", value: "https://123av.com/cn/series/forbidden-nursing" }
+          ]
         },
         { name: "page", title: "\u9875\u7801", type: "page" }
       ]
@@ -173,8 +302,8 @@ const STREAM_SOURCES = ["123av", "javxx", "missav"];
 const SURRIT_BASES = ["https://surrit.store", "https://surrit.com"];
 const VIDEO_CACHE_TTL = 3600;
 const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+  "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
   "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
   "Referer": "https://123av.com/"
 };
@@ -199,14 +328,26 @@ const DIRECTORY_INDEX_MAP = {
   series: "/series"
 };
 
-const BROWSE_ENUM_MAX_PAGES = {
-  genres: 20,
-  actresses: 10,
-  makers: 25,
-  series: 25
-};
+function decodeHtml(text) {
+  return String(text || "")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
 
-const BROWSE_ENUM_CACHE_TTL = 86400;
+function mergeHeaders(extra) {
+  return Object.assign({}, HEADERS, extra || {});
+}
+
+function isErrorPage(body) {
+  const text = String(body || "").trim();
+  if (!text || text.length < 200) {
+    return text.startsWith("{") && /"error"|"status"\s*:\s*400/.test(text);
+  }
+  return false;
+}
 
 function isVideoDetailUrl(url) {
   return /\/v\/[^/?#]+/i.test(String(url || ""));
@@ -296,83 +437,27 @@ function parseDirectoryList(html, indexPath) {
   return parseDirectoryListRegex(html, indexPath);
 }
 
-function getBrowseFilterUrl(params) {
-  return String((params && (params.url || params.genreId || params.peopleId)) || "").trim();
-}
-
-function applyBrowseEnumOptions(moduleKey, options) {
-  if (!WidgetMetadata || !WidgetMetadata.modules || !options || !options.length) return;
-  for (let i = 0; i < WidgetMetadata.modules.length; i++) {
-    const mod = WidgetMetadata.modules[i];
-    if (mod.id !== moduleKey) continue;
-    for (let j = 0; j < mod.params.length; j++) {
-      if (mod.params[j].name === "url") {
-        mod.params[j].enumOptions = options;
-        return;
-      }
-    }
+function normalizeBrowseId(raw) {
+  const text = decodeHtml(String(raw || "").trim());
+  if (!text) return "";
+  if (/^https?:\/\//i.test(text)) {
+    return text
+      .replace(/^http:\/\//i, "https://")
+      .replace(/^https?:\/\/javxx\.com/i, BASE_URL);
   }
+  const pathMatch = text.match(/(\/(?:cn\/)?(?:genres|actresses|makers|series)\/[^\s?#]+)/i);
+  if (pathMatch) return resolveUrl(pathMatch[1]);
+  if (text.indexOf("/cn/") === 0) return BASE_URL + text;
+  return "";
 }
 
-function readBrowseEnumCache(moduleKey) {
-  try {
-    const raw = Widget.storage.get("javxx:enum:" + moduleKey);
-    if (!raw) return null;
-    const data = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!data || !data.options || !data.ts) return null;
-    if (Date.now() - data.ts > BROWSE_ENUM_CACHE_TTL * 1000) return null;
-    return data.options;
-  } catch (e) {
-    return null;
-  }
-}
-
-function writeBrowseEnumCache(moduleKey, options) {
-  try {
-    Widget.storage.set("javxx:enum:" + moduleKey, JSON.stringify({ options: options, ts: Date.now() }));
-  } catch (e) {}
-}
-
-async function fetchBrowseEnumOptions(moduleKey) {
-  const indexPath = DIRECTORY_INDEX_MAP[moduleKey];
-  if (!indexPath) return [];
-  const maxPages = BROWSE_ENUM_MAX_PAGES[moduleKey] || 10;
-  const options = [];
-  const seen = new Set();
-
-  for (let page = 1; page <= maxPages; page++) {
-    let url = `${BASE_URL}${LANG_PREFIX}${indexPath}`;
-    if (page > 1) url += (url.includes("?") ? "&" : "?") + "page=" + page;
-    const res = await Widget.http.get(url, { headers: HEADERS });
-    const html = res.data || "";
-    if (isMigrationPage(html)) break;
-    const entries = parseDirectoryList(html, indexPath);
-    let added = 0;
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
-      const value = entry.link || entry.id;
-      if (!value || seen.has(value)) continue;
-      seen.add(value);
-      options.push({ title: entry.title || value, value: value });
-      added++;
-    }
-    if (added === 0) break;
-  }
-  return options;
-}
-
-async function ensureBrowseEnumOptions(moduleKey) {
-  let options = readBrowseEnumCache(moduleKey);
-  if (!options || !options.length) {
-    try {
-      options = await fetchBrowseEnumOptions(moduleKey);
-      if (options.length) writeBrowseEnumCache(moduleKey, options);
-    } catch (e) {
-      options = [];
-    }
-  }
-  if (options.length) applyBrowseEnumOptions(moduleKey, options);
-  return options;
+function buildBrowsePageUrl(browseRef, page) {
+  const baseUrl = normalizeBrowseId(browseRef);
+  if (!baseUrl) return "";
+  let url = baseUrl;
+  const p = Number(page || 1);
+  if (p > 1) url += (url.indexOf("?") >= 0 ? "&" : "?") + "page=" + p;
+  return url;
 }
 
 function buildBrowseDetailMeta(detailUrl, title, moduleKey) {
@@ -646,7 +731,7 @@ function parseVideoListRegex(html) {
   const items = [];
   const seen = new Set();
   const text = String(html || "");
-  const linkRe = /href="((?:https?:\/\/[^"']+)?\/cn\/v\/[^"#?]+)"/gi;
+  const linkRe = /href="((?:https?:\/\/[^"']+)?(?:\/cn)?\/v\/[^"#?]+)"/gi;
   let m;
   while ((m = linkRe.exec(text)) && items.length < 60) {
     const href = m[1];
@@ -898,9 +983,18 @@ function pickItemCover(scopeHtml, href, $img) {
   return fromImg && !isLogoImage(fromImg) ? fromImg : "";
 }
 
+function extractVideoListHtml(html) {
+  const text = String(html || "");
+  if (!text) return text;
+  const mainMatch = text.match(/<main\b[\s\S]*?<\/main>/i);
+  if (mainMatch && (mainMatch[0].match(/\/v\//g) || []).length >= 3) return mainMatch[0];
+  return text;
+}
+
 function parseVideoList(html) {
   if (!html || isMigrationPage(html)) return [];
-  const $ = Widget.html.load(html);
+  const scoped = extractVideoListHtml(html);
+  const $ = Widget.html.load(scoped);
   const items = [];
   const seen = new Set();
 
@@ -961,15 +1055,62 @@ function parseVideoList(html) {
     });
   }
 
-  if (items.length === 0) return parseVideoListRegex(html);
+  if (items.length === 0) return parseVideoListRegex(scoped);
 
   return items;
 }
 
+async function fetchHtmlText(url, referer) {
+  const ref = referer || BASE_URL + LANG_PREFIX + "/";
+  const attempts = [
+    mergeHeaders({ Referer: ref }),
+    {
+      "User-Agent": HEADERS["User-Agent"],
+      Accept: "text/html",
+      Referer: ref,
+    },
+    {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+      Referer: ref,
+    },
+  ];
+  let html = "";
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      const res = await Widget.http.get(url, { headers: attempts[i] });
+      html = typeof res.data === "string" ? res.data : String(res.data || "");
+      if (html && html.length > 200 && !isMigrationPage(html) && !isErrorPage(html)) return html;
+    } catch (e) {}
+  }
+  return html && !isMigrationPage(html) ? html : "";
+}
+
+async function fetchBrowseVideoList(browseRef, page) {
+  const baseUrl = normalizeBrowseId(browseRef);
+  const fetchUrl = buildBrowsePageUrl(browseRef, page);
+  if (!baseUrl || !fetchUrl) return [];
+  const html = await fetchHtmlText(fetchUrl, baseUrl);
+  if (!html) return [];
+  let items = parseVideoList(html);
+  if (!items.length) items = parseVideoListRegex(html);
+  return items;
+}
+
+async function loadGenreList(params) {
+  const browseId = normalizeBrowseId(
+    (params && (params.genreId || params.peopleId || params.url || params.link || params.id)) || ""
+  );
+  if (!browseId) return [];
+  return fetchBrowseVideoList(browseId, params && params.page);
+}
+
 async function fetchHtml(pathOrUrl) {
   const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${BASE_URL}${LANG_PREFIX}${pathOrUrl}`;
-  const res = await Widget.http.get(url, { headers: HEADERS });
-  return { url, html: res.data || "" };
+  const html = await fetchHtmlText(url, BASE_URL + LANG_PREFIX + "/");
+  return { url, html: html };
 }
 
 async function loadCategory(categoryId, params) {
@@ -977,46 +1118,15 @@ async function loadCategory(categoryId, params) {
   const path = CATEGORY_MAP[categoryId] || "/new";
   let url = `${BASE_URL}${LANG_PREFIX}${path}`;
   if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
-  try {
-    const res = await Widget.http.get(url, { headers: HEADERS });
-    const html = res.data || "";
-    if (isMigrationPage(html)) return [];
-    let items = parseVideoList(html);
-    if (items.length === 0) items = parseVideoListRegex(html);
-    return items;
-  } catch (e) {
-    return [];
-  }
+  const html = await fetchHtmlText(url, BASE_URL + LANG_PREFIX + path);
+  if (!html || isMigrationPage(html)) return [];
+  let items = parseVideoList(html);
+  if (!items.length) items = parseVideoListRegex(html);
+  return items;
 }
 
 async function loadFilterList(params) {
-  const filterId = getBrowseFilterUrl(params);
-  if (!filterId) return [];
-  const page = Number(params.page || 1);
-  let url = filterId.startsWith("http") ? filterId : resolveUrl(filterId);
-  if (url.includes("javxx.com")) url = url.replace("https://javxx.com", BASE_URL).replace("http://javxx.com", BASE_URL);
-  if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
-  try {
-    const res = await Widget.http.get(url, { headers: HEADERS });
-    const html = res.data || "";
-    if (isMigrationPage(html)) return [];
-    let items = parseVideoList(html);
-    if (items.length === 0) items = parseVideoListRegex(html);
-    return items;
-  } catch (e) {
-    return [];
-  }
-}
-
-async function loadBrowseByUrl(moduleKey, params) {
-  await ensureBrowseEnumOptions(moduleKey);
-  const filterUrl = getBrowseFilterUrl(params);
-  if (!filterUrl) return [];
-  return loadFilterList(params);
-}
-
-async function loadGenreList(params) {
-  return loadFilterList(params);
+  return loadGenreList(params);
 }
 
 async function loadHot(params) { return loadCategory("hot", params); }
@@ -1030,10 +1140,21 @@ async function loadUncensored(params) { return loadCategory("uncensored", params
 async function loadLeaked(params) { return loadCategory("leaked", params); }
 async function loadFc2(params) { return loadCategory("fc2", params); }
 async function loadSiro(params) { return loadCategory("siro", params); }
-async function loadGenres(params) { return loadBrowseByUrl("genres", params); }
-async function loadActresses(params) { return loadBrowseByUrl("actresses", params); }
-async function loadMakers(params) { return loadBrowseByUrl("makers", params); }
-async function loadSeries(params) { return loadBrowseByUrl("series", params); }
+async function loadGenres(params) {
+  return loadGenreList(params);
+}
+
+async function loadActresses(params) {
+  return loadGenreList(params);
+}
+
+async function loadMakers(params) {
+  return loadGenreList(params);
+}
+
+async function loadSeries(params) {
+  return loadGenreList(params);
+}
 
 async function resolveVideoUrl(html, detailUrl) {
   let videoUrl = extractM3u8FromHtml(html);
@@ -1095,7 +1216,7 @@ async function loadDetail(link) {
     if (detailUrl.includes("javxx.com")) detailUrl = detailUrl.replace("https://javxx.com", BASE_URL).replace("http://javxx.com", BASE_URL);
 
     const cached = readVideoCache(detailUrl);
-    const res = await Widget.http.get(detailUrl, { headers: HEADERS });
+    const res = await Widget.http.get(detailUrl, { headers: mergeHeaders({ Referer: BASE_URL + LANG_PREFIX + "/" }) });
     const html = res.data || "";
     if (isMigrationPage(html)) return null;
 
@@ -1157,7 +1278,10 @@ async function loadDetail(link) {
       const $a = $(el);
       const href = resolveUrl($a.attr("href") || "");
       const text = $a.text().trim();
-      if (text && href && /\/(genres|tags|tag|makers|series)\//.test(href)) genreItems.push({ id: href, title: text });
+      if (text && href && /\/(genres|tags|tag|makers|series)\//.test(href)) {
+        const id = normalizeBrowseId(href) || href;
+        genreItems.push({ id: id, title: text });
+      }
     });
 
     const peoples = [];
@@ -1165,7 +1289,10 @@ async function loadDetail(link) {
       const $a = $(el);
       const href = resolveUrl($a.attr("href") || "");
       const text = $a.text().trim();
-      if (text && href && /\/actresses\//.test(href)) peoples.push({ id: href, title: text, role: "actress" });
+      if (text && href && /\/actresses\//.test(href)) {
+        const id = normalizeBrowseId(href) || href;
+        peoples.push({ id: id, title: text, role: "actress" });
+      }
     });
 
     const relatedItems = [];
@@ -1215,20 +1342,17 @@ async function loadDetail(link) {
 }
 
 async function search(params) {
-  if (params && getBrowseFilterUrl(params)) return loadFilterList(params);
+  if (params && normalizeBrowseId(params.genreId || params.peopleId || params.url)) {
+    return loadGenreList(params);
+  }
   const keyword = (params && params.keyword) || "";
   const page = Number((params && params.page) || 1);
   if (!keyword) return [];
-  try {
-    let url = `${BASE_URL}${LANG_PREFIX}/search/?keyword=${encodeURIComponent(keyword)}`;
-    if (page > 1) url += `&page=${page}`;
-    const res = await Widget.http.get(url, { headers: HEADERS });
-    const html = res.data || "";
-    if (isMigrationPage(html)) return [];
-    let items = parseVideoList(html);
-    if (items.length === 0) items = parseVideoListRegex(html);
-    return items;
-  } catch (e) {
-    return [];
-  }
+  let url = `${BASE_URL}${LANG_PREFIX}/search/?keyword=${encodeURIComponent(keyword)}`;
+  if (page > 1) url += `&page=${page}`;
+  const html = await fetchHtmlText(url, BASE_URL + LANG_PREFIX + "/search/");
+  if (!html || isMigrationPage(html)) return [];
+  let items = parseVideoList(html);
+  if (!items.length) items = parseVideoListRegex(html);
+  return items;
 }
