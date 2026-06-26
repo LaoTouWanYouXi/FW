@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.14",
+  version: "1.0.15",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -399,6 +399,13 @@ WidgetMetadata = {
         { name: "page", title: "\u9875\u7801", type: "page" },
       ],
     },
+    {
+      id: "loadResource",
+      title: "\u52a0\u8f7d\u8d44\u6e90",
+      functionName: "loadResource",
+      type: "stream",
+      params: [],
+    },
   ],
   search: {
     title: "\u641c\u7d22",
@@ -412,6 +419,9 @@ WidgetMetadata = {
 
 const BASE_URL = "https://javmove.com";
 const VIDEO_CACHE_TTL = 3600;
+const PARTS_BUNDLE_TTL = 3600;
+var partsBundleInflight = {};
+var detailInflight = {};
 const HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0.1 Mobile/15E148 Safari/604.1",
@@ -515,6 +525,67 @@ function writeVideoCache(link, videoUrl, customHeaders) {
       })
     );
   } catch (e) {}
+}
+
+function readPartsBundle(baseUrl) {
+  try {
+    const raw = Widget.storage.get("parts:v1:" + String(baseUrl));
+    if (!raw) return null;
+    const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (
+      data &&
+      data.resolvedParts &&
+      data.html &&
+      data.ts &&
+      Date.now() - data.ts < PARTS_BUNDLE_TTL * 1000
+    ) {
+      return data;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function writePartsBundle(baseUrl, bundle) {
+  try {
+    Widget.storage.set(
+      "parts:v1:" + String(baseUrl),
+      JSON.stringify({
+        html: bundle.html,
+        parts: bundle.parts,
+        resolvedParts: bundle.resolvedParts,
+        ts: Date.now(),
+      })
+    );
+  } catch (e) {}
+}
+
+async function fetchMoviePartsBundle(baseUrl) {
+  const key = normalizeMoviePageUrl(baseUrl);
+  if (!key) throw new Error("invalid movie url");
+
+  const cached = readPartsBundle(key);
+  if (cached) return cached;
+
+  if (partsBundleInflight[key]) return partsBundleInflight[key];
+
+  partsBundleInflight[key] = (async function () {
+    const html = await fetchHtml(key, BASE_URL + "/");
+    const $ = safeLoadHtml(html);
+    const parts = collectVideoParts($, key, html);
+    const resolvedParts = await resolvePartPlayback(parts, key);
+    const bundle = {
+      html: html,
+      parts: parts,
+      resolvedParts: resolvedParts,
+      ts: Date.now(),
+    };
+    writePartsBundle(key, bundle);
+    return bundle;
+  })().finally(function () {
+    delete partsBundleInflight[key];
+  });
+
+  return partsBundleInflight[key];
 }
 
 function buildPlayHeaders(videoUrl) {
@@ -1049,10 +1120,13 @@ function buildEpisodeItems(baseUrl, resolvedParts, durations, cover) {
     const part = resolvedParts[i];
     if (!part || !part.videoUrl) continue;
     const sec = durations[i] || 0;
+    const epNum = Number(part.label) || i + 1;
     items.push({
-      id: buildEpisodeItemId(movieUrl, part.label),
+      id: movieUrl,
       type: "url",
       title: "\u7b2c" + part.label + "\u96c6",
+      link: movieUrl,
+      episode: epNum,
       videoUrl: part.videoUrl,
       customHeaders: part.customHeaders || buildPlayHeaders(part.videoUrl),
       duration: sec > 0 ? Math.round(sec) : undefined,
@@ -1684,16 +1758,24 @@ async function loadUpcoming(params) {
 }
 
 async function loadDetail(link) {
-  try {
-    const rawLink = String(link);
-    const baseUrl = normalizeMoviePageUrl(rawLink);
-    const activeLabel = extractActivePartLabel(rawLink);
+  const baseUrl = normalizeMoviePageUrl(String(link));
+  if (!baseUrl || baseUrl.indexOf("/movie/") < 0) return null;
+  if (detailInflight[baseUrl]) return detailInflight[baseUrl];
+  detailInflight[baseUrl] = loadDetailInternal(link).finally(function () {
+    delete detailInflight[baseUrl];
+  });
+  return detailInflight[baseUrl];
+}
 
-    const html = await fetchHtml(baseUrl, BASE_URL + "/");
+async function loadDetailInternal(link) {
+  try {
+    const baseUrl = normalizeMoviePageUrl(String(link));
+    const bundle = await fetchMoviePartsBundle(baseUrl);
+    const html = bundle.html;
     const $ = safeLoadHtml(html);
     const meta = parseDetailMeta(html);
     const detailInfo = parseDetailInfo($, html);
-    const parts = collectVideoParts($, baseUrl, html);
+    const parts = bundle.parts;
 
     const rawTitle =
       $("h1").first().text().trim() ||
@@ -1712,17 +1794,13 @@ async function loadDetail(link) {
       meta.cover ||
       "";
 
-    const resolvedParts = await resolvePartPlayback(parts, baseUrl);
+    const resolvedParts = bundle.resolvedParts;
     const playableParts = resolvedParts.filter(function (part) {
       return part && part.videoUrl;
     });
     if (!playableParts.length) return null;
 
-    const activeIndex = findPartIndex(parts, activeLabel);
-    const mainPart =
-      resolvedParts[activeIndex] && resolvedParts[activeIndex].videoUrl
-        ? resolvedParts[activeIndex]
-        : playableParts[0];
+    const mainPart = playableParts[0];
 
     const videoUrl = mainPart.videoUrl;
     const playHeaders = mainPart.customHeaders || buildPlayHeaders(videoUrl);
@@ -1817,7 +1895,7 @@ async function loadDetail(link) {
       episodeItems: isSeries ? episodeItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: baseUrl,
-      mediaType: isSeries ? "tv" : "movie",
+      mediaType: "movie",
       customHeaders: isSeries
         ? firstEpisode.customHeaders || playHeaders
         : playHeaders,
@@ -1825,6 +1903,50 @@ async function loadDetail(link) {
   } catch (e) {
     console.error("[loadDetail] 失败:", e.message || e);
     return null;
+  }
+}
+
+async function loadResource(params) {
+  const link =
+    (params && (params.link || params.id || params.videoUrl)) || "";
+  const baseUrl = normalizeMoviePageUrl(String(link));
+  if (!baseUrl || baseUrl.indexOf("/movie/") < 0) return [];
+
+  try {
+    const bundle = await fetchMoviePartsBundle(baseUrl);
+    const playable = (bundle.resolvedParts || []).filter(function (part) {
+      return part && part.videoUrl;
+    });
+    if (!playable.length) return [];
+
+    const epNum = Number((params && params.episode) || 0);
+    const resources = [];
+    for (let i = 0; i < playable.length; i++) {
+      const part = playable[i];
+      writeVideoCache(part.pageUrl, part.videoUrl, part.customHeaders);
+      resources.push({
+        name:
+          playable.length > 1
+            ? "\u7b2c" + part.label + "\u96c6"
+            : "HD",
+        description:
+          playable.length > 1
+            ? "\u5206\u6bb5 " + part.label + " | MP4"
+            : "MP4",
+        url: part.videoUrl,
+      });
+    }
+
+    if (epNum > 0) {
+      for (let j = 0; j < playable.length; j++) {
+        const partEp = Number(playable[j].label) || j + 1;
+        if (partEp === epNum) return [resources[j]];
+      }
+    }
+    return resources;
+  } catch (e) {
+    console.error("[loadResource] 失败:", e.message || e);
+    return [];
   }
 }
 
