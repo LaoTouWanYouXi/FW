@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.6.0",
+  version: "1.7.0",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
@@ -487,6 +487,39 @@ function resolveUrl(href) {
   return BASE_URL + "/" + href;
 }
 
+function normalizeDetailLink(link) {
+  let detailUrl = String(link || "").trim();
+  if (!detailUrl) return "";
+  if (/javxx\.com/i.test(detailUrl)) {
+    detailUrl = detailUrl.replace(/^https?:\/\/javxx\.com/i, BASE_URL);
+  }
+  if (!detailUrl.startsWith("http")) detailUrl = resolveUrl(detailUrl);
+  return detailUrl;
+}
+
+function derivePreviewUrl(coverUrl) {
+  const text = String(coverUrl || "");
+  const m = text.match(/icdn[^/]*\/img2\/s\d+\/([a-f0-9]{2})\/([^/?#]+)\/cover\./i);
+  if (!m) return "";
+  const q = text.match(/\?([^"'\\s<>]+)/);
+  const query = q ? "?" + q[1] : "";
+  return "https://icdn.123av.me/preview/" + m[1] + "/" + m[2] + "/preview.png" + query;
+}
+
+function toListBackdropUrl(coverUrl, scopeHtml, href) {
+  const text = String(scopeHtml || "") + " " + String(coverUrl || "");
+  const slug = extractVideoSlug(resolveUrl(href));
+  const previewM = text.match(/https?:\/\/icdn[^"'\s<>]*\/preview\/[^"'\s<>]+\/preview\.(?:png|webp|jpg)(?:\?[^"'\s<>]*)?/i);
+  if (previewM && (!slug || belongsToVideo(previewM[0], slug))) return previewM[0];
+  const derived = derivePreviewUrl(coverUrl);
+  if (derived && (!slug || belongsToVideo(derived, slug))) return derived;
+  if (coverUrl) {
+    const upgraded = upgradeCoverUrl(coverUrl);
+    return upgraded.replace(/\/s1080\//i, "/s360/") || upgraded;
+  }
+  return "";
+}
+
 function normalizeImageUrl(url) {
   if (!url) return "";
   url = String(url).trim();
@@ -729,15 +762,17 @@ function resolveListScope($, el) {
   return $group.length ? $group : $el;
 }
 
-function makeListVideoItem(href, title, coverUrl, durationText) {
+function makeListVideoItem(href, title, coverUrl, durationText, scopeHtml) {
   const finalTitle = normalizeListText(title) || slugToDisplayTitle(href);
   if (!finalTitle || looksLikeDuration(finalTitle)) return null;
+  const detailLink = resolveUrl(href);
+  const backdrop = toListBackdropUrl(coverUrl, scopeHtml, href) || undefined;
   const item = {
-    id: href,
+    id: detailLink,
     type: "url",
     title: finalTitle,
-    backdropPath: coverUrl || undefined,
-    link: resolveUrl(href),
+    backdropPath: backdrop,
+    link: detailLink,
     mediaType: "movie",
   };
   const dt = sanitizeDurationText(durationText);
@@ -771,7 +806,8 @@ function parseVideoListRegex(html) {
       href,
       title,
       coverM ? upgradeCoverUrl(coverM[0]) : undefined,
-      durationM ? durationM[1] : undefined
+      durationM ? durationM[1] : undefined,
+      window
     );
     if (item) items.push(item);
   }
@@ -780,7 +816,8 @@ function parseVideoListRegex(html) {
 
 function readVideoCache(link) {
   try {
-    const raw = Widget.storage.get("vurl:v3:" + String(link));
+    const key = "vurl:v4:" + String(link);
+    const raw = Widget.storage.get(key);
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.videoUrl && data.ts && Date.now() - data.ts < VIDEO_CACHE_TTL * 1000) return data;
@@ -791,7 +828,7 @@ function readVideoCache(link) {
 function writeVideoCache(link, videoUrl, customHeaders) {
   if (!videoUrl) return;
   try {
-    Widget.storage.set("vurl:v3:" + String(link), JSON.stringify({ videoUrl, customHeaders, ts: Date.now() }));
+    Widget.storage.set("vurl:v4:" + String(link), JSON.stringify({ videoUrl: videoUrl, customHeaders: customHeaders, ts: Date.now() }));
   } catch (e) {}
 }
 
@@ -886,23 +923,32 @@ function xorDecode(encoded, key) {
 }
 
 function xorEncrypt(input, key) {
-  const result = [];
+  const bytes = [];
   for (let i = 0; i < input.length; i++) {
-    result.push(input.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+    bytes.push(input.charCodeAt(i) ^ key.charCodeAt(i % key.length));
   }
-  const bytes = new Uint8Array(result);
   const map = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   let b64 = "";
   for (let i = 0; i < bytes.length; i += 3) {
     const b0 = bytes[i];
     const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
     const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
-    b64 += map[(b0 >> 2) & 0x3F];
-    b64 += map[((b0 << 4) | (b1 >> 4)) & 0x3F];
-    b64 += i + 1 < bytes.length ? map[((b1 << 2) | (b2 >> 6)) & 0x3F] : "=";
-    b64 += i + 2 < bytes.length ? map[b2 & 0x3F] : "=";
+    b64 += map[(b0 >> 2) & 0x3f];
+    b64 += map[((b0 << 4) | (b1 >> 4)) & 0x3f];
+    b64 += i + 1 < bytes.length ? map[((b1 << 2) | (b2 >> 6)) & 0x3f] : "=";
+    b64 += i + 2 < bytes.length ? map[b2 & 0x3f] : "=";
   }
   return b64;
+}
+
+function parseHttpJson(data) {
+  if (data && typeof data === "object") return data;
+  if (typeof data === "string") {
+    try {
+      return JSON.parse(data);
+    } catch (e) {}
+  }
+  return null;
 }
 
 function extractM3u8FromHtml(html) {
@@ -977,19 +1023,20 @@ function extractSurritEmbedIds(html) {
 }
 
 function extractSurritEmbedUrl(html) {
+  const raw = String(html || "");
   const text = normalizePlayerHtml(html);
   const iframe = text.match(/player__frame[^>]+src=["'](https?:\/\/surrit\.(?:com|store)\/e\/[^"']+)["']/i);
   if (iframe) return iframe[1];
-  const episode = text.match(/https?:\\\/\\\/surrit\.(?:com|store)\\\/e\\\/([A-Za-z0-9_-]+)(?:\?[^"\\]*)?/i);
-  if (episode) {
-    const id = episode[1];
-    const posterM = text.match(new RegExp("surrit\\.(?:com|store)[^\"']*poster=([^&\"'\\\\]+)", "i"));
-    return posterM
-      ? `https://surrit.store/e/${id}?poster=${posterM[1]}`
-      : `https://surrit.store/e/${id}`;
+
+  const ids = extractSurritEmbedIds(text);
+  if (!ids.length) return "";
+
+  const encodedPoster = raw.match(/poster=(https%3A[^"'\\]+)/i);
+  if (encodedPoster) {
+    return SURRIT_BASE + "/e/" + ids[0] + "?poster=" + encodedPoster[1];
   }
-  const m = text.match(/https?:\/\/surrit\.(?:com|store)\/e\/[A-Za-z0-9_-]+(?:\?[^"'\\s<>]*)?/i);
-  return m ? m[0] : "";
+  const poster = extractPosterParam("", raw);
+  return SURRIT_BASE + "/e/" + ids[0] + (poster ? "?poster=" + encodeURIComponent(poster) : "");
 }
 
 function extractPosterParam(embedUrl, html) {
@@ -1002,12 +1049,21 @@ function extractPosterParam(embedUrl, html) {
         const kv = parts[i].split("=");
         if (kv[0] === "poster" && kv[1]) {
           try {
-            return decodeURIComponent(kv[1]);
+            return decodeURIComponent(kv.slice(1).join("="));
           } catch (e) {
-            return kv[1];
+            return kv.slice(1).join("=");
           }
         }
       }
+    }
+  }
+  const raw = String(html || "");
+  const encodedPoster = raw.match(/poster=(https%3A[^"'\\]+)/i);
+  if (encodedPoster) {
+    try {
+      return decodeURIComponent(encodedPoster[1]);
+    } catch (e) {
+      return encodedPoster[1];
     }
   }
   const text = normalizePlayerHtml(html || "");
@@ -1067,8 +1123,7 @@ async function resolveSurritStreamNew(videoId, surritBase, pageReferer, poster) 
   for (let h = 0; h < headerSets.length; h++) {
     try {
       const streamRes = await Widget.http.get(apiUrl, { headers: headerSets[h] });
-      let streamJson = streamRes.data;
-      if (typeof streamJson === "string") streamJson = JSON.parse(streamJson);
+      const streamJson = parseHttpJson(streamRes.data);
       if (streamJson && streamJson.media) {
         const url = streamJson.media.stream || streamJson.media.mp4 || "";
         if (url) return url;
@@ -1103,8 +1158,7 @@ async function resolveSurritStreamLegacy(videoId, surritBase, srcName, pageRefer
       const streamRes = await Widget.http.get(`${surritBase}/stream?src=${srcName}&token=${token}`, {
         headers: headerSets[h],
       });
-      let streamJson = streamRes.data;
-      if (typeof streamJson === "string") streamJson = JSON.parse(streamJson);
+      const streamJson = parseHttpJson(streamRes.data);
       const media = streamJson && streamJson.result && streamJson.result.media;
       if (!media) continue;
       const parsed = JSON.parse(xorDecode(media, AES_KEY));
@@ -1162,8 +1216,12 @@ function parseVideoList(html) {
     const detailLink = resolveUrl(href);
     if (seen.has(detailLink)) return;
     seen.add(detailLink);
-    const coverUrl = upgradeCoverUrl(cover || pickItemCover(scopeHtml || "", href, $img)) || undefined;
-    const item = makeListVideoItem(href, title, coverUrl, duration);
+    const coverUrl = toListBackdropUrl(
+      upgradeCoverUrl(cover || pickItemCover(scopeHtml || "", href, $img)),
+      scopeHtml || "",
+      href
+    ) || undefined;
+    const item = makeListVideoItem(href, title, coverUrl, duration, scopeHtml || "");
     if (item) items.push(item);
   }
 
@@ -1390,8 +1448,8 @@ async function resolveVideoUrl(html, detailUrl) {
 
 async function loadDetail(link) {
   try {
-    let detailUrl = String(link).startsWith("http") ? String(link) : resolveUrl(String(link));
-    if (detailUrl.includes("javxx.com")) detailUrl = detailUrl.replace("https://javxx.com", BASE_URL).replace("http://javxx.com", BASE_URL);
+    const detailUrl = normalizeDetailLink(link);
+    if (!detailUrl) return null;
 
     const cached = readVideoCache(detailUrl);
     const html = await fetchHtmlText(detailUrl, BASE_URL + LANG_PREFIX + "/");
@@ -1402,14 +1460,18 @@ async function loadDetail(link) {
       || $('meta[property="og:title"]').attr("content")
       || $("title").text().trim()
       || "";
+    const description = $(".detail .text-secondary, .detail .prose, .video-description, .description")
+      .first()
+      .text()
+      .trim() || undefined;
 
     if (isDirectoryListingUrl(detailUrl)) {
       const videos = parseVideoList(html);
-      const firstCover = videos[0] && (videos[0].backdropPath || videos[0].posterPath);
+      const firstCover = videos[0] && videos[0].backdropPath;
       const moduleKey = detectBrowseModuleKey(detailUrl);
       const meta = buildBrowseDetailMeta(detailUrl, title || detailUrl, moduleKey);
       return {
-        id: link,
+        id: detailUrl,
         type: "url",
         title,
         backdropPath: firstCover || undefined,
@@ -1424,7 +1486,7 @@ async function loadDetail(link) {
 
     if (isDirectoryIndexUrl(detailUrl)) {
       return {
-        id: link,
+        id: detailUrl,
         type: "url",
         title: title || detailUrl,
         link: detailUrl,
@@ -1445,7 +1507,6 @@ async function loadDetail(link) {
       videoUrl = await resolveVideoUrl(html, detailUrl);
       if (videoUrl) {
         playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
-        videoUrl = await finalizeVideoUrl(videoUrl, playHeaders);
         writeVideoCache(detailUrl, videoUrl, playHeaders);
       }
     }
@@ -1485,28 +1546,32 @@ async function loadDetail(link) {
       seenRelated.add(rDetailLink);
       const rTitle = $rLink.text().trim() || $el.find("img").attr("alt") || "\u76f8\u5173\u5f71\u7247";
       const rCover = pickItemCover($el.html(), rHref, $el.find("img").first());
-      const relatedItem = makeListVideoItem(rHref, rTitle, rCover, extractListDuration($el));
+      const relatedItem = makeListVideoItem(rHref, rTitle, rCover, extractListDuration($el), $el.html());
       if (relatedItem) relatedItems.push(relatedItem);
     }
 
     const backdropPaths = collectBackdropPaths(html, detailUrl, cover, $);
 
-    return {
-      id: link,
+    const result = {
+      id: detailUrl,
       type: "url",
       title,
+      description,
       backdropPath: cover || undefined,
       posterPath: cover || undefined,
       backdropPaths,
-      videoUrl: videoUrl || undefined,
-      playerType: videoUrl ? "system" : undefined,
-      customHeaders: playHeaders || undefined,
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       peoples: peoples.length > 0 ? peoples : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
       mediaType: "movie",
     };
+    if (videoUrl) {
+      result.videoUrl = videoUrl;
+      result.playerType = "system";
+      result.customHeaders = playHeaders || buildPlayHeaders(videoUrl, embedUrl || detailUrl);
+    }
+    return result;
   } catch (e) {
     return null;
   }
