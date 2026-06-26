@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.4.3",
+  version: "1.4.4",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
@@ -626,10 +626,11 @@ function collectBackdropPaths(html, detailUrl, posterUrl, $) {
   }
 
   if ($ && $.fn) {
-    $("#preview-show img, [id*='preview'] img, .preview img, .screenshots img").each((_, el) => {
-      if (paths.length >= 20) return false;
-      add(pickImageUrl($(el)));
-    });
+    const $previewImgs = $("#preview-show img, [id*='preview'] img, .preview img, .screenshots img");
+    for (let i = 0; i < $previewImgs.length; i++) {
+      if (paths.length >= 20) break;
+      add(pickImageUrl($previewImgs.eq(i)));
+    }
   }
 
   return paths.length > 0 ? paths : undefined;
@@ -673,10 +674,11 @@ function extractListTitle($scope, href) {
     () => pick($scope.find(".title").first().text()),
     () => {
       let found = "";
-      $scope.find("a[href*='/v/']").each((_, el) => {
-        const t = pick($(el).text());
+      const $links = $scope.find("a[href*='/v/']");
+      for (let i = 0; i < $links.length; i++) {
+        const t = pick($links.eq(i).text());
         if (t && t.length > (found.length || 0)) found = t;
-      });
+      }
       return found;
     },
     () => pick($scope.find("img").first().attr("alt")),

@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.10",
+  version: "1.0.11",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -601,7 +601,7 @@ function collectPartUrls($, detailUrl, html) {
   });
   if (urls.length) return urls;
 
-  const re = /class="video-source-btn"[^>]*href="([^"]+)"/gi;
+  const re = /class="[^"]*\bvideo-source-btn\b[^"]*"[\s\S]*?href="([^"]+)"/gi;
   let match;
   while ((match = re.exec(String(html || "")))) {
     const href = match[1];
@@ -628,17 +628,42 @@ async function resolveTokenFromPage(pageUrl, referer) {
   return "";
 }
 
-async function resolveVideoUrl($, detailUrl, html) {
+async function resolveVideoUrlFromHtml($, pageUrl, html) {
   const htmlText = String(html || "");
-  let mainToken = "";
-  try {
-    mainToken = $("#video-player").attr("data-id") || "";
-  } catch (e) {}
-  if (!mainToken) mainToken = extractTokenFromHtml(htmlText);
+  let mainToken = extractTokenFromHtml(htmlText);
+  if (!mainToken) {
+    try {
+      mainToken = $("#video-player").attr("data-id") || "";
+    } catch (e) {}
+  }
   if (mainToken) {
-    const mainUrl = await fetchWatchUrl(mainToken, detailUrl);
+    const mainUrl = await fetchWatchUrl(mainToken, pageUrl);
     if (mainUrl) return mainUrl;
   }
+  return extractVideoUrlFromHtml(htmlText);
+}
+
+async function resolveVideoUrlForPage(pageUrl, referer) {
+  const cached = readVideoCache(pageUrl);
+  if (cached && cached.videoUrl) {
+    return {
+      videoUrl: cached.videoUrl,
+      customHeaders: cached.customHeaders || buildPlayHeaders(cached.videoUrl),
+    };
+  }
+  const html = await fetchHtml(pageUrl, referer || pageUrl);
+  const $ = safeLoadHtml(html);
+  const videoUrl = await resolveVideoUrlFromHtml($, pageUrl, html);
+  if (!videoUrl) return null;
+  const customHeaders = buildPlayHeaders(videoUrl);
+  writeVideoCache(pageUrl, videoUrl, customHeaders);
+  return { videoUrl: videoUrl, customHeaders: customHeaders };
+}
+
+async function resolveVideoUrl($, detailUrl, html) {
+  const htmlText = String(html || "");
+  const mainUrl = await resolveVideoUrlFromHtml($, detailUrl, htmlText);
+  if (mainUrl) return mainUrl;
 
   const partUrls = collectPartUrls($, detailUrl, htmlText);
   for (let i = 0; i < partUrls.length; i++) {
@@ -646,10 +671,364 @@ async function resolveVideoUrl($, detailUrl, html) {
     if (partVideoUrl) return partVideoUrl;
   }
 
-  const inlineUrl = extractVideoUrlFromHtml(htmlText);
-  if (inlineUrl) return inlineUrl;
-
   return "";
+}
+
+function normalizeMoviePageUrl(url) {
+  const u = String(url || "").split("#")[0];
+  const q = u.indexOf("?");
+  return q >= 0 ? u.slice(0, q) : u;
+}
+
+function formatDurationSeconds(sec) {
+  const total = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = function (n) {
+    return n < 10 ? "0" + n : String(n);
+  };
+  return pad(h) + ":" + pad(m) + ":" + pad(s);
+}
+
+function toByteArray(raw) {
+  if (!raw) return null;
+  if (raw instanceof Uint8Array) return raw;
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(raw)) {
+    return new Uint8Array(raw);
+  }
+  if (typeof raw === "string") {
+    const arr = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i) & 255;
+    return arr;
+  }
+  return null;
+}
+
+function parseMp4DurationBytes(buf) {
+  if (!buf || buf.length < 32) return 0;
+  function readBox(offset) {
+    if (offset + 8 > buf.length) return null;
+    const size = (buf[offset] << 24) | (buf[offset + 1] << 16) | (buf[offset + 2] << 8) | buf[offset + 3];
+    let type = "";
+    for (let i = 0; i < 4; i++) type += String.fromCharCode(buf[offset + 4 + i]);
+    if (size < 8) return null;
+    return { size: size, type: type, start: offset, end: offset + size, dataStart: offset + 8 };
+  }
+  function findBox(type, start, end) {
+    let off = start;
+    while (off + 8 <= end && off + 8 <= buf.length) {
+      const box = readBox(off);
+      if (!box) break;
+      if (box.type === type) return box;
+      if (
+        box.type === "moov" ||
+        box.type === "trak" ||
+        box.type === "mdia" ||
+        box.type === "minf"
+      ) {
+        const inner = findBox(type, box.dataStart, box.end);
+        if (inner) return inner;
+      }
+      off = box.end;
+    }
+    return null;
+  }
+  const mvhd = findBox("mvhd", 0, buf.length);
+  if (!mvhd) return 0;
+  const ver = buf[mvhd.dataStart];
+  let timescale = 0;
+  let duration = 0;
+  if (ver === 1) {
+    timescale =
+      (buf[mvhd.dataStart + 20] << 24) |
+      (buf[mvhd.dataStart + 21] << 16) |
+      (buf[mvhd.dataStart + 22] << 8) |
+      buf[mvhd.dataStart + 23];
+    const hi =
+      (buf[mvhd.dataStart + 24] << 24) |
+      (buf[mvhd.dataStart + 25] << 16) |
+      (buf[mvhd.dataStart + 26] << 8) |
+      buf[mvhd.dataStart + 27];
+    const lo =
+      (buf[mvhd.dataStart + 28] << 24) |
+      (buf[mvhd.dataStart + 29] << 16) |
+      (buf[mvhd.dataStart + 30] << 8) |
+      buf[mvhd.dataStart + 31];
+    duration = hi * 4294967296 + lo;
+  } else {
+    timescale =
+      (buf[mvhd.dataStart + 12] << 24) |
+      (buf[mvhd.dataStart + 13] << 16) |
+      (buf[mvhd.dataStart + 14] << 8) |
+      buf[mvhd.dataStart + 15];
+    duration =
+      (buf[mvhd.dataStart + 16] << 24) |
+      (buf[mvhd.dataStart + 17] << 16) |
+      (buf[mvhd.dataStart + 18] << 8) |
+      buf[mvhd.dataStart + 19];
+  }
+  return timescale > 0 ? duration / timescale : 0;
+}
+
+function parseM3u8Duration(text) {
+  let sum = 0;
+  const re = /#EXTINF:([\d.]+)/g;
+  let match;
+  while ((match = re.exec(String(text || "")))) {
+    sum += parseFloat(match[1]) || 0;
+  }
+  return sum;
+}
+
+const DURATION_CACHE_TTL = 86400;
+
+function readDurationCache(videoUrl) {
+  try {
+    const raw = Widget.storage.get("vdur:" + String(videoUrl));
+    if (!raw) return 0;
+    const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (data && data.sec > 0 && data.ts && Date.now() - data.ts < DURATION_CACHE_TTL * 1000) {
+      return data.sec;
+    }
+  } catch (e) {}
+  return 0;
+}
+
+function writeDurationCache(videoUrl, sec) {
+  if (!videoUrl || !(sec > 0)) return;
+  try {
+    Widget.storage.set(
+      "vdur:" + String(videoUrl),
+      JSON.stringify({ sec: sec, ts: Date.now() })
+    );
+  } catch (e) {}
+}
+
+async function fetchVideoDurationSeconds(videoUrl, referer) {
+  if (!videoUrl) return 0;
+  const cached = readDurationCache(videoUrl);
+  if (cached > 0) return cached;
+
+  if (videoUrl.indexOf(".m3u8") >= 0) {
+    try {
+      const res = await Widget.http.get(videoUrl, {
+        headers: mergeHeaders({ Referer: referer || BASE_URL + "/", Accept: "*/*" }),
+      });
+      const text = typeof res.data === "string" ? res.data : String(res.data || "");
+      const sec = parseM3u8Duration(text);
+      if (sec > 0) {
+        writeDurationCache(videoUrl, sec);
+        return sec;
+      }
+    } catch (e) {}
+    return 0;
+  }
+
+  try {
+    const res = await Widget.http.get(videoUrl, {
+      headers: mergeHeaders({
+        Referer: referer || BASE_URL + "/",
+        Range: "bytes=0-524287",
+        Accept: "*/*",
+      }),
+    });
+    const bytes = toByteArray(res.data);
+    const sec = bytes ? parseMp4DurationBytes(bytes) : 0;
+    if (sec > 0) {
+      writeDurationCache(videoUrl, sec);
+      return sec;
+    }
+  } catch (e) {}
+  return 0;
+}
+
+function collectVideoParts($, detailUrl, html) {
+  const baseUrl = normalizeMoviePageUrl(detailUrl);
+  const parts = [];
+  const seen = new Set();
+
+  function addPart(label, href) {
+    const pageUrl =
+      !href || href === "#" || href.indexOf("#") === 0
+        ? baseUrl
+        : resolveAbsoluteUrl(detailUrl, href);
+    if (!pageUrl || seen.has(pageUrl)) return;
+    seen.add(pageUrl);
+    parts.push({ label: label || String(parts.length + 1), pageUrl: pageUrl });
+  }
+
+  const re =
+    /class="[^"]*\bvideo-source-btn\b[^"]*"[\s\S]*?href="([^"]*)"[\s\S]*?>([^<]*)</gi;
+  let match;
+  while ((match = re.exec(String(html || "")))) {
+    addPart(match[2].trim(), match[1]);
+  }
+
+  if (!parts.length) {
+    try {
+      $(".video-source-btn").each(function (_, el) {
+        addPart($(el).text().trim(), $(el).attr("href") || "");
+      });
+    } catch (e) {}
+  }
+
+  if (!parts.length) parts.push({ label: "1", pageUrl: baseUrl });
+  return parts;
+}
+
+function parseDetailInfo($, html) {
+  const info = {
+    movieId: "",
+    releaseDate: "",
+    publishDate: "",
+    label: "",
+    maker: "",
+    actresses: [],
+  };
+  const text = String(html || "");
+
+  function pickMeta(titleText, iconClass) {
+    try {
+      let value = "";
+      $("li").each(function (_, el) {
+        const $li = $(el);
+        const hasTitle = $li.find('[title="' + titleText + '"]').length > 0;
+        const hasIcon = iconClass ? $li.find("." + iconClass).length > 0 : false;
+        if (!hasTitle && !hasIcon) return;
+        if (iconClass === "fa-tag" && $li.find(".fa-tags").length) return;
+        const anchor = $li.find("a[rel='tag']").first();
+        value = anchor.length
+          ? anchor.text().trim()
+          : $li.find("span.rounded-full").first().text().trim();
+        if (!value) value = $li.text().replace(/\s+/g, " ").trim();
+        return false;
+      });
+      return value;
+    } catch (e) {
+      return "";
+    }
+  }
+
+  info.movieId = pickMeta("Movie ID", "fa-id-card");
+  info.releaseDate = pickMeta("Release Date", "fa-calendar-alt");
+  info.publishDate = pickMeta("Publish Date", "fa-globe");
+  info.label = pickMeta("Label", "fa-tag");
+  info.maker = pickMeta("Maker", "fa-industry");
+
+  try {
+    $("a[href*='/stars/']").each(function (_, el) {
+      const name = $(el).text().trim();
+      if (name && info.actresses.indexOf(name) < 0) info.actresses.push(name);
+    });
+  } catch (e) {}
+
+  if (!info.movieId) {
+    const idM = text.match(/fa-id-card[\s\S]{0,260}?rounded-full[^>]*>\s*([^<\s][^<]*?)\s*</i);
+    if (idM) info.movieId = decodeHtml(idM[1]).trim();
+  }
+  if (!info.releaseDate) {
+    const relM = text.match(/fa-calendar-alt[\s\S]{0,260}?rounded-full[^>]*>\s*([^<]+?)\s*</i);
+    if (relM) info.releaseDate = decodeHtml(relM[1]).trim();
+  }
+  if (!info.publishDate) {
+    const pubM = text.match(/fa-globe[\s\S]{0,260}?rounded-full[^>]*>\s*([^<]+?)\s*</i);
+    if (pubM) info.publishDate = decodeHtml(pubM[1]).trim();
+  }
+  if (!info.maker) {
+    const makerM = text.match(/fa-industry[\s\S]{0,260}?<a[^>]+>([^<]+)<\/a>/i);
+    if (makerM) info.maker = decodeHtml(makerM[1]).trim();
+  }
+  if (!info.label) {
+    const labelM = text.match(/fa-tag[\s\S]{0,260}?<a[^>]+>([^<]+)<\/a>/i);
+    if (labelM) info.label = decodeHtml(labelM[1]).trim();
+  }
+  if (!info.actresses.length) {
+    const starRe = /href="(\/stars\/[^"]+)"[^>]*>([^<]+)</gi;
+    let starMatch;
+    while ((starMatch = starRe.exec(text))) {
+      const name = decodeHtml(starMatch[2]).trim();
+      if (name && info.actresses.indexOf(name) < 0) info.actresses.push(name);
+    }
+  }
+
+  return info;
+}
+
+function buildDetailDescription(info, partCount, totalSec, partSec) {
+  const lines = [];
+  if (info.movieId) lines.push("\u756a\u53f7\uff1a" + info.movieId);
+  if (info.releaseDate) lines.push("\u53d1\u5e03\u65e5\u671f\uff1a" + info.releaseDate);
+  if (info.publishDate) lines.push("\u4e0a\u67b6\u65e5\u671f\uff1a" + info.publishDate);
+  if (info.actresses.length) {
+    lines.push("\u5973\u4f18\uff1a" + info.actresses.join("\u3001"));
+  }
+  if (info.label) lines.push("\u53d1\u884c\u5546\uff1a" + info.label);
+  if (info.maker) lines.push("\u5236\u4f5c\u5546\uff1a" + info.maker);
+  if (totalSec > 0) {
+    lines.push("\u65f6\u957f\uff1a" + formatDurationSeconds(totalSec));
+  }
+  if (partCount > 1) {
+    let segmentLine =
+      "\u5206\u6bb5\uff1a\u5171" + partCount + "\u6bb5";
+    if (partSec > 0) {
+      segmentLine += "\uff0c\u6bcf\u6bb5\u7ea6" + formatDurationSeconds(partSec);
+    }
+    segmentLine +=
+      "\u3002\u64ad\u653e\u5668\u9ed8\u8ba4\u7b2c1\u6bb5\uff0c\u8bf7\u5728\u5206\u96c6\u5217\u8868\u5207\u6362\u540e\u7eed\u6bb5\u843d\u3002";
+    lines.push(segmentLine);
+  }
+  return lines.join("\n");
+}
+
+async function resolvePartPlayback(parts, detailUrl) {
+  const tasks = parts.map(function (part, index) {
+    return resolveVideoUrlForPage(part.pageUrl, detailUrl).then(function (playback) {
+      if (!playback && index === 0) {
+        return resolveVideoUrlForPage(part.pageUrl, part.pageUrl);
+      }
+      return playback;
+    }).then(function (playback) {
+      if (!playback) return null;
+      return {
+        label: part.label,
+        pageUrl: part.pageUrl,
+        videoUrl: playback.videoUrl,
+        customHeaders: playback.customHeaders,
+      };
+    });
+  });
+  return Promise.all(tasks);
+}
+
+async function measurePartDurations(resolvedParts) {
+  const tasks = resolvedParts.map(function (part) {
+    if (!part || !part.videoUrl) return Promise.resolve(0);
+    return fetchVideoDurationSeconds(part.videoUrl, part.pageUrl);
+  });
+  return Promise.all(tasks);
+}
+
+function buildEpisodeItems(resolvedParts, durations) {
+  const items = [];
+  for (let i = 0; i < resolvedParts.length; i++) {
+    const part = resolvedParts[i];
+    if (!part || !part.videoUrl) continue;
+    const sec = durations[i] || 0;
+    items.push({
+      id: part.pageUrl,
+      type: "url",
+      title: "\u7b2c" + part.label + "\u6bb5",
+      videoUrl: part.videoUrl,
+      duration: sec > 0 ? Math.round(sec) : undefined,
+      durationText: sec > 0 ? formatDurationSeconds(sec) : undefined,
+      link: part.pageUrl,
+      mediaType: "movie",
+      playerType: "system",
+      customHeaders: part.customHeaders,
+    });
+  }
+  return items;
 }
 
 function parseDetailMeta(html) {
@@ -940,10 +1319,11 @@ async function loadUpcoming(params) {
 async function loadDetail(link) {
   try {
     const detailUrl = String(link);
-    const cached = readVideoCache(detailUrl);
     const html = await fetchHtml(detailUrl, BASE_URL + "/");
     const $ = safeLoadHtml(html);
     const meta = parseDetailMeta(html);
+    const detailInfo = parseDetailInfo($, html);
+    const parts = collectVideoParts($, detailUrl, html);
 
     const title =
       $("h1").first().text().trim() ||
@@ -957,15 +1337,41 @@ async function loadDetail(link) {
       meta.cover ||
       "";
 
-    let videoUrl = cached ? cached.videoUrl : "";
-    let playHeaders = cached ? cached.customHeaders : null;
-    if (!videoUrl) {
-      videoUrl = await resolveVideoUrl($, detailUrl, html);
-      if (!videoUrl) return null;
-      playHeaders = buildPlayHeaders(videoUrl);
-      writeVideoCache(detailUrl, videoUrl, playHeaders);
+    const resolvedParts = await resolvePartPlayback(parts, detailUrl);
+    const mainPart = resolvedParts[0];
+    if (!mainPart || !mainPart.videoUrl) return null;
+
+    const videoUrl = mainPart.videoUrl;
+    const playHeaders = mainPart.customHeaders || buildPlayHeaders(videoUrl);
+
+    const partDurations = await measurePartDurations(resolvedParts);
+    let totalDurationSec = 0;
+    let avgPartSec = 0;
+    for (let i = 0; i < partDurations.length; i++) {
+      totalDurationSec += partDurations[i] || 0;
     }
-    if (!playHeaders) playHeaders = buildPlayHeaders(videoUrl);
+    if (partDurations.length === 1 && partDurations[0] > 0) {
+      avgPartSec = partDurations[0];
+    } else if (partDurations.length > 1) {
+      let counted = 0;
+      let sum = 0;
+      for (let j = 0; j < partDurations.length; j++) {
+        if (partDurations[j] > 0) {
+          sum += partDurations[j];
+          counted++;
+        }
+      }
+      avgPartSec = counted > 0 ? sum / counted : 0;
+    }
+
+    const episodeItems =
+      parts.length > 1 ? buildEpisodeItems(resolvedParts, partDurations) : undefined;
+    const description = buildDetailDescription(
+      detailInfo,
+      parts.length,
+      totalDurationSec || partDurations[0] || 0,
+      avgPartSec
+    );
 
     const genreItems = [];
     $("a[href*='/genres/'], a[href*='/stars/'], a[href*='/makers/']").each(
@@ -988,6 +1394,14 @@ async function loadDetail(link) {
         if (text && genreUrl) genreItems.push({ id: genreUrl, title: text });
       }
     }
+
+    const peoples = [];
+    $("a[href*='/stars/']").each(function (_, el) {
+      const $a = $(el);
+      const href = resolveUrl($a.attr("href") || "");
+      const text = $a.text().trim();
+      if (text && href) peoples.push({ id: href, title: text, role: "actress" });
+    });
 
     const relatedItems = [];
     const seenRelated = new Set([detailUrl]);
@@ -1020,6 +1434,8 @@ async function loadDetail(link) {
       }
     );
 
+    const displayDurationSec = totalDurationSec || partDurations[0] || 0;
+
     return {
       id: detailUrl,
       type: "url",
@@ -1028,7 +1444,14 @@ async function loadDetail(link) {
       posterPath: cover || undefined,
       videoUrl: videoUrl,
       playerType: "system",
+      description: description || undefined,
+      duration: displayDurationSec > 0 ? Math.round(displayDurationSec) : undefined,
+      durationText:
+        displayDurationSec > 0 ? formatDurationSeconds(displayDurationSec) : undefined,
+      releaseDate: detailInfo.releaseDate || undefined,
       genreItems: genreItems.length > 0 ? genreItems : undefined,
+      peoples: peoples.length > 0 ? peoples : undefined,
+      episodeItems: episodeItems && episodeItems.length > 0 ? episodeItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
       mediaType: "movie",
