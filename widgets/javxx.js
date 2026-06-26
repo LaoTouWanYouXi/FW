@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.4.4",
+  version: "1.5.0",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
@@ -729,6 +729,22 @@ function resolveListScope($, el) {
   return $group.length ? $group : $el;
 }
 
+function makeListVideoItem(href, title, coverUrl, durationText) {
+  const finalTitle = normalizeListText(title) || slugToDisplayTitle(href);
+  if (!finalTitle || looksLikeDuration(finalTitle)) return null;
+  const item = {
+    id: href,
+    type: "url",
+    title: finalTitle,
+    posterPath: coverUrl || undefined,
+    link: resolveUrl(href),
+    mediaType: "movie",
+  };
+  const dt = sanitizeDurationText(durationText);
+  if (dt) item.durationText = dt;
+  return item;
+}
+
 function parseVideoListRegex(html) {
   const items = [];
   const seen = new Set();
@@ -751,18 +767,13 @@ function parseVideoListRegex(html) {
     seen.add(detailLink);
     const coverM = window.match(/https?:\/\/icdn[^"'\s<>]+cover(?:-n|-t)?\.(?:webp|jpg|jpeg)/i);
     const durationM = window.match(/\b(\d{1,2}:\d{2}:\d{2})\b/);
-    const item = {
-      id: href,
-      type: "url",
+    const item = makeListVideoItem(
+      href,
       title,
-      backdropPath: coverM ? upgradeCoverUrl(coverM[0]) : undefined,
-      posterPath: coverM ? upgradeCoverUrl(coverM[0]) : undefined,
-      link: detailLink,
-      mediaType: "movie",
-    };
-    const durationText = durationM ? sanitizeDurationText(durationM[1]) : undefined;
-    if (durationText) item.durationText = durationText;
-    items.push(item);
+      coverM ? upgradeCoverUrl(coverM[0]) : undefined,
+      durationM ? durationM[1] : undefined
+    );
+    if (item) items.push(item);
   }
   return items;
 }
@@ -913,21 +924,60 @@ function extractM3u8FromHtml(html) {
   return "";
 }
 
-function extractSurritVideoId(html) {
-  const text = String(html || "");
+function normalizePlayerHtml(html) {
+  return String(html || "")
+    .replace(/\\u002f/gi, "/")
+    .replace(/\\u0026/gi, "&")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/g, "&");
+}
+
+function extractSurritEmbedIds(html) {
+  const text = normalizePlayerHtml(html);
+  const ids = [];
+  const seen = new Set();
+
+  function add(id) {
+    const val = String(id || "").trim();
+    if (!val || seen.has(val)) return;
+    seen.add(val);
+    ids.push(val);
+  }
+
+  const embedPatterns = [
+    /surrit\.(?:com|store)\/e\/([A-Za-z0-9_-]+)/gi,
+    /https?:\/\/surrit\.(?:com|store)\/e\/([A-Za-z0-9_-]+)/gi,
+    /player__frame[^>]+src=["']https?:\/\/surrit\.(?:com|store)\/e\/([A-Za-z0-9_-]+)/gi,
+  ];
+  for (let p = 0; p < embedPatterns.length; p++) {
+    let m;
+    const re = new RegExp(embedPatterns[p].source, embedPatterns[p].flags);
+    while ((m = re.exec(text))) add(m[1]);
+  }
+
   const dataMatch = text.match(/data-url=["']([^"']+)["']/i);
   if (dataMatch) {
     try {
       const decoded = xorDecode(dataMatch[1], XOR_KEY);
       const id = decoded.replace(/https?:\/\/[^/]+/, "").split("/").filter(Boolean).pop();
-      if (id) return id;
+      if (id) add(id);
     } catch (e) {}
   }
-  const embed = text.match(/surrit\.(?:com|store)\/e\/([a-zA-Z0-9_-]+)/i);
-  if (embed) return embed[1];
-  const uuid = text.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
-  if (uuid) return uuid[1];
-  return "";
+
+  return ids;
+}
+
+function extractSurritEmbedUrl(html) {
+  const text = normalizePlayerHtml(html);
+  const iframe = text.match(/player__frame[^>]+src=["'](https?:\/\/surrit\.(?:com|store)\/e\/[^"']+)["']/i);
+  if (iframe) return iframe[1];
+  const m = text.match(/https?:\/\/surrit\.(?:com|store)\/e\/[A-Za-z0-9_-]+(?:\?[^"'\\s<>]*)?/i);
+  return m ? m[0] : "";
+}
+
+function extractSurritVideoId(html) {
+  const ids = extractSurritEmbedIds(html);
+  return ids.length ? ids[0] : "";
 }
 
 function detectSurritBases(html) {
@@ -947,28 +997,49 @@ function detectSurritBases(html) {
   return unique;
 }
 
-async function resolveSurritStream(videoId, surritBase, srcName) {
+async function resolveSurritStream(videoId, surritBase, srcName, pageReferer) {
   const token = encodeURIComponent(xorEncrypt(videoId, AES_KEY));
-  const streamHeaders = {
-    ...HEADERS,
-    "Referer": `${surritBase}/e/${videoId}?src=${srcName}`,
-    "X-Requested-With": "XMLHttpRequest",
-  };
-  const streamRes = await Widget.http.get(`${surritBase}/stream?src=${srcName}&token=${token}`, { headers: streamHeaders });
-  let streamJson = streamRes.data;
-  if (typeof streamJson === "string") streamJson = JSON.parse(streamJson);
-  const media = streamJson && streamJson.result && streamJson.result.media;
-  if (!media) return "";
-  const parsed = JSON.parse(xorDecode(media, AES_KEY));
-  return parsed.stream || parsed.mp4 || "";
+  const embedRef = `${surritBase}/e/${videoId}`;
+  const ref = pageReferer || BASE_URL + LANG_PREFIX + "/";
+  const headerSets = [
+    {
+      "User-Agent": HEADERS["User-Agent"],
+      Accept: "application/json, text/plain, */*",
+      Referer: embedRef,
+      Origin: surritBase,
+      "X-Requested-With": "XMLHttpRequest",
+    },
+    {
+      "User-Agent": HEADERS["User-Agent"],
+      Accept: "application/json, text/plain, */*",
+      Referer: ref,
+      Origin: BASE_URL,
+      "X-Requested-With": "XMLHttpRequest",
+    },
+  ];
+  for (let h = 0; h < headerSets.length; h++) {
+    try {
+      const streamRes = await Widget.http.get(`${surritBase}/stream?src=${srcName}&token=${token}`, {
+        headers: headerSets[h],
+      });
+      let streamJson = streamRes.data;
+      if (typeof streamJson === "string") streamJson = JSON.parse(streamJson);
+      const media = streamJson && streamJson.result && streamJson.result.media;
+      if (!media) continue;
+      const parsed = JSON.parse(xorDecode(media, AES_KEY));
+      const url = parsed.stream || parsed.mp4 || "";
+      if (url) return url;
+    } catch (e) {}
+  }
+  return "";
 }
 
-async function resolveSurritStreamAny(videoId, html) {
+async function resolveSurritStreamAny(videoId, html, pageReferer) {
   const bases = detectSurritBases(html);
   for (let b = 0; b < bases.length; b++) {
     for (let i = 0; i < STREAM_SOURCES.length; i++) {
       try {
-        const url = await resolveSurritStream(videoId, bases[b], STREAM_SOURCES[i]);
+        const url = await resolveSurritStream(videoId, bases[b], STREAM_SOURCES[i], pageReferer);
         if (url) return url;
       } catch (e) {}
     }
@@ -1004,22 +1075,10 @@ function parseVideoList(html) {
     if (!href) return;
     const detailLink = resolveUrl(href);
     if (seen.has(detailLink)) return;
-    const finalTitle = normalizeListText(title) || slugToDisplayTitle(href);
-    if (!finalTitle || looksLikeDuration(finalTitle)) return;
     seen.add(detailLink);
     const coverUrl = upgradeCoverUrl(cover || pickItemCover(scopeHtml || "", href, $img)) || undefined;
-    const item = {
-      id: href,
-      type: "url",
-      title: finalTitle,
-      backdropPath: coverUrl,
-      posterPath: coverUrl,
-      link: detailLink,
-      mediaType: "movie",
-    };
-    const durationText = sanitizeDurationText(duration);
-    if (durationText) item.durationText = durationText;
-    items.push(item);
+    const item = makeListVideoItem(href, title, coverUrl, duration);
+    if (item) items.push(item);
   }
 
   function parseCard(el) {
@@ -1159,55 +1218,88 @@ async function loadSeries(params) {
 }
 
 async function resolveVideoUrl(html, detailUrl) {
-  let videoUrl = extractM3u8FromHtml(html);
-  const $ = Widget.html.load(html);
+  const text = String(html || "");
+  let videoUrl = extractM3u8FromHtml(text);
+  if (videoUrl) {
+    if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+    return videoUrl;
+  }
+
+  const surritIds = extractSurritEmbedIds(text);
+  for (let i = 0; i < surritIds.length; i++) {
+    videoUrl = await resolveSurritStreamAny(surritIds[i], text, detailUrl);
+    if (videoUrl) break;
+  }
 
   if (!videoUrl) {
-    const dataUrl = $("#video-files div").attr("data-url")
-      || $("[data-url]").filter((_, el) => {
-        const val = $(el).attr("data-url") || "";
-        return val.length > 20;
-      }).first().attr("data-url")
-      || "";
+    const embedUrl = extractSurritEmbedUrl(text);
+    if (embedUrl) {
+      const embedHtml = await fetchHtmlText(embedUrl, detailUrl);
+      if (embedHtml) {
+        const embedIds = extractSurritEmbedIds(embedHtml);
+        for (let i = 0; i < embedIds.length; i++) {
+          videoUrl = await resolveSurritStreamAny(embedIds[i], embedHtml, detailUrl);
+          if (videoUrl) break;
+        }
+        if (!videoUrl) {
+          videoUrl = extractM3u8FromHtml(embedHtml);
+          if (!videoUrl) {
+            const fallbackId = extractSurritVideoId(embedHtml);
+            if (fallbackId) videoUrl = await resolveSurritStreamAny(fallbackId, embedHtml, detailUrl);
+          }
+        }
+      }
+    }
+  }
+
+  if (!videoUrl) {
+    const $ = Widget.html.load(text);
+    let dataUrl = $("#video-files div").attr("data-url") || "";
+    if (!dataUrl) {
+      const $nodes = $("[data-url]");
+      for (let i = 0; i < $nodes.length; i++) {
+        const val = $nodes.eq(i).attr("data-url") || "";
+        if (val.length > 20) {
+          dataUrl = val;
+          break;
+        }
+      }
+    }
     if (dataUrl) {
       try {
         const decodedUrl = xorDecode(dataUrl, XOR_KEY);
         const videoId = decodedUrl.replace(/https?:\/\/[^/]+/, "").split("/").filter(Boolean).pop() || "";
-        if (videoId) videoUrl = await resolveSurritStreamAny(videoId, html);
+        if (videoId) videoUrl = await resolveSurritStreamAny(videoId, text, detailUrl);
       } catch (e) {}
     }
   }
 
   if (!videoUrl) {
-    const videoId = extractSurritVideoId(html);
-    if (videoId) {
-      try { videoUrl = await resolveSurritStreamAny(videoId, html); } catch (e) {}
+    const scriptRe = /<script[^>]*>([\s\S]*?)<\/script>/gi;
+    let sm;
+    while ((sm = scriptRe.exec(text)) && !videoUrl) {
+      const content = sm[1] || "";
+      if (content.includes(".mp4")) {
+        const match = content.match(/https?:\/\/[\w./-]+\.mp4[\w./?=-]*/);
+        if (match) videoUrl = match[0];
+      }
+      if (!videoUrl && content.includes(".m3u8")) {
+        const match = content.match(/https?:\/\/[\w./-]+\.m3u8[\w./?=-]*/);
+        if (match) videoUrl = match[0];
+      }
     }
   }
 
   if (!videoUrl) {
-    $("script").each((_, el) => {
-      const content = $(el).html() || "";
-      if (content.includes(".mp4")) {
-        const match = content.match(/https?:\/\/[\w./-]+\.mp4[\w./?=-]*/);
-        if (match) { videoUrl = match[0]; return false; }
-      }
-    });
+    const $ = Widget.html.load(text);
+    videoUrl =
+      $('video source[type="video/mp4"]').attr("src") ||
+      $("video source").attr("src") ||
+      $("video").attr("src") ||
+      "";
   }
-  if (!videoUrl) {
-    $("script").each((_, el) => {
-      const content = $(el).html() || "";
-      if (content.includes(".m3u8")) {
-        const match = content.match(/https?:\/\/[\w./-]+\.m3u8[\w./?=-]*/);
-        if (match) { videoUrl = match[0]; return false; }
-      }
-    });
-  }
-  if (!videoUrl) {
-    videoUrl = $('video source[type="video/mp4"]').attr("src") || $("video source").attr("src") || $("video").attr("src") || "";
-  }
-  if (videoUrl && videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
 
+  if (videoUrl && videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
   if (videoUrl && !videoUrl.startsWith("http")) videoUrl = "";
   return videoUrl;
 }
@@ -1218,9 +1310,8 @@ async function loadDetail(link) {
     if (detailUrl.includes("javxx.com")) detailUrl = detailUrl.replace("https://javxx.com", BASE_URL).replace("http://javxx.com", BASE_URL);
 
     const cached = readVideoCache(detailUrl);
-    const res = await Widget.http.get(detailUrl, { headers: mergeHeaders({ Referer: BASE_URL + LANG_PREFIX + "/" }) });
-    const html = res.data || "";
-    if (isMigrationPage(html)) return null;
+    const html = await fetchHtmlText(detailUrl, BASE_URL + LANG_PREFIX + "/");
+    if (!html || isMigrationPage(html)) return null;
 
     const $ = Widget.html.load(html);
     const title = $("h1").first().text().trim()
@@ -1230,7 +1321,7 @@ async function loadDetail(link) {
 
     if (isDirectoryListingUrl(detailUrl)) {
       const videos = parseVideoList(html);
-      const firstCover = videos[0] && (videos[0].posterPath || videos[0].backdropPath);
+      const firstCover = videos[0] && videos[0].posterPath;
       const moduleKey = detectBrowseModuleKey(detailUrl);
       const meta = buildBrowseDetailMeta(detailUrl, title || detailUrl, moduleKey);
       return {
@@ -1274,51 +1365,45 @@ async function loadDetail(link) {
       }
     }
     if (!playHeaders) playHeaders = buildPlayHeaders(videoUrl);
+    if (!videoUrl) return null;
 
     const genreItems = [];
-    $("a[href*='/genres/'], a[href*='/tags/'], a[href*='/tag/'], a[href*='/makers/'], a[href*='/series/']").each((_, el) => {
-      const $a = $(el);
+    const $genreLinks = $("a[href*='/genres/'], a[href*='/tags/'], a[href*='/tag/'], a[href*='/makers/'], a[href*='/series/']");
+    for (let gi = 0; gi < $genreLinks.length; gi++) {
+      const $a = $genreLinks.eq(gi);
       const href = resolveUrl($a.attr("href") || "");
       const text = $a.text().trim();
       if (text && href && /\/(genres|tags|tag|makers|series)\//.test(href)) {
-        const id = normalizeBrowseId(href) || href;
-        genreItems.push({ id: id, title: text });
+        genreItems.push({ id: normalizeBrowseId(href) || href, title: text });
       }
-    });
+    }
 
     const peoples = [];
-    $("a[href*='/actresses/']").each((_, el) => {
-      const $a = $(el);
+    const $peopleLinks = $("a[href*='/actresses/']");
+    for (let pi = 0; pi < $peopleLinks.length; pi++) {
+      const $a = $peopleLinks.eq(pi);
       const href = resolveUrl($a.attr("href") || "");
       const text = $a.text().trim();
       if (text && href && /\/actresses\//.test(href)) {
-        const id = normalizeBrowseId(href) || href;
-        peoples.push({ id: id, title: text, role: "actress" });
+        peoples.push({ id: normalizeBrowseId(href) || href, title: text, role: "actress" });
       }
-    });
+    }
 
     const relatedItems = [];
     const seenRelated = new Set([detailUrl]);
-    $(".vid-items > div.item, div.thumbnail, .related-videos article").each((_, el) => {
-      if (relatedItems.length >= 8) return false;
-      const $el = $(el);
+    const $relatedCards = $(".grid .group, .vid-items > div.item, div.thumbnail, .related-videos article");
+    for (let ri = 0; ri < $relatedCards.length && relatedItems.length < 8; ri++) {
+      const $el = $relatedCards.eq(ri);
       const $rLink = $el.find(".title, a[href*='/v/']").first();
       const rHref = $rLink.attr("href") || "";
       const rDetailLink = resolveUrl(rHref);
-      if (!rDetailLink || seenRelated.has(rDetailLink)) return;
+      if (!rDetailLink || seenRelated.has(rDetailLink)) continue;
       seenRelated.add(rDetailLink);
       const rTitle = $rLink.text().trim() || $el.find("img").attr("alt") || "\u76f8\u5173\u5f71\u7247";
       const rCover = pickItemCover($el.html(), rHref, $el.find("img").first());
-      relatedItems.push({
-        id: rHref,
-        type: "url",
-        title: rTitle,
-        backdropPath: rCover || undefined,
-        posterPath: rCover || undefined,
-        link: rDetailLink,
-        mediaType: "movie",
-      });
-    });
+      const relatedItem = makeListVideoItem(rHref, rTitle, rCover, extractListDuration($el));
+      if (relatedItem) relatedItems.push(relatedItem);
+    }
 
     const backdropPaths = collectBackdropPaths(html, detailUrl, cover, $);
 
@@ -1329,7 +1414,7 @@ async function loadDetail(link) {
       backdropPath: cover || undefined,
       posterPath: cover || undefined,
       backdropPaths,
-      videoUrl: videoUrl || "",
+      videoUrl: videoUrl,
       playerType: "system",
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       peoples: peoples.length > 0 ? peoples : undefined,
