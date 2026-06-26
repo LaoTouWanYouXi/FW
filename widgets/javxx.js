@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.5.0",
+  version: "1.6.0",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
@@ -736,7 +736,7 @@ function makeListVideoItem(href, title, coverUrl, durationText) {
     id: href,
     type: "url",
     title: finalTitle,
-    posterPath: coverUrl || undefined,
+    backdropPath: coverUrl || undefined,
     link: resolveUrl(href),
     mediaType: "movie",
   };
@@ -795,12 +795,21 @@ function writeVideoCache(link, videoUrl, customHeaders) {
   } catch (e) {}
 }
 
-function buildPlayHeaders(videoUrl) {
-  const isSurrit = videoUrl && /surrit\.(?:com|store)/i.test(videoUrl);
-  const base = isSurrit
-    ? { "User-Agent": HEADERS["User-Agent"], "Origin": "https://surrit.store", "Referer": "https://surrit.store/" }
-    : { "User-Agent": HEADERS["User-Agent"], "Referer": "https://123av.com/", "Origin": "https://123av.com" };
-  return Object.assign({ "Accept": "*/*", "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8" }, base);
+function buildPlayHeaders(videoUrl, pageReferer) {
+  const ref = pageReferer || "https://surrit.store/";
+  const needsSurritRef =
+    videoUrl &&
+    (/surrit\.(?:com|store)/i.test(videoUrl) ||
+      /wowstream/i.test(videoUrl) ||
+      /\.m3u8(\?|$)/i.test(videoUrl));
+  const base = needsSurritRef
+    ? {
+        "User-Agent": HEADERS["User-Agent"],
+        Origin: "https://surrit.store",
+        Referer: /surrit\.(?:com|store)/i.test(ref) ? ref : "https://surrit.store/",
+      }
+    : { "User-Agent": HEADERS["User-Agent"], Referer: "https://123av.com/", Origin: "https://123av.com" };
+  return Object.assign({ Accept: "*/*", "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8" }, base);
 }
 
 function resolveAbsoluteUrl(base, ref) {
@@ -971,8 +980,46 @@ function extractSurritEmbedUrl(html) {
   const text = normalizePlayerHtml(html);
   const iframe = text.match(/player__frame[^>]+src=["'](https?:\/\/surrit\.(?:com|store)\/e\/[^"']+)["']/i);
   if (iframe) return iframe[1];
+  const episode = text.match(/https?:\\\/\\\/surrit\.(?:com|store)\\\/e\\\/([A-Za-z0-9_-]+)(?:\?[^"\\]*)?/i);
+  if (episode) {
+    const id = episode[1];
+    const posterM = text.match(new RegExp("surrit\\.(?:com|store)[^\"']*poster=([^&\"'\\\\]+)", "i"));
+    return posterM
+      ? `https://surrit.store/e/${id}?poster=${posterM[1]}`
+      : `https://surrit.store/e/${id}`;
+  }
   const m = text.match(/https?:\/\/surrit\.(?:com|store)\/e\/[A-Za-z0-9_-]+(?:\?[^"'\\s<>]*)?/i);
   return m ? m[0] : "";
+}
+
+function extractPosterParam(embedUrl, html) {
+  const url = String(embedUrl || "");
+  if (url) {
+    const qi = url.indexOf("?");
+    if (qi >= 0) {
+      const parts = url.slice(qi + 1).split("&");
+      for (let i = 0; i < parts.length; i++) {
+        const kv = parts[i].split("=");
+        if (kv[0] === "poster" && kv[1]) {
+          try {
+            return decodeURIComponent(kv[1]);
+          } catch (e) {
+            return kv[1];
+          }
+        }
+      }
+    }
+  }
+  const text = normalizePlayerHtml(html || "");
+  const m = text.match(/[?&]poster=([^&"'\\]+)/i);
+  if (m) {
+    try {
+      return decodeURIComponent(m[1]);
+    } catch (e) {
+      return m[1];
+    }
+  }
+  return "";
 }
 
 function extractSurritVideoId(html) {
@@ -997,7 +1044,41 @@ function detectSurritBases(html) {
   return unique;
 }
 
-async function resolveSurritStream(videoId, surritBase, srcName, pageReferer) {
+async function resolveSurritStreamNew(videoId, surritBase, pageReferer, poster) {
+  let apiUrl = `${surritBase}/stream?id=${encodeURIComponent(videoId)}`;
+  if (poster) apiUrl += `&poster=${encodeURIComponent(poster)}`;
+  const embedRef =
+    `${surritBase}/e/${videoId}` + (poster ? `?poster=${encodeURIComponent(poster)}` : "");
+  const ref = pageReferer || BASE_URL + LANG_PREFIX + "/";
+  const headerSets = [
+    {
+      "User-Agent": HEADERS["User-Agent"],
+      Accept: "application/json, text/plain, */*",
+      Referer: embedRef,
+      Origin: surritBase,
+    },
+    {
+      "User-Agent": HEADERS["User-Agent"],
+      Accept: "application/json, text/plain, */*",
+      Referer: ref,
+      Origin: BASE_URL,
+    },
+  ];
+  for (let h = 0; h < headerSets.length; h++) {
+    try {
+      const streamRes = await Widget.http.get(apiUrl, { headers: headerSets[h] });
+      let streamJson = streamRes.data;
+      if (typeof streamJson === "string") streamJson = JSON.parse(streamJson);
+      if (streamJson && streamJson.media) {
+        const url = streamJson.media.stream || streamJson.media.mp4 || "";
+        if (url) return url;
+      }
+    } catch (e) {}
+  }
+  return "";
+}
+
+async function resolveSurritStreamLegacy(videoId, surritBase, srcName, pageReferer) {
   const token = encodeURIComponent(xorEncrypt(videoId, AES_KEY));
   const embedRef = `${surritBase}/e/${videoId}`;
   const ref = pageReferer || BASE_URL + LANG_PREFIX + "/";
@@ -1034,12 +1115,17 @@ async function resolveSurritStream(videoId, surritBase, srcName, pageReferer) {
   return "";
 }
 
-async function resolveSurritStreamAny(videoId, html, pageReferer) {
+async function resolveSurritStreamAny(videoId, html, pageReferer, embedUrl) {
+  const poster = extractPosterParam(embedUrl, html);
   const bases = detectSurritBases(html);
   for (let b = 0; b < bases.length; b++) {
+    try {
+      const url = await resolveSurritStreamNew(videoId, bases[b], pageReferer, poster);
+      if (url) return url;
+    } catch (e) {}
     for (let i = 0; i < STREAM_SOURCES.length; i++) {
       try {
-        const url = await resolveSurritStream(videoId, bases[b], STREAM_SOURCES[i], pageReferer);
+        const url = await resolveSurritStreamLegacy(videoId, bases[b], STREAM_SOURCES[i], pageReferer);
         if (url) return url;
       } catch (e) {}
     }
@@ -1225,28 +1311,26 @@ async function resolveVideoUrl(html, detailUrl) {
     return videoUrl;
   }
 
+  const embedUrl = extractSurritEmbedUrl(text);
   const surritIds = extractSurritEmbedIds(text);
   for (let i = 0; i < surritIds.length; i++) {
-    videoUrl = await resolveSurritStreamAny(surritIds[i], text, detailUrl);
+    videoUrl = await resolveSurritStreamAny(surritIds[i], text, detailUrl, embedUrl);
     if (videoUrl) break;
   }
 
-  if (!videoUrl) {
-    const embedUrl = extractSurritEmbedUrl(text);
-    if (embedUrl) {
-      const embedHtml = await fetchHtmlText(embedUrl, detailUrl);
-      if (embedHtml) {
-        const embedIds = extractSurritEmbedIds(embedHtml);
-        for (let i = 0; i < embedIds.length; i++) {
-          videoUrl = await resolveSurritStreamAny(embedIds[i], embedHtml, detailUrl);
-          if (videoUrl) break;
-        }
+  if (!videoUrl && embedUrl) {
+    const embedHtml = await fetchHtmlText(embedUrl, detailUrl);
+    if (embedHtml) {
+      const embedIds = extractSurritEmbedIds(embedHtml);
+      for (let i = 0; i < embedIds.length; i++) {
+        videoUrl = await resolveSurritStreamAny(embedIds[i], embedHtml, detailUrl, embedUrl);
+        if (videoUrl) break;
+      }
+      if (!videoUrl) {
+        videoUrl = extractM3u8FromHtml(embedHtml);
         if (!videoUrl) {
-          videoUrl = extractM3u8FromHtml(embedHtml);
-          if (!videoUrl) {
-            const fallbackId = extractSurritVideoId(embedHtml);
-            if (fallbackId) videoUrl = await resolveSurritStreamAny(fallbackId, embedHtml, detailUrl);
-          }
+          const fallbackId = extractSurritVideoId(embedHtml) || surritIds[0];
+          if (fallbackId) videoUrl = await resolveSurritStreamAny(fallbackId, embedHtml, detailUrl, embedUrl);
         }
       }
     }
@@ -1269,7 +1353,7 @@ async function resolveVideoUrl(html, detailUrl) {
       try {
         const decodedUrl = xorDecode(dataUrl, XOR_KEY);
         const videoId = decodedUrl.replace(/https?:\/\/[^/]+/, "").split("/").filter(Boolean).pop() || "";
-        if (videoId) videoUrl = await resolveSurritStreamAny(videoId, text, detailUrl);
+        if (videoId) videoUrl = await resolveSurritStreamAny(videoId, text, detailUrl, embedUrl);
       } catch (e) {}
     }
   }
@@ -1321,7 +1405,7 @@ async function loadDetail(link) {
 
     if (isDirectoryListingUrl(detailUrl)) {
       const videos = parseVideoList(html);
-      const firstCover = videos[0] && videos[0].posterPath;
+      const firstCover = videos[0] && (videos[0].backdropPath || videos[0].posterPath);
       const moduleKey = detectBrowseModuleKey(detailUrl);
       const meta = buildBrowseDetailMeta(detailUrl, title || detailUrl, moduleKey);
       return {
@@ -1353,19 +1437,19 @@ async function loadDetail(link) {
       || pickImageUrl($(".video-cover img, .movie-cover img, .image img, img[data-src*='icdn'], img[src*='icdn']").first())
       || pickImageUrl($("video").first());
 
+    const embedUrl = extractSurritEmbedUrl(html);
     let videoUrl = cached ? cached.videoUrl : "";
     let playHeaders = cached ? cached.customHeaders : null;
 
     if (!videoUrl) {
       videoUrl = await resolveVideoUrl(html, detailUrl);
       if (videoUrl) {
-        playHeaders = buildPlayHeaders(videoUrl);
+        playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
         videoUrl = await finalizeVideoUrl(videoUrl, playHeaders);
         writeVideoCache(detailUrl, videoUrl, playHeaders);
       }
     }
-    if (!playHeaders) playHeaders = buildPlayHeaders(videoUrl);
-    if (!videoUrl) return null;
+    if (!playHeaders && videoUrl) playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
 
     const genreItems = [];
     const $genreLinks = $("a[href*='/genres/'], a[href*='/tags/'], a[href*='/tag/'], a[href*='/makers/'], a[href*='/series/']");
@@ -1414,14 +1498,14 @@ async function loadDetail(link) {
       backdropPath: cover || undefined,
       posterPath: cover || undefined,
       backdropPaths,
-      videoUrl: videoUrl,
-      playerType: "system",
+      videoUrl: videoUrl || undefined,
+      playerType: videoUrl ? "system" : undefined,
+      customHeaders: playHeaders || undefined,
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       peoples: peoples.length > 0 ? peoples : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
       link: detailUrl,
       mediaType: "movie",
-      customHeaders: playHeaders
     };
   } catch (e) {
     return null;

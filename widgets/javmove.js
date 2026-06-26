@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.13",
+  version: "1.0.14",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -675,9 +675,31 @@ async function resolveVideoUrl($, detailUrl, html) {
 }
 
 function normalizeMoviePageUrl(url) {
-  const u = String(url || "").split("#")[0];
+  let u = String(url || "").split("#")[0];
+  const pipe = u.indexOf("|ep|");
+  if (pipe >= 0) u = u.slice(0, pipe);
   const q = u.indexOf("?");
   return q >= 0 ? u.slice(0, q) : u;
+}
+
+function extractActivePartLabel(url) {
+  const text = String(url || "");
+  const pipe = text.match(/\|ep\|(\d+)/i);
+  if (pipe) return pipe[1];
+  const query = text.match(/[?&]p=(\d+)/i);
+  return query ? query[1] : "";
+}
+
+function findPartIndex(parts, label) {
+  if (!label) return 0;
+  for (let i = 0; i < parts.length; i++) {
+    if (String(parts[i].label) === String(label)) return i;
+  }
+  return 0;
+}
+
+function buildEpisodeItemId(baseUrl, label) {
+  return normalizeMoviePageUrl(baseUrl) + "|ep|" + label;
 }
 
 function formatDurationSeconds(sec) {
@@ -982,31 +1004,33 @@ function buildDetailDescription(info, partCount, totalSec, partSec, synopsisText
   return lines.join("\n");
 }
 
-async function resolvePartPlayback(parts, detailUrl) {
-  const resolved = [];
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    let playback = await resolveVideoUrlForPage(part.pageUrl, detailUrl);
-    if (!playback && i === 0) {
-      playback = await resolveVideoUrlForPage(part.pageUrl, part.pageUrl);
-    }
-    resolved.push(
-      playback
-        ? {
-            label: part.label,
-            pageUrl: part.pageUrl,
-            videoUrl: playback.videoUrl,
-            customHeaders: playback.customHeaders,
-          }
-        : {
-            label: part.label,
-            pageUrl: part.pageUrl,
-            videoUrl: "",
-            customHeaders: null,
-          }
-    );
-  }
-  return resolved;
+async function resolvePartPlayback(parts, baseUrl) {
+  const referer = baseUrl || BASE_URL + "/";
+  const tasks = parts.map(function (part, index) {
+    return resolveVideoUrlForPage(part.pageUrl, referer)
+      .then(function (playback) {
+        if (!playback && index === 0) {
+          return resolveVideoUrlForPage(part.pageUrl, part.pageUrl);
+        }
+        return playback;
+      })
+      .then(function (playback) {
+        return playback
+          ? {
+              label: part.label,
+              pageUrl: part.pageUrl,
+              videoUrl: playback.videoUrl,
+              customHeaders: playback.customHeaders,
+            }
+          : {
+              label: part.label,
+              pageUrl: part.pageUrl,
+              videoUrl: "",
+              customHeaders: null,
+            };
+      });
+  });
+  return Promise.all(tasks);
 }
 
 async function measurePartDurations(resolvedParts) {
@@ -1017,36 +1041,27 @@ async function measurePartDurations(resolvedParts) {
   return Promise.all(tasks);
 }
 
-function buildEpisodeItems(resolvedParts, durations, cover) {
+function buildEpisodeItems(baseUrl, resolvedParts, durations, cover) {
   if (!resolvedParts || resolvedParts.length <= 1) return [];
+  const movieUrl = normalizeMoviePageUrl(baseUrl);
   const items = [];
   for (let i = 0; i < resolvedParts.length; i++) {
     const part = resolvedParts[i];
-    if (!part) continue;
+    if (!part || !part.videoUrl) continue;
     const sec = durations[i] || 0;
-    const item = {
-      id: part.pageUrl,
+    items.push({
+      id: buildEpisodeItemId(movieUrl, part.label),
       type: "url",
-      title:
-        "\u7b2c" +
-        part.label +
-        "\u96c6" +
-        (sec > 0 ? " (" + formatDurationSeconds(sec) + ")" : ""),
-      link: part.pageUrl,
-      mediaType: "movie",
-      playerType: "system",
+      title: "\u7b2c" + part.label + "\u96c6",
+      videoUrl: part.videoUrl,
+      customHeaders: part.customHeaders || buildPlayHeaders(part.videoUrl),
+      duration: sec > 0 ? Math.round(sec) : undefined,
+      durationText: sec > 0 ? formatDurationSeconds(sec) : undefined,
       backdropPath: cover || undefined,
       posterPath: cover || undefined,
-    };
-    if (part.videoUrl) {
-      item.videoUrl = part.videoUrl;
-      item.customHeaders = part.customHeaders || buildPlayHeaders(part.videoUrl);
-      if (sec > 0) {
-        item.duration = Math.round(sec);
-        item.durationText = formatDurationSeconds(sec);
-      }
-    }
-    items.push(item);
+      mediaType: "movie",
+      playerType: "system",
+    });
   }
   return items.length > 1 ? items : [];
 }
@@ -1670,19 +1685,24 @@ async function loadUpcoming(params) {
 
 async function loadDetail(link) {
   try {
-    const detailUrl = String(link);
-    const html = await fetchHtml(detailUrl, BASE_URL + "/");
+    const rawLink = String(link);
+    const baseUrl = normalizeMoviePageUrl(rawLink);
+    const activeLabel = extractActivePartLabel(rawLink);
+
+    const html = await fetchHtml(baseUrl, BASE_URL + "/");
     const $ = safeLoadHtml(html);
     const meta = parseDetailMeta(html);
     const detailInfo = parseDetailInfo($, html);
-    const parts = collectVideoParts($, detailUrl, html);
+    const parts = collectVideoParts($, baseUrl, html);
 
     const rawTitle =
       $("h1").first().text().trim() ||
       $('meta[property="og:title"]').attr("content") ||
       meta.title ||
       "";
-    const displayTitle = formatMovieCode(detailInfo.movieId, rawTitle) || rawTitle.split("|")[0].trim();
+    const displayTitle =
+      formatMovieCode(detailInfo.movieId, rawTitle) ||
+      rawTitle.split("|")[0].trim();
     const synopsisRaw = extractSynopsisRaw(html, rawTitle);
     const synopsisText = synopsisRaw ? await translateToChinese(synopsisRaw) : "";
     const cover =
@@ -1692,12 +1712,17 @@ async function loadDetail(link) {
       meta.cover ||
       "";
 
-    const resolvedParts = await resolvePartPlayback(parts, detailUrl);
+    const resolvedParts = await resolvePartPlayback(parts, baseUrl);
+    const playableParts = resolvedParts.filter(function (part) {
+      return part && part.videoUrl;
+    });
+    if (!playableParts.length) return null;
+
+    const activeIndex = findPartIndex(parts, activeLabel);
     const mainPart =
-      resolvedParts.find(function (part) {
-        return part && part.videoUrl;
-      }) || resolvedParts[0];
-    if (!mainPart || !mainPart.videoUrl) return null;
+      resolvedParts[activeIndex] && resolvedParts[activeIndex].videoUrl
+        ? resolvedParts[activeIndex]
+        : playableParts[0];
 
     const videoUrl = mainPart.videoUrl;
     const playHeaders = mainPart.customHeaders || buildPlayHeaders(videoUrl);
@@ -1722,7 +1747,12 @@ async function loadDetail(link) {
       avgPartSec = counted > 0 ? sum / counted : 0;
     }
 
-    const episodeItems = buildEpisodeItems(resolvedParts, partDurations, cover);
+    const episodeItems = buildEpisodeItems(
+      baseUrl,
+      resolvedParts,
+      partDurations,
+      cover
+    );
     const backdropPaths = extractDetailStills(html, $, cover);
     const description = buildDetailDescription(
       detailInfo,
@@ -1762,19 +1792,20 @@ async function loadDetail(link) {
       if (text && href) peoples.push({ id: href, title: text, role: "actress" });
     });
 
-    const relatedItems = await enrichRelatedItems(html, $, detailUrl, 12);
+    const relatedItems = await enrichRelatedItems(html, $, baseUrl, 12);
 
     const displayDurationSec = totalDurationSec || partDurations[0] || 0;
-    const isSeries = parts.length > 1;
+    const isSeries = episodeItems.length > 1;
+    const firstEpisode = episodeItems[0];
 
     return {
-      id: detailUrl,
+      id: baseUrl,
       type: "url",
       title: displayTitle,
       backdropPath: cover || undefined,
       posterPath: cover || undefined,
       backdropPaths: backdropPaths,
-      videoUrl: videoUrl,
+      videoUrl: isSeries ? firstEpisode.videoUrl : videoUrl,
       playerType: "system",
       description: description || undefined,
       duration: displayDurationSec > 0 ? Math.round(displayDurationSec) : undefined,
@@ -1783,11 +1814,13 @@ async function loadDetail(link) {
       releaseDate: detailInfo.releaseDate || undefined,
       genreItems: genreItems.length > 0 ? genreItems : undefined,
       peoples: peoples.length > 0 ? peoples : undefined,
-      episodeItems: episodeItems.length > 0 ? episodeItems : undefined,
+      episodeItems: isSeries ? episodeItems : undefined,
       relatedItems: relatedItems.length > 0 ? relatedItems : undefined,
-      link: normalizeMoviePageUrl(detailUrl),
+      link: baseUrl,
       mediaType: isSeries ? "tv" : "movie",
-      customHeaders: playHeaders,
+      customHeaders: isSeries
+        ? firstEpisode.customHeaders || playHeaders
+        : playHeaders,
     };
   } catch (e) {
     console.error("[loadDetail] 失败:", e.message || e);
