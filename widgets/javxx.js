@@ -1,9 +1,9 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.2.1",
+  version: "1.3.0",
   requiredVersion: "0.0.1",
-  description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001\u7d20\u4eba\u5236\u4f5c\u5546\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u7d22\u5f15\u4e0e\u641c\u7d22",
+  description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "Forward",
   site: "https://123av.com",
   detailCacheDuration: 300,
@@ -72,13 +72,6 @@ WidgetMetadata = {
       params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
     },
     {
-      id: "vr",
-      title: "VR",
-      functionName: "loadVr",
-      cacheDuration: 3600,
-      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
-    },
-    {
       id: "fc2",
       title: "FC2",
       functionName: "loadFc2",
@@ -93,30 +86,10 @@ WidgetMetadata = {
       params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
     },
     {
-      id: "luxu",
-      title: "LUXU \u7d20\u4eba",
-      functionName: "loadLuxu",
-      cacheDuration: 3600,
-      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
-    },
-    {
-      id: "gana",
-      title: "200GANA",
-      functionName: "loadGana",
-      cacheDuration: 3600,
-      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
-    },
-    {
-      id: "heyzo",
-      title: "HEYZO",
-      functionName: "loadHeyzo",
-      cacheDuration: 3600,
-      params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
-    },
-    {
       id: "genres",
       title: "\u7c7b\u522b",
       functionName: "loadGenres",
+      sectionMode: true,
       cacheDuration: 3600,
       params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
     },
@@ -124,6 +97,7 @@ WidgetMetadata = {
       id: "actresses",
       title: "\u5973\u6f14\u5458",
       functionName: "loadActresses",
+      sectionMode: true,
       cacheDuration: 3600,
       params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
     },
@@ -131,6 +105,7 @@ WidgetMetadata = {
       id: "makers",
       title: "\u5236\u4f5c\u5546",
       functionName: "loadMakers",
+      sectionMode: true,
       cacheDuration: 3600,
       params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
     },
@@ -138,6 +113,7 @@ WidgetMetadata = {
       id: "series",
       title: "\u7cfb\u5217",
       functionName: "loadSeries",
+      sectionMode: true,
       cacheDuration: 3600,
       params: [{ name: "page", title: "\u9875\u7801", type: "page" }]
     }
@@ -176,12 +152,8 @@ const CATEGORY_MAP = {
   censored: "/censored",
   uncensored: "/uncensored",
   leaked: "/uncensored-leaked",
-  vr: "/vr",
   fc2: "/makers/fc2",
-  siro: "/tags/siro",
-  luxu: "/tags/259luxu",
-  gana: "/tags/200gana",
-  heyzo: "/makers/heyzo"
+  siro: "/tags/siro"
 };
 
 const DIRECTORY_INDEX_MAP = {
@@ -189,6 +161,13 @@ const DIRECTORY_INDEX_MAP = {
   actresses: "/actresses",
   makers: "/makers",
   series: "/series"
+};
+
+const DIRECTORY_SECTION_TITLES = {
+  genres: "\u5168\u90e8\u7c7b\u522b",
+  actresses: "\u5168\u90e8\u5973\u6f14\u5458",
+  makers: "\u5168\u90e8\u5236\u4f5c\u5546",
+  series: "\u5168\u90e8\u7cfb\u5217"
 };
 
 function isVideoDetailUrl(url) {
@@ -277,6 +256,71 @@ function parseDirectoryList(html, indexPath) {
 
   if (items.length > 0) return items;
   return parseDirectoryListRegex(html, indexPath);
+}
+
+function getBrowseFilterId(moduleKey, params) {
+  if (!params) return "";
+  if (moduleKey === "actresses") {
+    return String(params.peopleId || params.genreId || "").trim();
+  }
+  return String(params.genreId || params.peopleId || "").trim();
+}
+
+function toBrowseNavItem(entry, moduleKey) {
+  const url = entry.link || entry.url || entry.id;
+  const title = entry.title || url;
+  const item = {
+    id: url,
+    type: "url",
+    title,
+    link: url,
+    mediaType: "movie",
+  };
+  if (entry.posterPath) {
+    item.posterPath = entry.posterPath;
+    item.backdropPath = entry.backdropPath || entry.posterPath;
+  }
+  if (moduleKey === "actresses") {
+    item.peoples = [{ id: url, title, role: "actress" }];
+  } else {
+    item.genreItems = [{ id: url, title }];
+  }
+  return item;
+}
+
+function buildBrowseSections(moduleKey, entries) {
+  if (!entries || !entries.length) return [];
+  const chunkSize = 36;
+  const baseTitle = DIRECTORY_SECTION_TITLES[moduleKey] || "\u5206\u7c7b";
+  const sections = [];
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    const chunk = entries.slice(i, i + chunkSize);
+    sections.push({
+      id: "javxx-" + moduleKey + "-" + i,
+      type: "url",
+      title: i === 0 ? baseTitle : baseTitle + " (" + (i + 1) + "+)",
+      childItems: chunk.map(function (entry) {
+        return toBrowseNavItem(entry, moduleKey);
+      }),
+    });
+  }
+  return sections;
+}
+
+function buildBrowseDetailMeta(detailUrl, title, moduleKey) {
+  if (moduleKey === "actresses" || /\/actresses\//.test(detailUrl)) {
+    return { peoples: [{ id: detailUrl, title, role: "actress" }] };
+  }
+  return { genreItems: [{ id: detailUrl, title }] };
+}
+
+function detectBrowseModuleKey(url) {
+  const u = String(url || "");
+  if (/\/actresses(?:\/|$)/.test(u)) return "actresses";
+  if (/\/makers(?:\/|$)/.test(u)) return "makers";
+  if (/\/series(?:\/|$)/.test(u)) return "series";
+  if (/\/genres(?:\/|$)/.test(u)) return "genres";
+  return "";
 }
 
 function isMigrationPage(html) {
@@ -827,7 +871,7 @@ function parseVideoList(html) {
     pushItem(href, title, pickItemCover($scope.html(), href, $img), duration, $scope.html(), $img);
   }
 
-  const cardSelectors = [".grid .group", ".vid-items > div.item", "div.thumbnail"];
+  const cardSelectors = [".grid .group", ".vid-items > div.item", "div.thumbnail", "article"];
   for (let i = 0; i < cardSelectors.length; i++) {
     const $cards = $(cardSelectors[i]);
     if ($cards.length === 0) continue;
@@ -861,14 +905,17 @@ async function fetchHtml(pathOrUrl) {
 }
 
 async function loadCategory(categoryId, params) {
-  if (params && (params.genreId || params.peopleId)) return loadFilterList(params);
   const page = Number((params && params.page) || 1);
   const path = CATEGORY_MAP[categoryId] || "/new";
   let url = `${BASE_URL}${LANG_PREFIX}${path}`;
   if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
   try {
     const res = await Widget.http.get(url, { headers: HEADERS });
-    return parseVideoList(res.data);
+    const html = res.data || "";
+    if (isMigrationPage(html)) return [];
+    let items = parseVideoList(html);
+    if (items.length === 0) items = parseVideoListRegex(html);
+    return items;
   } catch (e) {
     return [];
   }
@@ -883,14 +930,20 @@ async function loadFilterList(params) {
   if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
   try {
     const res = await Widget.http.get(url, { headers: HEADERS });
-    return parseVideoList(res.data);
+    const html = res.data || "";
+    if (isMigrationPage(html)) return [];
+    let items = parseVideoList(html);
+    if (items.length === 0) items = parseVideoListRegex(html);
+    return items;
   } catch (e) {
     return [];
   }
 }
 
 async function loadBrowseModule(moduleKey, params) {
-  if (params && (params.genreId || params.peopleId)) return loadFilterList(params);
+  const filterId = getBrowseFilterId(moduleKey, params);
+  if (filterId) return loadFilterList(params);
+
   const indexPath = DIRECTORY_INDEX_MAP[moduleKey];
   if (!indexPath) return [];
   const page = Number((params && params.page) || 1);
@@ -898,7 +951,10 @@ async function loadBrowseModule(moduleKey, params) {
   if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
   try {
     const res = await Widget.http.get(url, { headers: HEADERS });
-    return parseDirectoryList(res.data, indexPath);
+    const html = res.data || "";
+    if (isMigrationPage(html)) return [];
+    const entries = parseDirectoryList(html, indexPath);
+    return buildBrowseSections(moduleKey, entries);
   } catch (e) {
     return [];
   }
@@ -917,12 +973,8 @@ async function loadMonth(params) { return loadCategory("month", params); }
 async function loadCensored(params) { return loadCategory("censored", params); }
 async function loadUncensored(params) { return loadCategory("uncensored", params); }
 async function loadLeaked(params) { return loadCategory("leaked", params); }
-async function loadVr(params) { return loadCategory("vr", params); }
 async function loadFc2(params) { return loadCategory("fc2", params); }
 async function loadSiro(params) { return loadCategory("siro", params); }
-async function loadLuxu(params) { return loadCategory("luxu", params); }
-async function loadGana(params) { return loadCategory("gana", params); }
-async function loadHeyzo(params) { return loadCategory("heyzo", params); }
 async function loadGenres(params) { return loadBrowseModule("genres", params); }
 async function loadActresses(params) { return loadBrowseModule("actresses", params); }
 async function loadMakers(params) { return loadBrowseModule("makers", params); }
@@ -1001,6 +1053,8 @@ async function loadDetail(link) {
     if (isDirectoryListingUrl(detailUrl)) {
       const videos = parseVideoList(html);
       const firstCover = videos[0] && (videos[0].posterPath || videos[0].backdropPath);
+      const moduleKey = detectBrowseModuleKey(detailUrl);
+      const meta = buildBrowseDetailMeta(detailUrl, title || detailUrl, moduleKey);
       return {
         id: link,
         type: "url",
@@ -1008,20 +1062,25 @@ async function loadDetail(link) {
         backdropPath: firstCover || undefined,
         posterPath: firstCover || undefined,
         link: detailUrl,
-        relatedItems: videos.length > 0 ? videos : undefined,
+        childItems: videos.length > 0 ? videos : undefined,
+        genreItems: meta.genreItems,
+        peoples: meta.peoples,
         mediaType: "movie",
       };
     }
 
     if (isDirectoryIndexUrl(detailUrl)) {
       const indexPath = detailUrl.replace(BASE_URL + LANG_PREFIX, "").split("?")[0];
+      const moduleKey = detectBrowseModuleKey(detailUrl);
       const dirItems = parseDirectoryList(html, indexPath);
+      const sections = moduleKey ? buildBrowseSections(moduleKey, dirItems) : [];
       return {
         id: link,
         type: "url",
         title: title || indexPath,
         link: detailUrl,
-        relatedItems: dirItems.length > 0 ? dirItems : undefined,
+        childItems: sections.length === 1 ? sections[0].childItems : undefined,
+        relatedItems: sections.length > 1 ? sections : undefined,
         mediaType: "movie",
       };
     }
@@ -1114,7 +1173,11 @@ async function search(params) {
     let url = `${BASE_URL}${LANG_PREFIX}/search/?keyword=${encodeURIComponent(keyword)}`;
     if (page > 1) url += `&page=${page}`;
     const res = await Widget.http.get(url, { headers: HEADERS });
-    return parseVideoList(res.data);
+    const html = res.data || "";
+    if (isMigrationPage(html)) return [];
+    let items = parseVideoList(html);
+    if (items.length === 0) items = parseVideoListRegex(html);
+    return items;
   } catch (e) {
     return [];
   }

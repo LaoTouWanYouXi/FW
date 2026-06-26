@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.7",
+  version: "1.0.8",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -27,28 +27,8 @@ WidgetMetadata = {
       title: "\u5206\u7c7b\u6d4f\u89c8",
       functionName: "loadGenres",
       sectionMode: true,
-      cacheDuration: 3600,
-      params: [
-        {
-          name: "cat",
-          title: "\u5feb\u6377\u5206\u7c7b",
-          type: "enumeration",
-          enumOptions: [
-            { title: "\u65e0\u7801", value: "uncensored" },
-            { title: "\u5355\u4f53", value: "solowork" },
-            { title: "\u4e2d\u51fa", value: "creampie" },
-            { title: "\u5de8\u4e73", value: "bigtits" },
-            { title: "\u4eba\u59bb", value: "married" },
-            { title: "\u719f\u5973", value: "mature" },
-            { title: "\u7d20\u4eba", value: "amateur" },
-            { title: "\u7f8e\u5c11\u5973", value: "beautiful" },
-            { title: "\u6821\u56ed", value: "school" },
-            { title: "\u4e09\u901a", value: "3p4p" },
-            { title: "\u5267\u60c5", value: "drama" },
-          ],
-        },
-        { name: "page", title: "\u9875\u7801", type: "page" },
-      ],
+      cacheDuration: 60,
+      params: [{ name: "page", title: "\u9875\u7801", type: "page" }],
     },
   ],
   search: {
@@ -63,19 +43,6 @@ WidgetMetadata = {
 
 const BASE_URL = "https://javmove.com";
 const VIDEO_CACHE_TTL = 3600;
-const CATEGORY_MAP = {
-  uncensored: "/genres/javuncensored/jav-uncensored",
-  solowork: "/genres/QxHGjE/solowork",
-  creampie: "/genres/GVWkCw/creampie",
-  bigtits: "/genres/BJiygps/big-tits",
-  married: "/genres/BcEqYww/married-woman",
-  mature: "/genres/DFiQTPU/mature-woman",
-  amateur: "/genres/BHCJmMg/amateur",
-  beautiful: "/genres/Ljbfjc/beautiful-girl",
-  school: "/genres/CMwMXEY/school-girls",
-  "3p4p": "/genres/BxHaNJc/3p-4p",
-  drama: "/genres/GUieHFE/drama",
-};
 const HOT_GENRE_PATHS = [
   "/genres/javuncensored/jav-uncensored",
   "/genres/QxHGjE/solowork",
@@ -463,12 +430,50 @@ function parseListCover(block, $img) {
   return "";
 }
 
+function normalizeGenreId(raw) {
+  const text = decodeHtml(String(raw || "").trim());
+  if (!text) return "";
+  if (text.indexOf("/genres/") >= 0) {
+    const path = text.match(/(\/genres\/[^\s?#]+)/);
+    return path ? resolveUrl(path[1]) : resolveUrl(text);
+  }
+  if (text.indexOf("javmove.com") >= 0 && text.indexOf("http") === 0) return text;
+  return "";
+}
+
+function extractMovieListHtml(html) {
+  const text = String(html || "");
+  const match = text.match(/id="movie-list"[\s\S]*?<\/section>/i);
+  return match ? match[0] : text;
+}
+
+function buildGenrePageUrl(genreUrl, page) {
+  let url = normalizeGenreId(genreUrl);
+  if (!url) return "";
+  const p = Number(page || 1);
+  if (p > 1) url += (url.indexOf("?") >= 0 ? "&" : "?") + "page=" + p;
+  return url;
+}
+
+async function fetchGenreVideoList(genreRef, page) {
+  const baseUrl = normalizeGenreId(genreRef);
+  if (!baseUrl) return [];
+  const fetchUrl = buildGenrePageUrl(baseUrl, page);
+  try {
+    const html = await fetchHtml(fetchUrl, baseUrl);
+    return parseVideoList(html);
+  } catch (e) {
+    return [];
+  }
+}
+
 function parseVideoListRegex(html) {
   const items = [];
   const seen = new Set();
+  const scoped = extractMovieListHtml(html);
   const articleRe = /<article\b[\s\S]*?<\/article>/gi;
   let match;
-  while ((match = articleRe.exec(String(html || ""))) && items.length < 60) {
+  while ((match = articleRe.exec(scoped)) && items.length < 60) {
     const block = match[0];
     const hrefM =
       block.match(/href="(\/movie\/[^"]+)"[^>]*rel="bookmark"/i) ||
@@ -503,11 +508,12 @@ function parseVideoListRegex(html) {
 
 function parseVideoList(html) {
   if (!html) return [];
+  const scoped = extractMovieListHtml(html);
   let items = [];
 
   try {
-    const $ = Widget.html.load(html);
-    $("#movie-list article").each(function (_, el) {
+    const $ = Widget.html.load(scoped);
+    $("#movie-list article, article").each(function (_, el) {
       const $el = $(el);
       const $link = $el.find('a[rel="bookmark"]').first();
       const href = $link.attr("href") || "";
@@ -537,70 +543,51 @@ function parseVideoList(html) {
   } catch (e) {}
 
   if (items.length > 0) return items;
-  return parseVideoListRegex(html);
+  return parseVideoListRegex(scoped);
 }
 
 async function loadGenreList(params) {
-  const genreId = String(params.genreId || "").trim();
+  const genreId = normalizeGenreId(
+    params.genreId || params.link || params.id || ""
+  );
   if (!genreId) return [];
-
-  const page = Number(params.page || 1);
-  let url = genreId.startsWith("http") ? genreId : resolveUrl(genreId);
-  if (page > 1) url += (url.indexOf("?") >= 0 ? "&" : "?") + "page=" + page;
-
-  try {
-    const html = await fetchHtml(url, BASE_URL + "/");
-    return parseVideoList(html);
-  } catch (e) {
-    return [];
-  }
-}
-
-async function loadCategory(categoryId, params) {
-  if (params.genreId) return loadGenreList(params);
-  const path = CATEGORY_MAP[categoryId];
-  if (!path) return [];
-  const page = Number(params.page || 1);
-  let url = BASE_URL + path;
-  if (page > 1) url += (url.indexOf("?") >= 0 ? "&" : "?") + "page=" + page;
-  try {
-    const html = await fetchHtml(url, BASE_URL + "/");
-    return parseVideoList(html);
-  } catch (e) {
-    return [];
-  }
+  return fetchGenreVideoList(genreId, params.page);
 }
 
 function parseGenreNavFromHtml(html) {
   const items = [];
   const seen = new Set();
-  const re = /href="(\/genres\/[^"]+)"[^>]*>([^<]+)</gi;
+  const re = /href="(\/genres\/[^"?#]+)"[^>]*>([^<]+)</gi;
   let match;
   while ((match = re.exec(String(html || "")))) {
-    const url = resolveUrl(match[1]);
+    const path = match[1];
+    const url = resolveUrl(path);
     const title = decodeHtml(match[2]).trim();
     if (!title || seen.has(url)) continue;
     seen.add(url);
-    items.push({ id: url, title: title, url: url });
+    items.push({ id: url, title: title, url: url, path: path });
   }
   return items;
 }
 
 function toGenreNavItem(genre) {
+  const genreUrl = normalizeGenreId(genre.url || genre.path || genre.id);
   return {
-    id: genre.url,
+    id: genreUrl,
     type: "url",
     title: genre.title,
-    link: genre.url,
+    link: genreUrl,
     mediaType: "movie",
-    genreItems: [{ id: genre.url, title: genre.title }],
+    genreItems: [{ id: genreUrl, title: genre.title }],
   };
 }
 
 function buildGenreSections(allGenres) {
-  const hotSet = new Set(HOT_GENRE_PATHS.map(function (p) {
-    return resolveUrl(p);
-  }));
+  const hotSet = new Set(
+    HOT_GENRE_PATHS.map(function (p) {
+      return resolveUrl(p);
+    })
+  );
   const hot = [];
   for (let i = 0; i < HOT_GENRE_PATHS.length; i++) {
     const url = resolveUrl(HOT_GENRE_PATHS[i]);
@@ -621,40 +608,34 @@ function buildGenreSections(allGenres) {
       childItems: hot.map(toGenreNavItem),
     });
   }
-  const chunkSize = 36;
-  for (let i = 0; i < rest.length; i += chunkSize) {
-    const chunk = rest.slice(i, i + chunkSize);
+  if (rest.length) {
     sections.push({
-      id: "javmove-genres-" + i,
+      id: "javmove-all-genres",
       type: "url",
-      title:
-        i === 0
-          ? "\u5168\u90e8\u7c7b\u578b"
-          : "\u5168\u90e8\u7c7b\u578b (" + (i + 1) + "+)",
-      childItems: chunk.map(toGenreNavItem),
+      title: "\u5168\u90e8\u7c7b\u578b (" + rest.length + ")",
+      childItems: rest.map(toGenreNavItem),
     });
   }
   return sections;
 }
 
-async function loadGenres(params) {
-  const genreId = String(params.genreId || "").trim();
-  if (genreId) return loadGenreList(params);
-
-  const cat = String(params.cat || "").trim();
-  if (cat) return loadCategory(cat, params);
-
-  let allGenres = [];
+async function loadAllGenreNav() {
   try {
     const html = await fetchHtml(BASE_URL + "/genres", BASE_URL + "/");
-    allGenres = parseGenreNavFromHtml(html);
-  } catch (e) {}
-  if (!allGenres.length) {
-    allGenres = Object.keys(CATEGORY_MAP).map(function (key) {
-      const url = resolveUrl(CATEGORY_MAP[key]);
-      return { id: url, title: key, url: url };
-    });
+    return parseGenreNavFromHtml(html);
+  } catch (e) {
+    return [];
   }
+}
+
+async function loadGenres(params) {
+  const genreId = normalizeGenreId(
+    params.genreId || params.link || params.id || ""
+  );
+  if (genreId) return fetchGenreVideoList(genreId, params.page);
+
+  const allGenres = await loadAllGenreNav();
+  if (!allGenres.length) return [];
   return buildGenreSections(allGenres);
 }
 
@@ -663,11 +644,12 @@ function isGenreLink(link) {
 }
 
 async function loadGenreDetail(genreUrl) {
-  const url = genreUrl.startsWith("http") ? genreUrl : resolveUrl(genreUrl);
-  const html = await fetchHtml(url, BASE_URL + "/");
+  const url = normalizeGenreId(genreUrl);
+  if (!url) return null;
+  const html = await fetchHtml(url, url);
   const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
   const title = decodeHtml(h1 ? h1[1].replace(/<[^>]+>/g, "") : "").trim();
-  const videos = parseVideoList(html);
+  const videos = await fetchGenreVideoList(url, 1);
   if (!videos.length) return null;
   return {
     id: url,
@@ -743,7 +725,8 @@ async function loadDetail(link) {
         const $a = $(el);
         const href = resolveUrl($a.attr("href") || "");
         const text = $a.text().trim();
-        if (text && href) genreItems.push({ id: href, title: text });
+        const genreUrl = normalizeGenreId(href);
+        if (text && genreUrl) genreItems.push({ id: genreUrl, title: text });
       }
     );
     if (!genreItems.length) {
@@ -753,7 +736,8 @@ async function loadDetail(link) {
       while ((genreMatch = genreRe.exec(String(html || "")))) {
         const href = resolveUrl(genreMatch[1]);
         const text = decodeHtml(genreMatch[2]).trim();
-        if (text && href) genreItems.push({ id: href, title: text });
+        const genreUrl = normalizeGenreId(href);
+        if (text && genreUrl) genreItems.push({ id: genreUrl, title: text });
       }
     }
 
