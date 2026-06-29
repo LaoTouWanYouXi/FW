@@ -31,13 +31,13 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/平台剧场.js"
     },
     {
-      "id": "forward.youtube",
-      "title": "油管",
-      "description": "youtube平台数据",
+      "id": "forward.guangyamove",
+      "title": "光鸭-影视",
+      "description": "光鸭",
       "requiredVersion": "0.0.1",
       "version": "1.0.0",
       "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/youtube.js"
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/guangya_movie_tv.js"
     }
   ]
 }
