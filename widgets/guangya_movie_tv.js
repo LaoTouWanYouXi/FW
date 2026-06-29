@@ -10,7 +10,7 @@ WidgetMetadata = {
   id: "guangya.movie_tv",
   title: "光鸭-影视",
   description: "搜索光鸭云盘影视资源，详情页自动匹配播放源",
-  author: "forward-user",
+  author: "老头",
   version: "1.0.0",
   requiredVersion: "0.0.1",
   site: "https://www.guangyapan.com",
