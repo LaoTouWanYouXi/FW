@@ -10,7 +10,7 @@ WidgetMetadata = {
   id: "guangya.jav",
   title: "光鸭-番号",
   description: "按番号搜索光鸭云盘，详情页自动匹配播放源",
-  author: "forward-user",
+  author: "老头",
   version: "1.0.0",
   requiredVersion: "0.0.1",
   site: "https://www.guangyapan.com",
