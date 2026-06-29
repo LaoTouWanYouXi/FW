@@ -4,6 +4,14 @@
   "icon": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/9331.jpeg",
   "widgets": [
     {
+      "id": "forward.guangyajav",
+      "title": "光鸭-番号",
+      "description": "光鸭-番号",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/guangya_jav.js"
+    },{
       "id": "forward.javxx",
       "title": "javxx",
       "description": "javxx聚合模块",
