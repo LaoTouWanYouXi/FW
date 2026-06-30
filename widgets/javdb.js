@@ -10,7 +10,7 @@
  */
 
 var JAVDB_SORT_FILTER = ["published", "score", "fav"];
-var GLOBAL_PARAM_KEYS = ["baseUrl", "locale", "coverMode", "webPlayScheme"];
+var GLOBAL_PARAM_KEYS = ["baseUrl", "locale", "coverMode"];
 
 function syncGlobalParams(params) {
   params = params || {};
@@ -40,7 +40,6 @@ function getEffectiveParams(params) {
   if (!out.baseUrl) out.baseUrl = JAVDB_DEFAULT_BASE;
   if (!out.locale) out.locale = "zh";
   if (!out.coverMode) out.coverMode = "fast";
-  if (out.webPlayScheme === undefined || out.webPlayScheme === null) out.webPlayScheme = "browser:";
   return out;
 }
 
@@ -87,9 +86,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.4.5",
+  version: "1.5.0",
   requiredVersion: "0.0.1",
-  description: "获取 JavDB 影片列表、演员、系列、标签、片商分类与高清详情，播放时在半屏浏览器打开详情页",
+  description: "获取 JavDB 影片列表、演员、系列、标签、片商分类与高清详情；详情页提供可点击外链入口",
   author: "Forward",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -121,31 +120,8 @@ WidgetMetadata = {
       ],
       value: "fast",
     },
-    {
-      name: "webPlayScheme",
-      title: "网页播放前缀",
-      type: "enumeration",
-      description: "实验项：官方文档未说明 browser:/web: 前缀；Forward 1.3.x 若仍进播放器可切换试",
-      enumOptions: [
-        { title: "browser:（默认试）", value: "browser:" },
-        { title: "web:", value: "web:" },
-        { title: "无前缀 https", value: "" },
-        { title: "调试-三条线路", value: "__all__" },
-      ],
-      value: "browser:",
-    },
   ],
   modules: [
-    {
-      id: "loadResource",
-      title: "半屏浏览器 · JavDB",
-      description: "在半屏 WebView 打开 JavDB 详情页（非视频流）",
-      functionName: "loadResource",
-      type: "stream",
-      requiresWebView: true,
-      cacheDuration: 0,
-      params: [],
-    },
     {
       id: "latest",
       title: "最新上市",
@@ -323,6 +299,18 @@ function decodeLink(link) {
   return raw;
 }
 
+function resolveDetailPath(link, params) {
+  var raw = String(link || "").trim();
+  if (!raw) return "";
+  var decoded = decodeLink(raw);
+  if (!decoded) return "";
+  if (decoded.indexOf("http://") === 0 || decoded.indexOf("https://") === 0) {
+    return extractPath(decoded, javdbBase(params));
+  }
+  if (decoded.charAt(0) === "/") return decoded.split("#")[0];
+  return decoded;
+}
+
 function extractPath(url, base) {
   var value = decodeLink(url);
   if (!value) return "";
@@ -344,27 +332,26 @@ function detailPageUrl(pathOrLink, params) {
   return url;
 }
 
-function wrapWebPlayUrl(pageUrl, scheme) {
-  var url = String(pageUrl || "").trim();
-  if (!url) return url;
-  scheme = String(scheme || "").trim();
-  if (!scheme || scheme === "https" || scheme === "direct") return url;
-  var prefix = scheme.indexOf(":") >= 0 ? scheme : scheme + ":";
-  if (url.indexOf(prefix) === 0) return url;
-  return prefix + url;
+function appendPageUrlToDescription(description, pageUrl) {
+  var base = String(description || "").replace(/\s+/g, " ").trim();
+  var footer = "JavDB 链接：" + pageUrl;
+  if (!pageUrl) return base;
+  if (base.indexOf(pageUrl) >= 0) return base;
+  return base ? base + "\n\n" + footer : footer;
 }
 
-function buildWebViewStream(pageUrl, scheme, params) {
-  var playUrl = wrapWebPlayUrl(pageUrl, scheme);
-  var schemeLabel = scheme ? String(scheme).replace(/:$/, "") : "https";
-  var stream = {
-    name: "JavDB 详情页" + (scheme ? " (" + schemeLabel + ")" : ""),
-    description: "半屏 WebView 打开 JavDB 页面",
-    url: playUrl,
-    customHeaders: javdbHeaders(params),
+function buildOpenJavdbItem(pageUrl, title, cover) {
+  return {
+    id: pageUrl,
+    type: "url",
+    mediaType: "movie",
+    title: title || "打开 JavDB 官网",
+    description: pageUrl,
+    link: pageUrl,
+    posterPath: cover || undefined,
+    backdropPath: cover || undefined,
+    coverUrl: cover || undefined,
   };
-  if (!scheme) stream.playerType = "app";
-  return stream;
 }
 
 function normalizePath(href, base) {
@@ -753,19 +740,20 @@ function buildCoverBundle(code, fallbackCover, options, params) {
   return applyHdCoversNoVerify(code, fallbackCover, options);
 }
 
-function attachExternalLinks(item, pageUrl) {
-  // 官方 README 未文档化这些字段；Forward App 详情页豆瓣/TMDB 图标通常按标题自动匹配，不一定生效。
-  item.tmdbLink = pageUrl;
-  item.doubanLink = pageUrl;
-  item.tmdbUrl = pageUrl;
-  item.doubanUrl = pageUrl;
-  item.imdbLink = pageUrl;
-  item.imdbUrl = pageUrl;
-  item.externalLinks = [
-    { type: "tmdb", title: "TMDB", url: pageUrl },
-    { type: "douban", title: "豆瓣", url: pageUrl },
-    { type: "imdb", title: "IMDB", url: pageUrl },
-  ];
+function enrichDetailLinks(item, pageUrl, displayCode, cover) {
+  var openItem = buildOpenJavdbItem(pageUrl, "打开 JavDB 官网 · " + (displayCode || "详情"), cover);
+  item.webUrl = pageUrl;
+  item.childItems = [openItem];
+  item.description = appendPageUrlToDescription(item.description, pageUrl);
+  if (Array.isArray(item.relatedItems)) {
+    item.relatedItems = [Object.assign({}, openItem, { title: "JavDB · " + (displayCode || "官网") })].concat(
+      item.relatedItems.filter(function (rel) {
+        return rel && rel.link !== pageUrl && rel.id !== pageUrl;
+      })
+    );
+  } else {
+    item.relatedItems = [openItem];
+  }
   return item;
 }
 
@@ -1250,7 +1238,7 @@ async function parseDetailPage(html, link, params) {
   var relatedParams = Object.assign({}, params, { coverMode: "fast" });
   var relatedItems = enrichMovieItems(rawRelated, relatedParams);
 
-  return attachExternalLinks(
+  return enrichDetailLinks(
     Object.assign(
       {
         id: displayCode || path.split("/").pop() || encodeLink(path),
@@ -1269,11 +1257,12 @@ async function parseDetailPage(html, link, params) {
         peoples: peoples,
         relatedItems: relatedItems,
         link: encodeLink(path),
-        webUrl: pageUrl,
       },
       matchFields
     ),
-    pageUrl
+    pageUrl,
+    displayCode,
+    backdropPath
   );
 }
 
@@ -1336,37 +1325,11 @@ async function searchJavdb(params) {
   }
 }
 
-async function loadResource(params) {
-  try {
-    params = syncGlobalParams(params);
-    var path = decodeLink(params.link || params.id || "");
-    if (!path && params.videoUrl) {
-      path = extractPath(params.videoUrl, javdbBase(params));
-    }
-    if (!path || path.indexOf("/v/") !== 0) {
-      throw new Error("缺少影片链接，无法打开 JavDB 详情页");
-    }
-    var pageUrl = detailPageUrl(path, params);
-    var scheme = String(params.webPlayScheme !== undefined ? params.webPlayScheme : "browser:");
-    if (scheme === "__all__") {
-      return [
-        buildWebViewStream(pageUrl, "browser:", params),
-        buildWebViewStream(pageUrl, "web:", params),
-        buildWebViewStream(pageUrl, "", params),
-      ];
-    }
-    return [buildWebViewStream(pageUrl, scheme, params)];
-  } catch (error) {
-    console.error("[javdb] 打开详情页失败:", error.message || error);
-    throw error;
-  }
-}
-
 async function loadDetail(link) {
   try {
-    var path = decodeLink(link);
-    if (!path) return null;
     var params = getEffectiveParams({});
+    var path = resolveDetailPath(link, params);
+    if (!path) return null;
 
     if (path.indexOf("/v/") === 0) {
       var pageUrl = detailPageUrl(path, params);
