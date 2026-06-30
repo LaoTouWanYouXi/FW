@@ -86,7 +86,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.4.3",
+  version: "1.4.4",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员、系列、标签、片商分类与高清详情，播放时在半屏浏览器打开详情页",
   author: "Forward",
@@ -1233,8 +1233,6 @@ async function parseDetailPage(html, link, params) {
         relatedItems: relatedItems,
         link: encodeLink(path),
         webUrl: pageUrl,
-        videoUrl: pageUrl,
-        playerType: "app",
       },
       matchFields
     ),
