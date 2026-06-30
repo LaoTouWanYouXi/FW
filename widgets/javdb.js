@@ -1,12 +1,6 @@
 /**
  * JavDB ForwardWidget 模块
  * 抓取影片列表与详情（名称、横向封面、详情海报、剧照、简介）。
- * 封面高清化逻辑参考 jable.js；分类结构参考 jable 模块化设计。
- */
-
-/**
- * JavDB ForwardWidget 模块
- * 抓取影片列表与详情（名称、横向封面、详情海报、剧照、简介）。
  */
 
 var JAVDB_SORT_FILTER = ["published", "score", "fav"];
@@ -49,46 +43,48 @@ function categoryModuleParams(options) {
       name: "library",
       title: options.libraryTitle,
       type: "enumeration",
-      belongTo: {
-        paramName: "sort_by",
-        value: ["browse"],
-      },
       enumOptions: options.libraries,
       value: options.libraries[0].value,
     },
     {
-      name: "path",
-      title: options.pathTitle || "分类路径",
-      type: "input",
-      description: options.pathDescription || "从浏览库点选后自动填入，或手动输入如 /actors/Av2e",
-      belongTo: {
-        paramName: "sort_by",
-        value: JAVDB_SORT_FILTER,
-      },
+      name: "item",
+      title: options.itemTitle || "选择分类",
+      type: "enumeration",
+      description:
+        options.itemDescription ||
+        "选项从网站实时拉取；切换「分类列表页」可加载更多条目",
+      optionsFunctionName: "loadCategoryItemOptions",
+      enumOptions: [{ title: "请先选择库…", value: "" }],
       value: "",
     },
     {
+      name: "options_page",
+      title: "分类列表页",
+      type: "page",
+      description: "拉取演员/系列/标签/片商选项时使用",
+      value: "1",
+    },
+    {
       name: "sort_by",
-      title: "排序",
+      title: "作品排序",
       type: "enumeration",
       enumOptions: [
-        { title: "浏览库（从网站获取）", value: "browse" },
         { title: "最近上市", value: "published" },
         { title: "最高评分", value: "score" },
         { title: "最多收藏", value: "fav" },
       ],
-      value: "browse",
+      value: "published",
     },
-    { name: "page", title: "页码", type: "page", value: "1" },
+    { name: "page", title: "作品页码", type: "page", value: "1" },
   ];
 }
 
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.5.0",
+  version: "1.6.1",
   requiredVersion: "0.0.1",
-  description: "获取 JavDB 影片列表、演员、系列、标签、片商分类与高清详情；详情页提供可点击外链入口",
+  description: "获取 JavDB 影片列表、演员/系列/标签/片商（选择项从网站拉取）与高清详情、剧照与相似推荐",
   author: "Forward",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -177,8 +173,7 @@ WidgetMetadata = {
       cacheDuration: 3600,
       params: categoryModuleParams({
         libraryTitle: "演员库",
-        pathTitle: "演员路径",
-        pathDescription: "从演员库浏览点选，或输入如 /actors/Av2e",
+        itemTitle: "选择演员",
         libraries: [
           { title: "有码演员", value: "/actors/censored" },
           { title: "无码演员", value: "/actors/uncensored" },
@@ -195,8 +190,7 @@ WidgetMetadata = {
       cacheDuration: 3600,
       params: categoryModuleParams({
         libraryTitle: "系列库",
-        pathTitle: "系列路径",
-        pathDescription: "从系列库浏览点选，或输入如 /series/s1",
+        itemTitle: "选择系列",
         libraries: [
           { title: "有码系列", value: "/series" },
           { title: "无码系列", value: "/series/uncensored" },
@@ -212,8 +206,7 @@ WidgetMetadata = {
       cacheDuration: 3600,
       params: categoryModuleParams({
         libraryTitle: "标签库",
-        pathTitle: "标签路径",
-        pathDescription: "从标签库浏览点选，或输入如 /tags/plot?id=1",
+        itemTitle: "选择标签",
         libraries: [{ title: "全部标签", value: "/tags" }],
       }),
     },
@@ -226,8 +219,7 @@ WidgetMetadata = {
       cacheDuration: 3600,
       params: categoryModuleParams({
         libraryTitle: "片商库",
-        pathTitle: "片商路径",
-        pathDescription: "从片商库浏览点选，或输入如 /makers/s1",
+        itemTitle: "选择片商",
         libraries: [
           { title: "有码片商", value: "/makers" },
           { title: "无码片商", value: "/makers/uncensored" },
@@ -359,6 +351,100 @@ function normalizePath(href, base) {
   var path = href.indexOf("http") === 0 ? href.replace(base, "") : href;
   if (path.charAt(0) !== "/") path = "/" + path;
   return path.split("#")[0];
+}
+
+function normalizeCategoryPath(path) {
+  var value = String(path || "").split("#")[0].trim();
+  if (!value) return "";
+  if (value.indexOf("http://") === 0 || value.indexOf("https://") === 0) {
+    value = value.replace(/^https?:\/\/[^/]+/, "");
+  }
+  if (value.charAt(0) !== "/") value = "/" + value;
+  return value;
+}
+
+function browseItemToOption(item) {
+  var path = "";
+  if (item && item.link) {
+    path = decodeLink(item.link);
+  }
+  path = normalizeCategoryPath(path);
+  if (!path) return null;
+  return {
+    title: String((item && item.title) || path).trim(),
+    value: path,
+  };
+}
+
+function buildCategoryOptionsCacheKey(library, optionsPage, params) {
+  return (
+    "javdb.catopts." +
+    String(library || "") +
+    ".p" +
+    String(optionsPage || 1) +
+    ".loc" +
+    javdbLocale(params)
+  );
+}
+
+async function fetchCategoryBrowseOptions(library, params, optionsPage) {
+  var parser = getBrowseParser(library);
+  if (!parser) return [];
+  var browseUrl = buildPageUrl(
+    javdbBase(params),
+    library,
+    Object.assign({}, params, { page: optionsPage || 1 })
+  );
+  var html = await fetchHtml(browseUrl, params);
+  var items = parser(html, params);
+  var options = [];
+  var seen = {};
+  for (var i = 0; i < items.length; i++) {
+    var opt = browseItemToOption(items[i]);
+    if (!opt || !opt.value || seen[opt.value]) continue;
+    seen[opt.value] = true;
+    options.push(opt);
+  }
+  return options;
+}
+
+async function loadCategoryItemOptions(params) {
+  try {
+    params = syncGlobalParams(params);
+    var library = String(params.library || "").trim();
+    if (!library) {
+      return [{ title: "请先选择库", value: "" }];
+    }
+    var optionsPage = Number(params.options_page || 1);
+    var cacheKey = buildCategoryOptionsCacheKey(library, optionsPage, params);
+    var cached = Widget.storage.get(cacheKey);
+    if (cached) {
+      try {
+        var parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length) return parsed;
+      } catch (e) {}
+    }
+    var options = await fetchCategoryBrowseOptions(library, params, optionsPage);
+    if (!options.length) {
+      return [{ title: "未获取到选项", value: "" }];
+    }
+    try {
+      Widget.storage.set(cacheKey, JSON.stringify(options));
+    } catch (e2) {}
+    return options;
+  } catch (error) {
+    console.error("[javdb] 分类选项加载失败:", error.message || error);
+    return [{ title: "加载失败，请重试", value: "" }];
+  }
+}
+
+async function loadParamOptions(params) {
+  params = params || {};
+  var paramName = String(params.paramName || params.name || "item");
+  if (paramName === "item") {
+    return loadCategoryItemOptions(params);
+  }
+  return [];
 }
 
 function stripCountSuffix(title) {
@@ -643,12 +729,222 @@ function upgradeJavdbImageUrl(url) {
   value = value.replace(/\/thumbs\//gi, "/covers/");
   value = value.replace(/\/samples\//gi, "/covers/");
   value = value.replace(/jdbimgs\.com\/thumbs/gi, "jdbimgs.com/covers");
+  if (/_s\.(jpe?g|webp|png)(\?|$)/i.test(value)) {
+    value = value.replace(/_s(\.(?:jpe?g|webp|png))(\?.*)?$/i, "_b$1$2");
+  }
   return value;
 }
 
 function isLowResGalleryUrl(url) {
   var u = String(url || "").toLowerCase();
-  return u.indexOf("/samples/") >= 0 || u.indexOf("/thumbs/") >= 0;
+  if (u.indexOf("/samples/") >= 0 || u.indexOf("/thumbs/") >= 0) return true;
+  if (/_s\.(jpe?g|webp|png)(\?|$)/i.test(u)) return true;
+  return false;
+}
+
+function collectPageGalleryUrls($, base) {
+  var urls = [];
+  var seen = {};
+
+  function push(raw) {
+    var href = absUrl(String(raw || "").trim(), base);
+    if (!href || seen[href]) return;
+    seen[href] = true;
+    urls.push(href);
+  }
+
+  $("a.tile-item[data-fancybox='gallery'], a[data-fancybox='gallery']").each(function () {
+    push(attrOf($, $(this), "href"));
+    push(attrOf($, $(this), "data-src"));
+  });
+
+  $("a.tile-item, .tile-images a, .preview-images a").each(function () {
+    push(attrOf($, $(this), "href"));
+  });
+
+  $(".tile-images img, .preview-images img, a.tile-item img").each(function () {
+    push(attrOf($, $(this), "data-src"));
+    push(attrOf($, $(this), "data-original"));
+    push(attrOf($, $(this), "src"));
+  });
+
+  return urls;
+}
+
+function buildDetailBackdropPaths(pageUrls, displayCode, params, options) {
+  options = options || {};
+  var pageBackdrops = normalizeBackdropPaths(pageUrls, options);
+  var jtMeta = displayCode ? fetchJavTrailersMeta(displayCode) : { backdropPath: "", backdropPaths: [] };
+  var hdMode = !isFastCoverMode(params);
+  var merged = [];
+  var seen = {};
+
+  function push(url) {
+    var value = String(url || "").trim();
+    if (!value || seen[value]) return;
+    seen[value] = true;
+    merged.push(value);
+  }
+
+  for (var i = 0; i < pageBackdrops.length; i++) push(pageBackdrops[i]);
+
+  if (hdMode || !merged.length) {
+    var hdList = jtMeta.backdropPaths || [];
+    for (var j = 0; j < hdList.length; j++) push(hdList[j]);
+  }
+
+  if (!merged.length && options.coverUrl) {
+    push(options.coverUrl);
+  }
+
+  return merged;
+}
+
+function buildDmmPreviewUrls(contentId) {
+  var id = String(contentId || "").toLowerCase();
+  if (!id) return [];
+  var base = "https://cc3001.dmm.co.jp/digital/video/" + id + "/" + id;
+  return compactUniqueUrls([base + "mhb.mp4", base + "hhb.mp4", base + "sm.mp4"]);
+}
+
+function parseTrailersFromHtml($, base, displayCode, coverUrl) {
+  var trailers = [];
+  var seen = {};
+
+  function push(url, cover) {
+    var value = absUrl(String(url || "").trim(), base);
+    if (!value || seen[value]) return;
+    if (!/\.mp4(\?|$)/i.test(value) && value.indexOf("dmm.co.jp") < 0) return;
+    seen[value] = true;
+    trailers.push({
+      coverUrl: cover || coverUrl || "",
+      url: value,
+    });
+  }
+
+  $("video source[src], video[src]").each(function () {
+    push(attrOf($, $(this), "src"), coverUrl);
+  });
+
+  $("a[href*='.mp4'], [data-url*='.mp4'], [data-video*='.mp4']").each(function () {
+    var node = $(this);
+    push(attrOf($, node, "href") || attrOf($, node, "data-url") || attrOf($, node, "data-video"), coverUrl);
+  });
+
+  if (!trailers.length && displayCode) {
+    var contentId = buildDmmContentIdFromDvdId(displayCode);
+    var previewUrls = buildDmmPreviewUrls(contentId);
+    for (var i = 0; i < previewUrls.length; i++) {
+      push(previewUrls[i], coverUrl);
+    }
+  }
+
+  return trailers.slice(0, 3);
+}
+
+var RELATED_SECTION_RULES = [
+  {
+    bucket: "sameActor",
+    keywords: ["他们还出演", "同演员", "同演員", "same actor", "also appeared", "同参演", "同參演"],
+  },
+  {
+    bucket: "recommend",
+    keywords: ["你可能也喜欢", "你可能也喜歡", "猜你喜欢", "猜你喜歡", "you may also", "recommended for you", "may also like"],
+  },
+];
+
+function matchRelatedSectionBucket(title) {
+  var text = String(title || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!text) return "";
+  for (var i = 0; i < RELATED_SECTION_RULES.length; i++) {
+    var rule = RELATED_SECTION_RULES[i];
+    for (var j = 0; j < rule.keywords.length; j++) {
+      if (text.indexOf(rule.keywords[j].toLowerCase()) >= 0) return rule.bucket;
+    }
+  }
+  return "";
+}
+
+function parseRelatedMovieBox($, box, base) {
+  var href = attrOf($, box, "href");
+  if (!href) return null;
+  var relPath = href.indexOf("http") === 0 ? href.replace(base, "") : href;
+  relPath = String(relPath || "").split("#")[0];
+  if (!relPath || relPath.indexOf("/v/") !== 0) return null;
+
+  var relTitle = attrOf($, box, "title") || textOf($, box.find(".video-title").first()) || textOf($, box);
+  var relCode = textOf($, box.find(".video-title strong").first()) || extractMatchCode(relTitle);
+  return {
+    id: relCode || relPath.split("/").pop(),
+    type: "url",
+    mediaType: "movie",
+    title: formatDisplayTitle(relCode, relTitle),
+    fallbackCover: absUrl(attrOf($, box.find("img").first(), "src"), base),
+    matchCode: relCode,
+    originalTitle: relTitle,
+    code: relCode,
+    link: encodeLink(relPath),
+    videoId: relPath.split("/").pop(),
+  };
+}
+
+function parseRelatedBoxesInContainer($, container, base) {
+  var items = [];
+  var seen = {};
+  container.find("a.box[href*='/v/'], .item a.box[href*='/v/'], .video-item a[href*='/v/']").each(function () {
+    var parsed = parseRelatedMovieBox($, $(this), base);
+    if (!parsed || seen[parsed.link]) return;
+    seen[parsed.link] = true;
+    items.push(parsed);
+  });
+  return items;
+}
+
+function mergeRelatedRawLists() {
+  var merged = [];
+  var seen = {};
+  for (var i = 0; i < arguments.length; i++) {
+    var list = arguments[i] || [];
+    for (var j = 0; j < list.length; j++) {
+      var item = list[j];
+      var key = item && (item.link || item.id);
+      if (!key || seen[key]) continue;
+      seen[key] = true;
+      merged.push(item);
+    }
+  }
+  return merged;
+}
+
+function parseRelatedSectionsFromHtml(html, params) {
+  var base = javdbBase(params);
+  var $ = Widget.html.load(html);
+  var buckets = { sameActor: [], recommend: [], other: [] };
+
+  $(".panel, section, article, .message, .video-panel").each(function () {
+    var section = $(this);
+    var heading = textOf($, section.find("h2, h3, h4, .title").first());
+    var bucket = matchRelatedSectionBucket(heading);
+    if (!bucket) return;
+    var items = parseRelatedBoxesInContainer($, section, base);
+    if (items.length) buckets[bucket] = mergeRelatedRawLists(buckets[bucket], items);
+  });
+
+  if (!buckets.sameActor.length && !buckets.recommend.length) {
+    buckets.other = parseRelatedFromHtml(html, params);
+  } else {
+    var generic = parseRelatedFromHtml(html, params);
+    buckets.other = generic.filter(function (item) {
+      var key = item.link || item.id;
+      return !buckets.sameActor.some(function (x) {
+        return (x.link || x.id) === key;
+      }) && !buckets.recommend.some(function (y) {
+        return (y.link || y.id) === key;
+      });
+    });
+  }
+
+  return mergeRelatedRawLists(buckets.sameActor, buckets.recommend, buckets.other).slice(0, 24);
 }
 
 function normalizeBackdropPaths(urls, options) {
@@ -745,14 +1041,12 @@ function enrichDetailLinks(item, pageUrl, displayCode, cover) {
   item.webUrl = pageUrl;
   item.childItems = [openItem];
   item.description = appendPageUrlToDescription(item.description, pageUrl);
-  if (Array.isArray(item.relatedItems)) {
-    item.relatedItems = [Object.assign({}, openItem, { title: "JavDB · " + (displayCode || "官网") })].concat(
-      item.relatedItems.filter(function (rel) {
-        return rel && rel.link !== pageUrl && rel.id !== pageUrl;
-      })
-    );
+  if (Array.isArray(item.relatedItems) && item.relatedItems.length) {
+    item.relatedItems = item.relatedItems.filter(function (rel) {
+      return rel && rel.link !== pageUrl && rel.id !== pageUrl;
+    });
   } else {
-    item.relatedItems = [openItem];
+    item.relatedItems = [];
   }
   return item;
 }
@@ -967,17 +1261,13 @@ function getBrowseParser(path) {
 
 function resolveCategoryPath(params) {
   params = params || {};
-  var sortBy = String(params.sort_by || "browse");
-  if (sortBy === "browse") {
-    return String(params.library || "");
-  }
-  return String(params.path || params.url || "");
+  return normalizeCategoryPath(params.item || params.path || params.url || "");
 }
 
 function applyCategorySort(path, sortBy) {
-  if (!path || sortBy === "browse") return path;
+  if (!path) return path;
   var sortMap = { published: "0", score: "1", fav: "2" };
-  var sortType = sortMap[String(sortBy || "")];
+  var sortType = sortMap[String(sortBy || "published")];
   if (sortType === undefined) return path;
   return path + (path.indexOf("?") >= 0 ? "&" : "?") + "sort_type=" + sortType;
 }
@@ -985,29 +1275,20 @@ function applyCategorySort(path, sortBy) {
 async function loadPage(params) {
   try {
     params = syncGlobalParams(params);
+    var sortBy = String(params.sort_by || "published");
     if (hasJumpFilter(params)) {
-      var moviePath = resolveFilteredPath(params, "");
-      var jumpMovies = await fetchMovieList(moviePath, params);
+      var jumpPath = applyCategorySort(resolveFilteredPath(params, ""), sortBy);
+      var jumpMovies = await fetchMovieList(jumpPath, params);
       if (!jumpMovies.length) throw new Error("未解析到影片列表");
       return jumpMovies;
     }
 
-    var path = applyCategorySort(resolveCategoryPath(params), params.sort_by);
+    var path = applyCategorySort(resolveCategoryPath(params), sortBy);
     if (!path) {
-      if (String(params.sort_by || "browse") === "browse") {
-        throw new Error("请选择浏览库");
-      }
-      throw new Error("请从浏览库点选分类，或在路径框输入如 /actors/Av2e");
+      throw new Error("请先在参数中选择分类项（演员/系列/标签/片商）");
     }
-
     if (isBrowseLibraryPath(path)) {
-      var browseParser = getBrowseParser(path);
-      if (!browseParser) throw new Error("未找到分类解析器");
-      var browseUrl = buildPageUrl(javdbBase(params), path, params);
-      var browseHtml = await fetchHtml(browseUrl, params);
-      var browseItems = browseParser(browseHtml, params);
-      if (!browseItems.length) throw new Error("未解析到分类列表");
-      return browseItems;
+      throw new Error("请选择具体分类项，而不是库目录");
     }
 
     var movies = await fetchMovieList(path, params);
@@ -1130,20 +1411,10 @@ async function parseDetailPage(html, link, params) {
     rating = parseRatingText(textOf($, scoreNode.parent()));
   }
 
-  var backdropPaths = [];
-  $("a.tile-item[data-fancybox='gallery']").each(function () {
-    var href = absUrl(attrOf($, $(this), "href"), base);
-    if (href && backdropPaths.indexOf(href) < 0) backdropPaths.push(href);
-  });
-  if (!backdropPaths.length) {
-    $("a.tile-item").each(function () {
-      var href = absUrl(attrOf($, $(this), "href"), base);
-      if (href && backdropPaths.indexOf(href) < 0) backdropPaths.push(href);
-    });
-  }
+  var backdropPaths = collectPageGalleryUrls($, base);
 
   var cover = extractBestImageUrl($, $("img.video-cover").first(), base);
-  if (!cover && backdropPaths.length) cover = backdropPaths[0];
+  if (!cover && backdropPaths.length) cover = absUrl(backdropPaths[0], base);
 
   var genreItems = [];
   $("strong:contains('类别'), strong:contains('Tags'), strong:contains('類別')").each(function () {
@@ -1206,7 +1477,7 @@ async function parseDetailPage(html, link, params) {
       });
   });
 
-  var rawRelated = parseRelatedFromHtml(html, params);
+  var rawRelated = parseRelatedSectionsFromHtml(html, params);
 
   var displayCode = code || extractMatchCode(title);
   if (!displayCode && description) {
@@ -1226,14 +1497,10 @@ async function parseDetailPage(html, link, params) {
   var detailPoster = coverBundle.detailPoster || fallbackCover;
   var posterPath = coverBundle.posterPath || fallbackCover;
 
-  var pageBackdrops = normalizeBackdropPaths(backdropPaths, { coverUrl: fallbackCover });
-  var allBackdropPaths = hdMode && jtMeta.backdropPaths && jtMeta.backdropPaths.length ? jtMeta.backdropPaths.slice() : pageBackdrops;
-  if (hdMode && jtMeta.backdropPaths && jtMeta.backdropPaths.length) {
-    for (var bi = 0; bi < pageBackdrops.length; bi++) {
-      var bp = pageBackdrops[bi];
-      if (bp && allBackdropPaths.indexOf(bp) < 0) allBackdropPaths.push(bp);
-    }
-  }
+  var allBackdropPaths = buildDetailBackdropPaths(backdropPaths, displayCode, params, {
+    coverUrl: fallbackCover,
+  });
+  var trailers = parseTrailersFromHtml($, base, displayCode, backdropPath || fallbackCover);
 
   var relatedParams = Object.assign({}, params, { coverMode: "fast" });
   var relatedItems = enrichMovieItems(rawRelated, relatedParams);
@@ -1250,6 +1517,7 @@ async function parseDetailPage(html, link, params) {
         coverUrl: backdropPath,
         detailPoster: detailPoster,
         backdropPaths: allBackdropPaths,
+        trailers: trailers,
         releaseDate: releaseDate,
         durationText: durationText,
         rating: rating,
