@@ -500,9 +500,10 @@ async function loadResource(params) {
     if (params.name) texts.push(params.name);
     if (params.originalTitle) texts.push(params.originalTitle);
     if (params.id) texts.push(params.id);
-    if (params.link) texts.push(params.link);
     if (params.description) texts.push(params.description);
     if (params.episodeName) texts.push(params.episodeName);
+    if (params.seriesName) texts.push(params.seriesName);
+    if (params.link) texts.push(params.link);
 
     var matchKey = extractMatchKey(texts.join(" "));
     if (!matchKey) return [];
