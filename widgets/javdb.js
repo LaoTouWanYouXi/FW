@@ -97,7 +97,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.3.0",
+  version: "1.3.1",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员、系列、标签、片商分类与高清详情，播放时在半屏浏览器打开详情页",
   author: "Forward",
@@ -121,13 +121,23 @@ WidgetMetadata = {
       ],
       value: "zh",
     },
+    {
+      name: "coverMode",
+      title: "封面模式",
+      type: "enumeration",
+      enumOptions: [
+        { title: "快速（推荐）", value: "fast" },
+        { title: "详情高清", value: "hd" },
+      ],
+      value: "fast",
+    },
   ],
   modules: [
     {
       id: "loadResource",
-      title: "JavDB 页面",
+      title: "JavDB 网页",
+      description: "在半屏浏览器打开 JavDB 详情页（请在播放源中选择此项，勿与光鸭等直链源混用）",
       functionName: "loadResource",
-      type: "stream",
       requiresWebView: true,
       cacheDuration: 0,
       params: [],
@@ -443,19 +453,6 @@ function formatDisplayTitle(code, title) {
   return title ? code + " " + title : code;
 }
 
-async function verifyCoverUrl(url) {
-  if (!url) return "";
-  try {
-    var resp = await Widget.http.get(url, { timeout: 3000, headers: { "User-Agent": JAVDB_UA } });
-    var data = resp && resp.data;
-    if (!data) return "";
-    if (typeof data === "string" && data.length < 15360) return "";
-    return url;
-  } catch (error) {
-    return "";
-  }
-}
-
 var MGSTAGE_COVER_RULES = {
   ABF: { maker: "prestige" },
   ABW: { maker: "prestige" },
@@ -605,7 +602,7 @@ function buildMgstageGalleryFromDvdId(dvdId, count) {
   return urls;
 }
 
-async function fetchJavTrailersMeta(dvdId) {
+function fetchJavTrailersMeta(dvdId) {
   var empty = { backdropPath: "", backdropPaths: [] };
   if (!dvdId) return empty;
   var contentId = buildDmmContentIdFromDvdId(dvdId);
@@ -620,10 +617,6 @@ async function fetchJavTrailersMeta(dvdId) {
     var dmm = buildDmmCoverCandidatesFromParts(parts || { code: contentId });
     backdropPath = dmm.backdropCandidates[0] || "";
     backdropPaths = buildDmmGallery(contentId, 10);
-  }
-  if (backdropPath) {
-    var verifiedBackdrop = await verifyCoverUrl(backdropPath);
-    if (!verifiedBackdrop) backdropPath = "";
   }
   return { backdropPath: backdropPath, backdropPaths: backdropPaths };
 }
@@ -671,33 +664,39 @@ function extractBestImageUrl($, node, base) {
   return upgradeJavdbImageUrl(absUrl(best, base));
 }
 
-async function pickVerifiedCover(candidates, fallback) {
-  var list = compactUniqueUrls(candidates || []);
-  for (var i = 0; i < list.length; i++) {
-    var verified = await verifyCoverUrl(list[i]);
-    if (verified) return verified;
-  }
-  return fallback || "";
+function isFastCoverMode(params) {
+  return String((params && params.coverMode) || "fast") !== "hd";
 }
 
-async function applyHdCovers(code, fallbackCover, options) {
+function applyFastCovers(fallbackCover, videoId) {
+  var cover = resolveJavdbCoverUrl(fallbackCover, videoId);
+  return {
+    backdropPath: cover,
+    posterPath: cover,
+    detailPoster: cover,
+    coverUrl: cover,
+  };
+}
+
+function applyHdCoversNoVerify(code, fallbackCover, options) {
   options = options || {};
   var javdbCover = resolveJavdbCoverUrl(fallbackCover, options.videoId);
   var candidates = buildCoverCandidatesFromVideoId(code);
-  var backdropCandidates = [javdbCover].concat(candidates.backdropCandidates || []);
-  var posterCandidates = [javdbCover].concat(candidates.posterCandidates || []);
-
-  var backdropPath = await pickVerifiedCover(backdropCandidates, javdbCover);
-  var posterPath = await pickVerifiedCover(posterCandidates, javdbCover);
-  if (!backdropPath) backdropPath = javdbCover;
-  if (!posterPath) posterPath = backdropPath;
-
+  var backdropPath = javdbCover || candidates.backdropCandidates[0] || fallbackCover || "";
+  var posterPath = javdbCover || candidates.posterCandidates[0] || backdropPath;
   return {
     backdropPath: backdropPath,
     posterPath: posterPath,
     detailPoster: posterPath,
     coverUrl: backdropPath,
   };
+}
+
+function buildCoverBundle(code, fallbackCover, options, params) {
+  if (isFastCoverMode(params)) {
+    return applyFastCovers(fallbackCover, options && options.videoId);
+  }
+  return applyHdCoversNoVerify(code, fallbackCover, options);
 }
 
 function attachExternalLinks(item, pageUrl) {
@@ -781,11 +780,12 @@ function parseListItems(html, params) {
   return rawItems;
 }
 
-async function enrichMovieItems(rawItems) {
+function enrichMovieItems(rawItems, params) {
+  params = params || {};
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = await applyHdCovers(raw.code, raw.fallbackCover, { videoId: raw.videoId || raw.id });
+    var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId || raw.id }, params);
     items.push(Object.assign(
       {
         id: raw.id,
@@ -1124,16 +1124,13 @@ async function parseDetailPage(html, link, params) {
   var displayTitle = formatDisplayTitle(displayCode, title);
   var matchFields = buildGuangyaMatchFields(displayCode, title, description);
   var fallbackCover = cover || resolveJavdbCoverUrl("", videoId);
-  var hdCovers = await applyHdCovers(displayCode, fallbackCover, { videoId: videoId });
-  var jtMeta = displayCode
-    ? await fetchJavTrailersMeta(displayCode).catch(function () {
-        return { backdropPath: "", backdropPaths: [] };
-      })
-    : { backdropPath: "", backdropPaths: [] };
+  var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
+  var jtMeta =
+    displayCode && !isFastCoverMode(params) ? fetchJavTrailersMeta(displayCode) : { backdropPath: "", backdropPaths: [] };
 
-  var backdropPath = jtMeta.backdropPath || hdCovers.backdropPath || fallbackCover;
-  var detailPoster = hdCovers.detailPoster || fallbackCover;
-  var posterPath = hdCovers.posterPath || fallbackCover;
+  var backdropPath = jtMeta.backdropPath || coverBundle.backdropPath || fallbackCover;
+  var detailPoster = coverBundle.detailPoster || fallbackCover;
+  var posterPath = coverBundle.posterPath || fallbackCover;
   var allBackdropPaths = backdropPaths.slice();
   if (jtMeta.backdropPaths && jtMeta.backdropPaths.length) {
     for (var bi = 0; bi < jtMeta.backdropPaths.length; bi++) {
@@ -1142,7 +1139,8 @@ async function parseDetailPage(html, link, params) {
     }
   }
 
-  var relatedItems = await enrichMovieItems(rawRelated);
+  var relatedParams = Object.assign({}, params, { coverMode: "fast" });
+  var relatedItems = enrichMovieItems(rawRelated, relatedParams);
 
   return attachExternalLinks(
     Object.assign(
@@ -1173,7 +1171,7 @@ async function parseDetailPage(html, link, params) {
 async function fetchMovieList(path, params) {
   var url = buildPageUrl(javdbBase(params), path, params);
   var html = await fetchHtml(url, params);
-  return enrichMovieItems(parseListItems(html, params));
+  return enrichMovieItems(parseListItems(html, params), params);
 }
 
 async function loadListByPath(path, params) {
@@ -1218,7 +1216,7 @@ async function searchJavdb(params) {
     var page = Number(params.page || 1);
     if (page > 1) url += "&page=" + page;
     var html = await fetchHtml(url, params);
-    var items = await enrichMovieItems(parseListItems(html, params));
+    var items = enrichMovieItems(parseListItems(html, params), params);
     if (!items.length) throw new Error("未找到相关影片");
     return items;
   } catch (error) {
@@ -1243,8 +1241,6 @@ async function loadResource(params) {
         name: "JavDB 详情页",
         description: "在半屏浏览器中打开当前影片的 JavDB 详情页",
         url: pageUrl,
-        playerType: "app",
-        requiresWebView: true,
         customHeaders: javdbHeaders(params),
       },
     ];
