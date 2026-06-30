@@ -37,14 +37,37 @@ function getEffectiveParams(params) {
   return out;
 }
 
+var CATEGORY_SOURCE_MAP = {
+  actors: {
+    sources: [
+      { label: "有码", path: "/actors/censored" },
+      { label: "无码", path: "/actors/uncensored" },
+    ],
+  },
+  series: {
+    sources: [
+      { label: "有码", path: "/series" },
+      { label: "无码", path: "/series/uncensored" },
+    ],
+  },
+  tags: {
+    sources: [{ label: "", path: "/tags" }],
+  },
+  makers: {
+    sources: [
+      { label: "有码", path: "/makers" },
+      { label: "无码", path: "/makers/uncensored" },
+    ],
+  },
+};
+
 function categoryModuleParams(options) {
   return [
     {
-      name: "library",
-      title: options.libraryTitle,
-      type: "enumeration",
-      enumOptions: options.libraries,
-      value: options.libraries[0].value,
+      name: "categoryKey",
+      title: "categoryKey",
+      type: "constant",
+      value: options.categoryKey,
     },
     {
       name: "item",
@@ -52,16 +75,16 @@ function categoryModuleParams(options) {
       type: "enumeration",
       description:
         options.itemDescription ||
-        "选项从网站实时拉取；切换「分类列表页」可加载更多条目",
-      optionsFunctionName: "loadCategoryItemOptions",
-      enumOptions: [{ title: "请先选择库…", value: "" }],
+        "进入模块时自动从网站拉取全部条目；切换「分类列表页」可加载更多",
+      optionsFunctionName: options.optionsFunctionName || "loadCategoryItemOptions",
+      enumOptions: [{ title: "加载中…", value: "" }],
       value: "",
     },
     {
       name: "options_page",
       title: "分类列表页",
       type: "page",
-      description: "拉取演员/系列/标签/片商选项时使用",
+      description: "每个来源目录都会拉取该页（如第2页=有码第2页+无码第2页）",
       value: "1",
     },
     {
@@ -82,7 +105,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.6.1",
+  version: "1.6.2",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商（选择项从网站拉取）与高清详情、剧照与相似推荐",
   author: "Forward",
@@ -172,13 +195,9 @@ WidgetMetadata = {
       functionName: "loadPage",
       cacheDuration: 3600,
       params: categoryModuleParams({
-        libraryTitle: "演员库",
+        categoryKey: "actors",
         itemTitle: "选择演员",
-        libraries: [
-          { title: "有码演员", value: "/actors/censored" },
-          { title: "无码演员", value: "/actors/uncensored" },
-          { title: "欧美演员", value: "/actors/western" },
-        ],
+        optionsFunctionName: "loadActorItemOptions",
       }),
     },
     {
@@ -189,12 +208,9 @@ WidgetMetadata = {
       functionName: "loadPage",
       cacheDuration: 3600,
       params: categoryModuleParams({
-        libraryTitle: "系列库",
+        categoryKey: "series",
         itemTitle: "选择系列",
-        libraries: [
-          { title: "有码系列", value: "/series" },
-          { title: "无码系列", value: "/series/uncensored" },
-        ],
+        optionsFunctionName: "loadSeriesItemOptions",
       }),
     },
     {
@@ -205,9 +221,9 @@ WidgetMetadata = {
       functionName: "loadPage",
       cacheDuration: 3600,
       params: categoryModuleParams({
-        libraryTitle: "标签库",
+        categoryKey: "tags",
         itemTitle: "选择标签",
-        libraries: [{ title: "全部标签", value: "/tags" }],
+        optionsFunctionName: "loadTagItemOptions",
       }),
     },
     {
@@ -218,12 +234,9 @@ WidgetMetadata = {
       functionName: "loadPage",
       cacheDuration: 3600,
       params: categoryModuleParams({
-        libraryTitle: "片商库",
+        categoryKey: "makers",
         itemTitle: "选择片商",
-        libraries: [
-          { title: "有码片商", value: "/makers" },
-          { title: "无码片商", value: "/makers/uncensored" },
-        ],
+        optionsFunctionName: "loadMakerItemOptions",
       }),
     },
   ],
@@ -376,10 +389,10 @@ function browseItemToOption(item) {
   };
 }
 
-function buildCategoryOptionsCacheKey(library, optionsPage, params) {
+function buildCategoryOptionsCacheKey(categoryKey, optionsPage, params) {
   return (
     "javdb.catopts." +
-    String(library || "") +
+    String(categoryKey || "") +
     ".p" +
     String(optionsPage || 1) +
     ".loc" +
@@ -408,15 +421,53 @@ async function fetchCategoryBrowseOptions(library, params, optionsPage) {
   return options;
 }
 
-async function loadCategoryItemOptions(params) {
+function mergeCategoryOptionsFromSources(sourceResults, multiSource) {
+  var options = [];
+  var seen = {};
+  for (var i = 0; i < sourceResults.length; i++) {
+    var batch = sourceResults[i].options || [];
+    var label = sourceResults[i].label || "";
+    for (var j = 0; j < batch.length; j++) {
+      var opt = batch[j];
+      if (!opt || !opt.value || seen[opt.value]) continue;
+      seen[opt.value] = true;
+      options.push({
+        title: multiSource && label ? "[" + label + "] " + opt.title : opt.title,
+        value: opt.value,
+      });
+    }
+  }
+  options.sort(function (a, b) {
+    return String(a.title || "").localeCompare(String(b.title || ""), "zh-CN");
+  });
+  return options;
+}
+
+async function fetchAllCategoryBrowseOptions(categoryKey, params, optionsPage) {
+  var config = CATEGORY_SOURCE_MAP[categoryKey];
+  if (!config || !config.sources || !config.sources.length) return [];
+
+  var sourceResults = [];
+  for (var i = 0; i < config.sources.length; i++) {
+    var source = config.sources[i];
+    var options = await fetchCategoryBrowseOptions(source.path, params, optionsPage);
+    sourceResults.push({ label: source.label, options: options });
+  }
+
+  return mergeCategoryOptionsFromSources(sourceResults, config.sources.length > 1);
+}
+
+async function loadCategoryItemOptionsForKey(categoryKey, params) {
   try {
     params = syncGlobalParams(params);
-    var library = String(params.library || "").trim();
-    if (!library) {
-      return [{ title: "请先选择库", value: "" }];
+    categoryKey = String(categoryKey || params.categoryKey || "").trim();
+    var config = CATEGORY_SOURCE_MAP[categoryKey];
+    if (!config) {
+      return [{ title: "未知分类模块", value: "" }];
     }
+
     var optionsPage = Number(params.options_page || 1);
-    var cacheKey = buildCategoryOptionsCacheKey(library, optionsPage, params);
+    var cacheKey = buildCategoryOptionsCacheKey(categoryKey, optionsPage, params);
     var cached = Widget.storage.get(cacheKey);
     if (cached) {
       try {
@@ -424,7 +475,8 @@ async function loadCategoryItemOptions(params) {
         if (Array.isArray(parsed) && parsed.length) return parsed;
       } catch (e) {}
     }
-    var options = await fetchCategoryBrowseOptions(library, params, optionsPage);
+
+    var options = await fetchAllCategoryBrowseOptions(categoryKey, params, optionsPage);
     if (!options.length) {
       return [{ title: "未获取到选项", value: "" }];
     }
@@ -438,13 +490,38 @@ async function loadCategoryItemOptions(params) {
   }
 }
 
+async function loadCategoryItemOptions(params) {
+  return loadCategoryItemOptionsForKey(params && params.categoryKey, params);
+}
+
+async function loadActorItemOptions(params) {
+  return loadCategoryItemOptionsForKey("actors", params);
+}
+
+async function loadSeriesItemOptions(params) {
+  return loadCategoryItemOptionsForKey("series", params);
+}
+
+async function loadTagItemOptions(params) {
+  return loadCategoryItemOptionsForKey("tags", params);
+}
+
+async function loadMakerItemOptions(params) {
+  return loadCategoryItemOptionsForKey("makers", params);
+}
+
 async function loadParamOptions(params) {
   params = params || {};
   var paramName = String(params.paramName || params.name || "item");
-  if (paramName === "item") {
-    return loadCategoryItemOptions(params);
-  }
-  return [];
+  if (paramName !== "item") return [];
+
+  var fnName = String(params.optionsFunctionName || params.functionName || "").trim();
+  if (fnName === "loadActorItemOptions") return loadActorItemOptions(params);
+  if (fnName === "loadSeriesItemOptions") return loadSeriesItemOptions(params);
+  if (fnName === "loadTagItemOptions") return loadTagItemOptions(params);
+  if (fnName === "loadMakerItemOptions") return loadMakerItemOptions(params);
+
+  return loadCategoryItemOptions(params);
 }
 
 function stripCountSuffix(title) {
