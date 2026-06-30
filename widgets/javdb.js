@@ -86,7 +86,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.4.1",
+  version: "1.4.3",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员、系列、标签、片商分类与高清详情，播放时在半屏浏览器打开详情页",
   author: "Forward",
@@ -124,30 +124,13 @@ WidgetMetadata = {
   modules: [
     {
       id: "loadResource",
-      title: "JavDB 网页",
-      description: "在半屏浏览器打开 JavDB 详情页（播放源请选择此项）",
+      title: "半屏浏览器 · JavDB",
+      description: "在半屏 WebView 打开 JavDB 详情页（非视频流）",
       functionName: "loadResource",
       type: "stream",
       requiresWebView: true,
       cacheDuration: 0,
       params: [],
-    },
-    {
-      id: "similar",
-      title: "相似推荐",
-      description: "获取指定影片的 JavDB 相似推荐列表",
-      functionName: "loadSimilarMovies",
-      cacheDuration: 1800,
-      params: [
-        {
-          name: "link",
-          title: "影片链接",
-          type: "input",
-          description: "javdb:/v/xxx，留空时尝试使用详情页上下文",
-          value: "",
-        },
-        { name: "page", title: "页码", type: "page", value: "1" },
-      ],
     },
     {
       id: "latest",
@@ -1035,7 +1018,7 @@ function parseRelatedFromHtml(html, params) {
   var base = javdbBase(params);
   var $ = Widget.html.load(html);
   var rawRelated = [];
-  $(".recommendations .item a.box, .video-recommend .item a.box").each(function () {
+  $(".recommendations .item a.box, .video-recommend .item a.box, #recommend .item a.box, section.recommend .item a.box").each(function () {
     var box = $(this);
     var href = attrOf($, box, "href");
     var relPath = href.indexOf("http") === 0 ? href.replace(base, "") : href;
@@ -1250,6 +1233,8 @@ async function parseDetailPage(html, link, params) {
         relatedItems: relatedItems,
         link: encodeLink(path),
         webUrl: pageUrl,
+        videoUrl: pageUrl,
+        playerType: "app",
       },
       matchFields
     ),
@@ -1316,28 +1301,6 @@ async function searchJavdb(params) {
   }
 }
 
-async function loadSimilarMovies(params) {
-  try {
-    params = syncGlobalParams(params);
-    var path = decodeLink(params.link || params.id || "");
-    if (!path && params.videoUrl) {
-      path = extractPath(params.videoUrl, javdbBase(params));
-    }
-    if (!path || path.indexOf("/v/") !== 0) {
-      throw new Error("请提供影片链接（javdb:/v/xxx）");
-    }
-    var pageUrl = detailPageUrl(path, params);
-    var html = await fetchHtml(pageUrl, params);
-    var rawRelated = parseRelatedFromHtml(html, params);
-    var items = enrichMovieItems(rawRelated, Object.assign({}, params, { coverMode: "fast" }));
-    if (!items.length) throw new Error("未找到相似推荐");
-    return items;
-  } catch (error) {
-    console.error("[javdb] 相似推荐失败:", error.message || error);
-    throw error;
-  }
-}
-
 async function loadResource(params) {
   try {
     params = syncGlobalParams(params);
@@ -1352,10 +1315,9 @@ async function loadResource(params) {
     return [
       {
         name: "JavDB 详情页",
-        description: "在半屏浏览器打开（网页，非视频流）",
+        description: "半屏 WebView 打开当前影片 JavDB 页面",
         url: pageUrl,
-        requiresWebView: true,
-        playerType: "system",
+        playerType: "app",
         customHeaders: javdbHeaders(params),
       },
     ];
