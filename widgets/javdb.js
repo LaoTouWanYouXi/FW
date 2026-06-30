@@ -7,9 +7,9 @@
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.2.0",
+  version: "1.2.3",
   requiredVersion: "0.0.1",
-  description: "获取 JavDB 影片列表、演员、系列、标签、片商分类与高清详情",
+  description: "获取 JavDB 影片列表、演员、系列、标签、片商分类与高清详情，播放时在半屏浏览器打开详情页",
   author: "Forward",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -33,6 +33,15 @@ WidgetMetadata = {
     },
   ],
   modules: [
+    {
+      id: "loadResource",
+      title: "JavDB 页面",
+      functionName: "loadResource",
+      type: "stream",
+      requiresWebView: true,
+      cacheDuration: 0,
+      params: [],
+    },
     {
       id: "latest",
       title: "最新上市",
@@ -287,16 +296,53 @@ function resolveFilteredPath(params, fallbackPath) {
 }
 
 function extractJavCode(text) {
-  var raw = String(text || "").toUpperCase();
-  var match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
-  if (!match) return "";
-  return match[1] + "-" + String(parseInt(match[2], 10));
+  var s = String(text || "").trim();
+  if (!s) return "";
+  s = s.toUpperCase();
+  s = s.replace(/^[A-Z0-9]+(?:\.[A-Z0-9]+)+@/, "");
+  s = s.replace(/^(?:HHD800|HHB800)[_\-@.\s]?/, "");
+  var normalized = s.replace(/_/g, "-").replace(/\s+/g, " ").trim();
+  var patterns = [
+    /\bFC2(?:[- ]?PPV)?[- ]?(\d{5,8})\b/,
+    /\bCARIB[- ]?(\d{6,8})\b/,
+    /\b1PONDO[- ]?(\d{6,8})\b/,
+    /\bHEYZO[- ]?(\d{3,6})\b/,
+    /\bT28[- ]?(\d{6,8})\b/,
+    /\b([A-Z]{2,15})[- ]?(\d{2,10})\b/,
+    /\b(\d{6}[-_]\d{2,3})\b/,
+  ];
+  for (var i = 0; i < patterns.length; i++) {
+    var match = normalized.match(patterns[i]);
+    if (!match) continue;
+    if (match[1] && match[2]) {
+      return match[1] + "-" + String(parseInt(match[2], 10));
+    }
+    if (match[1]) return match[1].replace(/\s+/g, "");
+  }
+  return "";
 }
 
 function normalizeSearchKeyword(keyword) {
   var text = String(keyword || "").trim();
   if (!text) return "";
   return extractJavCode(text) || text;
+}
+
+function formatDisplayTitle(code, title) {
+  code = String(code || "").trim();
+  title = String(title || "").replace(/\s+/g, " ").trim();
+  if (!code) return title;
+  if (!title) return code;
+  var upperTitle = title.toUpperCase();
+  var upperCode = code.toUpperCase();
+  var looseCode = upperCode.replace(/[^A-Z0-9]/g, "");
+  var looseTitlePrefix = upperTitle.replace(/[^A-Z0-9]/g, "");
+  if (upperTitle.indexOf(upperCode) === 0) {
+    title = title.slice(code.length).replace(/^[\s\-–—:]+/, "").trim();
+  } else if (looseTitlePrefix.indexOf(looseCode) === 0) {
+    title = title.replace(/^[\s\-–—:]*/, "").replace(new RegExp("^" + code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&"), "i"), "").trim();
+  }
+  return title ? code + " " + title : code;
 }
 
 async function verifyCoverUrl(url) {
@@ -484,33 +530,91 @@ async function fetchJavTrailersMeta(dvdId) {
   return { backdropPath: backdropPath, backdropPaths: backdropPaths };
 }
 
-async function applyHdCovers(code, fallbackCover) {
-  var fallback = fallbackCover || "";
-  var hd = buildCoverUrlsFromVideoId(code);
-  var backdropPath = hd.backdropUrl || fallback;
-  var posterPath = hd.posterUrl || fallback;
-  var detailPoster = posterPath;
-  if (code && (hd.backdropUrl || hd.posterUrl)) {
-    var verified = await verifyCoverUrl(hd.backdropUrl || hd.posterUrl);
-    if (!verified) {
-      backdropPath = fallback;
-      posterPath = fallback;
-      detailPoster = fallback;
+function upgradeJavdbImageUrl(url) {
+  var value = String(url || "").trim();
+  if (!value) return "";
+  value = value.replace(/\/thumbs\//gi, "/covers/");
+  value = value.replace(/\/samples\//gi, "/covers/");
+  value = value.replace(/jdbimgs\.com\/thumbs/gi, "jdbimgs.com/covers");
+  return value;
+}
+
+function buildJavdbCoverFromVideoId(videoId) {
+  var id = String(videoId || "").trim();
+  if (!id || id.length < 2) return "";
+  var prefix = id.slice(0, 2).toLowerCase();
+  return "https://c0.jdbstatic.com/covers/" + prefix + "/" + id + ".jpg";
+}
+
+function resolveJavdbCoverUrl(fallbackCover, videoId) {
+  var fromId = buildJavdbCoverFromVideoId(videoId);
+  var upgraded = upgradeJavdbImageUrl(fallbackCover);
+  return fromId || upgraded || fallbackCover || "";
+}
+
+function extractBestImageUrl($, node, base) {
+  if (!node || !node.length) return "";
+  var dataSrc = attrOf($, node, "data-src") || attrOf($, node, "data-original");
+  var src = attrOf($, node, "src");
+  var srcset = attrOf($, node, "srcset");
+  var best = dataSrc || src;
+  if (srcset) {
+    var parts = srcset.split(",");
+    for (var i = parts.length - 1; i >= 0; i--) {
+      var piece = String(parts[i] || "")
+        .trim()
+        .split(/\s+/)[0];
+      if (piece) {
+        best = piece;
+        break;
+      }
     }
   }
+  return upgradeJavdbImageUrl(absUrl(best, base));
+}
+
+async function pickVerifiedCover(candidates, fallback) {
+  var list = compactUniqueUrls(candidates || []);
+  for (var i = 0; i < list.length; i++) {
+    var verified = await verifyCoverUrl(list[i]);
+    if (verified) return verified;
+  }
+  return fallback || "";
+}
+
+async function applyHdCovers(code, fallbackCover, options) {
+  options = options || {};
+  var javdbCover = resolveJavdbCoverUrl(fallbackCover, options.videoId);
+  var candidates = buildCoverCandidatesFromVideoId(code);
+  var backdropCandidates = [javdbCover].concat(candidates.backdropCandidates || []);
+  var posterCandidates = [javdbCover].concat(candidates.posterCandidates || []);
+
+  var backdropPath = await pickVerifiedCover(backdropCandidates, javdbCover);
+  var posterPath = await pickVerifiedCover(posterCandidates, javdbCover);
+  if (!backdropPath) backdropPath = javdbCover;
+  if (!posterPath) posterPath = backdropPath;
+
   return {
     backdropPath: backdropPath,
     posterPath: posterPath,
-    detailPoster: detailPoster,
+    detailPoster: posterPath,
     coverUrl: backdropPath,
   };
 }
 
 function attachExternalLinks(item, pageUrl) {
+  // 官方 README 未文档化这些字段；Forward App 详情页豆瓣/TMDB 图标通常按标题自动匹配，不一定生效。
   item.tmdbLink = pageUrl;
   item.doubanLink = pageUrl;
   item.tmdbUrl = pageUrl;
   item.doubanUrl = pageUrl;
+  item.imdbLink = pageUrl;
+  item.imdbUrl = pageUrl;
+  item.externalLinks = [
+    { type: "tmdb", title: "TMDB", url: pageUrl },
+    { type: "douban", title: "豆瓣", url: pageUrl },
+    { type: "imdb", title: "IMDB", url: pageUrl },
+  ];
   return item;
 }
 
@@ -557,18 +661,20 @@ function parseListItems(html, params) {
     var titleNode = box.find(".video-title strong").first();
     var titleText = textOf($, titleNode);
     var subTitle = textOf($, box.find(".video-title").first());
-    var title = box.attr("title") || subTitle || titleText;
+    var rawTitle = box.attr("title") || subTitle || titleText;
+    var code = titleText || extractJavCode(rawTitle);
     rawItems.push({
       id: path.split("/").pop() || path,
       type: "url",
       mediaType: "movie",
-      title: String(title || titleText || path.split("/").pop()).replace(/\s+/g, " ").trim(),
-      fallbackCover: absUrl(attrOf($, box.find("img").first(), "src"), base),
+      title: formatDisplayTitle(code, rawTitle) || String(rawTitle || path.split("/").pop()).replace(/\s+/g, " ").trim(),
+      fallbackCover: extractBestImageUrl($, box.find("img").first(), base),
       rating: parseRatingText(textOf($, box.find(".score").first())),
       releaseDate: textOf($, box.find(".meta").first()) || "",
       link: encodeLink(path),
-      code: titleText || extractJavCode(title),
-      description: titleText ? "番号: " + titleText : "",
+      code: code,
+      videoId: path.split("/").pop() || path,
+      description: code ? "番号: " + code : "",
     });
   });
 
@@ -579,7 +685,7 @@ async function enrichMovieItems(rawItems) {
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = await applyHdCovers(raw.code, raw.fallbackCover);
+    var covers = await applyHdCovers(raw.code, raw.fallbackCover, { videoId: raw.videoId || raw.id });
     items.push({
       id: raw.id,
       type: raw.type,
@@ -598,6 +704,30 @@ async function enrichMovieItems(rawItems) {
   return items;
 }
 
+function hasJumpFilter(params) {
+  params = params || {};
+  return !!(params.genreId || params.peopleId);
+}
+
+function buildPeopleBrowseItem(id, title, avatar) {
+  return {
+    id: String(id),
+    type: "url",
+    title: title,
+    posterPath: avatar || "",
+    description: "点击查看作品",
+  };
+}
+
+function buildGenreBrowseItem(genreId, title, poster) {
+  return {
+    id: String(genreId),
+    type: "url",
+    title: title,
+    posterPath: poster || "",
+    description: "点击查看作品",
+  };
+}
 function parseActorBrowseItems(html, params) {
   var base = javdbBase(params);
   var $ = Widget.html.load(html);
@@ -611,17 +741,9 @@ function parseActorBrowseItems(html, params) {
     if (path.indexOf("/actors/") !== 0 || seen[path]) return;
     seen[path] = true;
     var id = path.split("/").pop();
-    items.push({
-      id: "actor-" + id,
-      type: "url",
-      mediaType: "movie",
-      title: textOf($, node.find("strong").first()) || textOf($, node),
-      backdropPath: absUrl(attrOf($, node.find("img").first(), "src"), base),
-      posterPath: absUrl(attrOf($, node.find("img").first(), "src"), base),
-      coverUrl: absUrl(attrOf($, node.find("img").first(), "src"), base),
-      description: "点击查看演员作品",
-      link: encodeLink(path),
-    });
+    var title = textOf($, node.find("strong").first()) || textOf($, node);
+    var avatar = absUrl(attrOf($, node.find("img").first(), "src"), base);
+    items.push(buildPeopleBrowseItem(id, title, avatar));
   });
 
   return items;
@@ -642,14 +764,7 @@ function parseSeriesBrowseItems(html, params) {
     var id = path.split("/").pop();
     var title = stripCountSuffix(textOf($, node));
     if (!title) return;
-    items.push({
-      id: "series-" + id,
-      type: "url",
-      mediaType: "movie",
-      title: title,
-      description: "点击查看系列作品",
-      link: encodeLink(path),
-    });
+    items.push(buildGenreBrowseItem("series:" + id, title, ""));
   });
 
   return items;
@@ -670,47 +785,35 @@ function parseMakerBrowseItems(html, params) {
     var id = path.split("/").pop();
     var title = stripCountSuffix(textOf($, node));
     if (!title) return;
-    items.push({
-      id: "maker-" + id,
-      type: "url",
-      mediaType: "movie",
-      title: title,
-      description: "点击查看片商作品",
-      link: encodeLink(path),
-    });
+    items.push(buildGenreBrowseItem("maker:" + id, title, ""));
   });
 
   return items;
 }
 
-async function parseCollectionDetailPage(html, path, params, kind) {
-  var base = javdbBase(params);
-  var pageUrl = detailPageUrl(path, params);
-  var $ = Widget.html.load(html);
-  var title = textOf($, $("h2.title strong, h2 strong, .title strong").first());
-  if (!title) title = textOf($, $("h2.title, h2").first());
-  title = stripCountSuffix(title);
-
-  var avatar = absUrl(attrOf($, $("img.avatar, .actor-avatar img, .video-cover, img").first(), "src"), base);
-  var description = textOf($, $(".actor-section-name, .section-meta, #introduction dd p").first());
-  var relatedItems = await enrichMovieItems(parseListItems(html, params));
-
-  return attachExternalLinks(
-    {
-      id: path.split("/").pop() || path,
-      type: "url",
-      mediaType: "movie",
-      title: title || path.split("/").pop(),
-      description: description || (kind === "actor" ? "演员作品列表" : kind === "series" ? "系列作品列表" : "片商作品列表"),
-      backdropPath: avatar,
-      posterPath: avatar,
-      coverUrl: avatar,
-      detailPoster: avatar,
-      relatedItems: relatedItems,
-      link: encodeLink(path),
-    },
-    pageUrl
-  );
+async function loadPage(params, defaultPath, browseParser, messages) {
+  try {
+    params = params || {};
+    messages = messages || {};
+    if (hasJumpFilter(params)) {
+      var moviePath = resolveFilteredPath(params, "");
+      var movies = await fetchMovieList(moviePath, params);
+      if (!movies.length) throw new Error(messages.movies || "未解析到影片列表");
+      return movies;
+    }
+    if (browseParser) {
+      var browsePath = String(params.path || defaultPath);
+      var url = buildPageUrl(javdbBase(params), browsePath, params);
+      var html = await fetchHtml(url, params);
+      var items = browseParser(html, params);
+      if (!items.length) throw new Error(messages.browse || "未解析到列表");
+      return items;
+    }
+    return loadListByPath(String(params.path || defaultPath), params);
+  } catch (error) {
+    console.error("[javdb] 列表加载失败:", error.message || error);
+    throw error;
+  }
 }
 
 async function parseDetailPage(html, link, params) {
@@ -727,7 +830,7 @@ async function parseDetailPage(html, link, params) {
     code = textOf($, $("strong:contains('番号')").parent().find("span").first());
   }
 
-  var cover = attrOf($, $("img.video-cover").first(), "src");
+  var videoId = path.split("/").pop() || path;
 
   var description = textOf($, $("#introduction dd p").first());
   if (!description) {
@@ -766,6 +869,9 @@ async function parseDetailPage(html, link, params) {
       if (href && backdropPaths.indexOf(href) < 0) backdropPaths.push(href);
     });
   }
+
+  var cover = extractBestImageUrl($, $("img.video-cover").first(), base);
+  if (!cover && backdropPaths.length) cover = backdropPaths[0];
 
   var genreItems = [];
   $("strong:contains('类别'), strong:contains('Tags'), strong:contains('類別')").each(function () {
@@ -840,7 +946,7 @@ async function parseDetailPage(html, link, params) {
       id: relPath.split("/").pop(),
       type: "url",
       mediaType: "movie",
-      title: relTitle,
+      title: formatDisplayTitle(relCode, relTitle),
       fallbackCover: absUrl(attrOf($, box.find("img").first(), "src"), base),
       code: relCode,
       link: encodeLink(relPath),
@@ -848,8 +954,9 @@ async function parseDetailPage(html, link, params) {
   });
 
   var displayCode = code || extractJavCode(title);
-  var fallbackCover = absUrl(cover, base);
-  var hdCovers = await applyHdCovers(displayCode, fallbackCover);
+  var displayTitle = formatDisplayTitle(displayCode, title);
+  var fallbackCover = cover || resolveJavdbCoverUrl("", videoId);
+  var hdCovers = await applyHdCovers(displayCode, fallbackCover, { videoId: videoId });
   var jtMeta = displayCode
     ? await fetchJavTrailersMeta(displayCode).catch(function () {
         return { backdropPath: "", backdropPaths: [] };
@@ -874,7 +981,7 @@ async function parseDetailPage(html, link, params) {
       id: path.split("/").pop() || encodeLink(path),
       type: "url",
       mediaType: "movie",
-      title: title || code || path.split("/").pop(),
+      title: displayTitle || displayCode || path.split("/").pop(),
       description: description,
       backdropPath: backdropPath,
       posterPath: posterPath,
@@ -912,28 +1019,32 @@ async function loadListByPath(path, params) {
   }
 }
 
-async function loadBrowseList(path, parser, params, emptyMessage) {
-  try {
-    params = params || {};
-    var targetPath = resolveFilteredPath(params, path);
-    var url = buildPageUrl(javdbBase(params), targetPath, params);
-    var html = await fetchHtml(url, params);
-
-    if (params.peopleId || params.genreId || params.seriesId || params.makerId) {
-      var movies = await enrichMovieItems(parseListItems(html, params));
-      if (!movies.length) throw new Error(emptyMessage || "未解析到影片列表");
-      return movies;
-    }
-
-    var items = parser(html, params);
-    if (!items.length) throw new Error(emptyMessage || "未解析到列表");
-    return items;
-  } catch (error) {
-    console.error("[javdb] 浏览列表失败:", error.message || error);
-    throw error;
-  }
+async function loadActors(params) {
+  return loadPage(params, "/actors/censored", parseActorBrowseItems, {
+    browse: "未解析到演员列表",
+    movies: "未解析到演员作品",
+  });
 }
 
+async function loadSeries(params) {
+  return loadPage(params, "/series", parseSeriesBrowseItems, {
+    browse: "未解析到系列列表",
+    movies: "未解析到系列作品",
+  });
+}
+
+async function loadTags(params) {
+  return loadPage(params, "/tags/chinese_subtitle?id=1", null, {
+    movies: "未解析到标签作品",
+  });
+}
+
+async function loadMakers(params) {
+  return loadPage(params, "/makers", parseMakerBrowseItems, {
+    browse: "未解析到片商列表",
+    movies: "未解析到片商作品",
+  });
+}
 async function loadLatest(params) {
   return loadListByPath("/", params || {});
 }
@@ -947,31 +1058,6 @@ async function loadMovies(params) {
   params = params || {};
   var path = String(params.path || "/censored");
   return loadListByPath(path, params);
-}
-
-async function loadActors(params) {
-  params = params || {};
-  var path = String(params.path || "/actors/censored");
-  return loadBrowseList(path, parseActorBrowseItems, params, "未解析到演员列表");
-}
-
-async function loadSeries(params) {
-  params = params || {};
-  var path = String(params.path || "/series");
-  return loadBrowseList(path, parseSeriesBrowseItems, params, "未解析到系列列表");
-}
-
-async function loadTags(params) {
-  params = params || {};
-  if (params.genreId) return loadListByPath("/", params);
-  var path = String(params.path || "/tags/chinese_subtitle?id=1");
-  return loadListByPath(path, params);
-}
-
-async function loadMakers(params) {
-  params = params || {};
-  var path = String(params.path || "/makers");
-  return loadBrowseList(path, parseMakerBrowseItems, params, "未解析到片商列表");
 }
 
 async function searchJavdb(params) {
@@ -997,24 +1083,40 @@ async function searchJavdb(params) {
   }
 }
 
+async function loadResource(params) {
+  try {
+    params = params || {};
+    var path = decodeLink(params.link || params.id || "");
+    if (!path && params.videoUrl) {
+      path = extractPath(params.videoUrl, javdbBase(params));
+    }
+    if (!path || path.indexOf("/v/") !== 0) {
+      throw new Error("缺少影片链接，无法打开 JavDB 详情页");
+    }
+    var pageUrl = detailPageUrl(path, params);
+    return [
+      {
+        name: "JavDB 详情页",
+        description: "在半屏浏览器中打开当前影片的 JavDB 详情页",
+        url: pageUrl,
+        playerType: "app",
+        requiresWebView: true,
+        customHeaders: javdbHeaders(params),
+      },
+    ];
+  } catch (error) {
+    console.error("[javdb] 打开详情页失败:", error.message || error);
+    throw error;
+  }
+}
+
 async function loadDetail(link) {
   try {
     var path = decodeLink(link);
-    if (!path) return null;
+    if (!path || path.indexOf("/v/") !== 0) return null;
     var params = { baseUrl: JAVDB_DEFAULT_BASE, locale: "zh" };
     var pageUrl = detailPageUrl(path, params);
     var html = await fetchHtml(pageUrl, params);
-
-    if (path.indexOf("/actors/") === 0) {
-      return await parseCollectionDetailPage(html, path, params, "actor");
-    }
-    if (path.indexOf("/series/") === 0) {
-      return await parseCollectionDetailPage(html, path, params, "series");
-    }
-    if (path.indexOf("/makers/") === 0) {
-      return await parseCollectionDetailPage(html, path, params, "maker");
-    }
-
     var detail = await parseDetailPage(html, path, params);
     if (!detail || !detail.title) return null;
     return detail;
