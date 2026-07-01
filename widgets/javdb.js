@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.9",
+  version: "1.9.0",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -1655,14 +1655,34 @@ function posterResponseSize(data) {
   return 0;
 }
 
+function posterRequestHeaders(params) {
+  return {
+    "User-Agent": JAVDB_UA,
+    Referer: javdbBase(params) + "/",
+    Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+  };
+}
+
+function buildJavdbPosterCandidates(pageCover, videoId) {
+  var list = [];
+  function add(url) {
+    url = String(url || "").trim();
+    if (!url || list.indexOf(url) >= 0) return;
+    list.push(url);
+  }
+  add(upgradeJavdbImageUrl(pageCover));
+  add(pageCover);
+  add(buildJavdbCoverFromVideoId(videoId));
+  return list;
+}
+
 async function verifyPosterUrl(url, params) {
   if (!url) return "";
-  if (!isExternalPosterCandidate(url)) return url;
   if (isNowPrintingPosterTarget(url)) return "";
   try {
     var resp = await Widget.http.get(url, {
       timeout: 4000,
-      headers: { "User-Agent": JAVDB_UA },
+      headers: posterRequestHeaders(params),
     });
     var finalUrl = url;
     if (resp && resp.request && resp.request.uri && resp.request.uri.href) {
@@ -1696,16 +1716,36 @@ function buildDetailPosterUrl(coverUrl, code) {
   return "";
 }
 
-async function resolveDetailPosterUrl(javdbCover, code, params) {
-  var fromJavdb = buildDetailPosterUrlFromJavdb(javdbCover);
-  var candidates = code ? buildCoverCandidatesFromVideoId(code).posterCandidates || [] : [];
+async function resolveDetailPosterUrl(javdbCover, code, params, options) {
+  options = options || {};
+  var videoId = options.videoId || "";
+  var galleryUrls = options.galleryUrls || [];
+  var coverBundle = code ? buildCoverCandidatesFromVideoId(code) : { posterCandidates: [], backdropCandidates: [] };
+  var dmmPosterCandidates = coverBundle.posterCandidates || [];
+  var dmmBackdropCandidates = coverBundle.backdropCandidates || [];
 
-  if (candidates.length) {
-    var verified = await pickFirstVerifiedPosterUrl(candidates, params);
-    if (verified) return verified;
+  if (dmmPosterCandidates.length) {
+    var verifiedDmm = await pickFirstVerifiedPosterUrl(dmmPosterCandidates, params);
+    if (verifiedDmm) return verifiedDmm;
   }
 
-  return fromJavdb || "";
+  var javdbCandidates = buildJavdbPosterCandidates(javdbCover, videoId);
+  for (var i = 0; i < javdbCandidates.length; i++) {
+    var verifiedJavdb = await verifyPosterUrl(javdbCandidates[i], params);
+    if (verifiedJavdb) return buildDetailPosterUrlFromJavdb(verifiedJavdb);
+  }
+
+  for (var j = 0; j < galleryUrls.length; j++) {
+    var verifiedSample = await verifyPosterUrl(galleryUrls[j], params);
+    if (verifiedSample) return verifiedSample;
+  }
+
+  if (dmmBackdropCandidates.length) {
+    var verifiedBackdrop = await pickFirstVerifiedPosterUrl(dmmBackdropCandidates, params);
+    if (verifiedBackdrop) return verifiedBackdrop;
+  }
+
+  return "";
 }
 
 function collectPageGalleryUrls($, base) {
@@ -2170,7 +2210,7 @@ function resolveListBackdropPath(code, fallbackCover, videoId, params) {
 
   if (pageUrl && isLandscapeListCoverUrl(pageUrl)) return pageUrl;
 
-  return idCover || pageUrl || "";
+  return pageUrl || idCover || "";
 }
 
 function resolveDetailBackdropPath(code, fallbackCover, videoId) {
@@ -2187,9 +2227,9 @@ function buildJavdbCoverFromVideoId(videoId) {
 }
 
 function resolveJavdbCoverUrl(fallbackCover, videoId) {
-  var fromId = buildJavdbCoverFromVideoId(videoId);
   var upgraded = upgradeJavdbImageUrl(fallbackCover);
-  return fromId || upgraded || fallbackCover || "";
+  var fromId = buildJavdbCoverFromVideoId(videoId);
+  return upgraded || fromId || fallbackCover || "";
 }
 
 function extractBestImageUrl($, node, base) {
@@ -2990,8 +3030,11 @@ async function parseDetailPage(html, link, params) {
   params = getEffectiveParams(params);
   var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
   var backdropPath = coverBundle.backdropPath || fallbackCover;
-  var detailPoster = await resolveDetailPosterUrl(fallbackCover, displayCode, params);
-  var posterPath = detailPoster || coverBundle.posterPath || fallbackCover || "";
+  var detailPoster = await resolveDetailPosterUrl(fallbackCover, displayCode, params, {
+    videoId: videoId,
+    galleryUrls: backdropPaths,
+  });
+  var posterPath = detailPoster || coverBundle.posterPath || backdropPath || fallbackCover || "";
 
   var allBackdropPaths = buildDetailBackdropPaths(backdropPaths, displayCode, params, {
     coverUrl: fallbackCover,
