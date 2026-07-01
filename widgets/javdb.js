@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.9.1",
+  version: "1.9.2",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -1723,18 +1723,20 @@ function buildDetailPosterUrl(coverUrl, code) {
   return "";
 }
 
+function buildFastDetailPoster(pageCover, fallbackCover) {
+  var source = String(pageCover || "").trim() || String(fallbackCover || "").trim();
+  return buildDetailPosterUrlFromJavdb(source);
+}
+
 async function resolveDetailPosterUrl(javdbCover, code, params, options) {
   options = options || {};
   var fromJavdb = buildDetailPosterUrlFromJavdb(javdbCover);
-  var coverMode = String(params.coverMode || "fast");
   var galleryUrls = options.galleryUrls || [];
+  var dmmCandidates = code ? buildCoverCandidatesFromVideoId(code).posterCandidates || [] : [];
 
-  if (coverMode === "hd" && code) {
-    var dmmCandidates = buildCoverCandidatesFromVideoId(code).posterCandidates || [];
-    if (dmmCandidates.length) {
-      var verifiedDmm = await pickFirstVerifiedPosterUrl(dmmCandidates, params);
-      if (verifiedDmm) return verifiedDmm;
-    }
+  if (dmmCandidates.length) {
+    var verifiedDmm = await pickFirstVerifiedPosterUrl(dmmCandidates, params);
+    if (verifiedDmm) return verifiedDmm;
   }
 
   if (fromJavdb) return fromJavdb;
@@ -3025,11 +3027,15 @@ async function parseDetailPage(html, link, params) {
   params = getEffectiveParams(params);
   var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
   var backdropPath = coverBundle.backdropPath || fallbackCover;
-  var detailPoster = await resolveDetailPosterUrl(fallbackCover, displayCode, params, {
-    videoId: videoId,
-    galleryUrls: backdropPaths,
-  });
-  var posterPath = detailPoster || coverBundle.posterPath || buildDetailPosterUrlFromJavdb(fallbackCover) || "";
+  var coverMode = String(params.coverMode || "fast");
+  var detailPoster =
+    coverMode === "hd"
+      ? await resolveDetailPosterUrl(fallbackCover, displayCode, params, {
+          videoId: videoId,
+          galleryUrls: backdropPaths,
+        })
+      : buildFastDetailPoster(cover, fallbackCover);
+  var posterPath = detailPoster || buildDetailPosterUrlFromJavdb(fallbackCover) || "";
 
   var allBackdropPaths = buildDetailBackdropPaths(backdropPaths, displayCode, params, {
     coverUrl: fallbackCover,
