@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.8",
+  version: "1.8.7",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商（静态选择项，兼容 Forward 1.3.x）与高清详情",
   author: "Forward",
@@ -1629,68 +1629,16 @@ function isLowResGalleryUrl(url) {
 var DETAIL_GALLERY_LIMIT = 12;
 var DETAIL_RELATED_LIMIT = 10;
 var FORWARD_POSTER_CROP_SUFFIX = "@50%_0_50%_100%";
-var POSTER_VERIFY_MIN_BYTES = 15360;
 
-function buildDetailPosterUrlFromJavdb(coverUrl) {
+function buildDetailPosterUrl(coverUrl, code) {
+  var candidates = code ? buildCoverCandidatesFromVideoId(code) : { posterCandidates: [] };
+  if (candidates.posterCandidates && candidates.posterCandidates[0]) {
+    return candidates.posterCandidates[0];
+  }
   var cover = String(coverUrl || "").trim();
   if (!cover) return "";
   if (cover.indexOf("@") >= 0) return cover;
   return cover + FORWARD_POSTER_CROP_SUFFIX;
-}
-
-async function verifyPosterUrl(url, params) {
-  if (!url) return "";
-  try {
-    var resp = await Widget.http.get(url, {
-      timeout: 4000,
-      headers: { "User-Agent": JAVDB_UA },
-    });
-    var data = resp && resp.data;
-    if (!data) return "";
-    if (typeof data === "string" && data.length < POSTER_VERIFY_MIN_BYTES) return "";
-    if (typeof data === "object" && data.byteLength !== undefined && data.byteLength < POSTER_VERIFY_MIN_BYTES) {
-      return "";
-    }
-    return url;
-  } catch (err) {
-    return "";
-  }
-}
-
-async function pickFirstVerifiedPosterUrl(urls, params) {
-  urls = urls || [];
-  for (var i = 0; i < urls.length; i++) {
-    var verified = await verifyPosterUrl(urls[i], params);
-    if (verified) return verified;
-  }
-  return "";
-}
-
-function buildDetailPosterUrl(coverUrl, code) {
-  var fromJavdb = buildDetailPosterUrlFromJavdb(coverUrl);
-  if (fromJavdb) return fromJavdb;
-  return "";
-}
-
-async function resolveDetailPosterUrl(javdbCover, code, params) {
-  params = params || {};
-  var fromJavdb = buildDetailPosterUrlFromJavdb(javdbCover);
-  var candidates = code ? buildCoverCandidatesFromVideoId(code).posterCandidates || [] : [];
-  var coverMode = String(params.coverMode || "fast");
-
-  if (coverMode === "hd" && candidates.length) {
-    var hdPoster = await pickFirstVerifiedPosterUrl(candidates, params);
-    if (hdPoster) return hdPoster;
-  }
-
-  if (fromJavdb) return fromJavdb;
-
-  if (candidates.length) {
-    var verified = await pickFirstVerifiedPosterUrl(candidates, params);
-    if (verified) return verified;
-  }
-
-  return "";
 }
 
 function collectPageGalleryUrls($, base) {
@@ -2212,7 +2160,7 @@ function buildCoverBundle(code, fallbackCover, options, params) {
   var candidates = buildCoverCandidatesFromVideoId(code);
   var listBackdrop = resolveListBackdropPath(code, fallbackCover, videoId, params);
   var detailBackdrop = resolveDetailBackdropPath(code, fallbackCover, videoId);
-  var detailPosterPath = buildDetailPosterUrl(javdbCover, code) || javdbCover || "";
+  var detailPosterPath = candidates.posterCandidates[0] || javdbCover || buildDetailPosterUrl(javdbCover, code);
   return {
     listBackdrop: listBackdrop,
     backdropPath: detailBackdrop,
@@ -2975,8 +2923,8 @@ async function parseDetailPage(html, link, params) {
   params = getEffectiveParams(params);
   var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
   var backdropPath = coverBundle.backdropPath || fallbackCover;
-  var detailPoster = await resolveDetailPosterUrl(fallbackCover, displayCode, params);
-  var posterPath = detailPoster || coverBundle.posterPath || fallbackCover || "";
+  var detailPoster = coverBundle.detailPoster || buildDetailPosterUrl(fallbackCover, displayCode);
+  var posterPath = coverBundle.posterPath || detailPoster;
 
   var allBackdropPaths = buildDetailBackdropPaths(backdropPaths, displayCode, params, {
     coverUrl: fallbackCover,
