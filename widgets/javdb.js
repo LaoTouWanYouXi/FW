@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.3",
+  version: "1.8.5",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商（静态选择项，兼容 Forward 1.3.x）与高清详情",
   author: "Forward",
@@ -2027,7 +2027,8 @@ function extractListCardCover($, box, base) {
 
 function resolveListBackdropPath(code, fallbackCover, videoId, params) {
   params = params || {};
-  var pageUrl = upgradeJavdbImageUrl(fallbackCover) || buildJavdbCoverFromVideoId(videoId);
+  var pageUrl = upgradeJavdbImageUrl(fallbackCover);
+  var idCover = buildJavdbCoverFromVideoId(videoId);
   var coverMode = String(params.coverMode || "fast");
 
   if (pageUrl && isLandscapeListCoverUrl(pageUrl)) return pageUrl;
@@ -2038,9 +2039,7 @@ function resolveListBackdropPath(code, fallbackCover, videoId, params) {
     if (hdBackdrop) return hdBackdrop;
   }
 
-  if (pageUrl) return resolvePortraitFallbackForList(pageUrl);
-
-  return "";
+  return idCover || pageUrl || "";
 }
 
 function resolveDetailBackdropPath(code, fallbackCover, videoId) {
@@ -2214,12 +2213,18 @@ function buildCategoryFetchCandidates(path) {
   return candidates;
 }
 
+function isBrowseMovieListPath(path) {
+  var clean = String(path || "").split("?")[0];
+  if (clean === "/" || clean === "/censored" || clean === "/uncensored") return true;
+  return clean.indexOf("/rankings/") === 0;
+}
+
 function isCategoryErrorHtml(html) {
   var text = String(html || "");
   if (!text) return true;
   if (/Cloudflare|Attention Required|Sorry, you have been blocked/i.test(text)) return true;
   if (/此內容需要登入|需要登录|需要登入才能查看/i.test(text)) return true;
-  if (/404|Not Found|页面不存在|Page Not Found/i.test(text) && text.indexOf("movie-list") < 0 && text.indexOf('class="item"') < 0) {
+  if (/404|Not Found|页面不存在|Page Not Found/i.test(text) && text.indexOf("movie-list") < 0 && text.indexOf('class="item"') < 0 && text.indexOf('href="/v/') < 0) {
     return true;
   }
   return false;
@@ -2243,7 +2248,7 @@ function parseListItems(html, params) {
   var rawItems = [];
   var seen = {};
 
-  $(".movie-list .item a.box, #videos .grid-item a.box, .grid-item.column a.box").each(function () {
+  $(".movie-list .item a.box, #videos .grid-item a.box, #videos a.box, .grid-item.column a.box, .grid.columns .grid-item a.box").each(function () {
     var box = $(this);
     var href = attrOf($, box, "href");
     var path = href.indexOf("http") === 0 ? href.replace(base, "") : href;
@@ -2280,10 +2285,7 @@ function enrichMovieItems(rawItems, params) {
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
     var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId || raw.id }, params);
-    var backdropPath = covers.listBackdrop;
-    if (backdropPath && isPortraitListCoverUrl(backdropPath)) {
-      backdropPath = resolvePortraitFallbackForList(backdropPath);
-    }
+    var backdropPath = covers.listBackdrop || "";
     items.push(Object.assign(
       {
         id: raw.id,
@@ -2907,6 +2909,15 @@ async function parseDetailPage(html, link, params) {
 async function fetchMovieList(path, params) {
   params = syncGlobalParams(params);
   var basePath = String(path || "");
+
+  if (isBrowseMovieListPath(basePath)) {
+    var browseUrl = buildPageUrl(javdbBase(params), basePath, params);
+    var browseHtml = await fetchHtml(browseUrl, params);
+    var browseItems = enrichMovieItems(parseListItems(browseHtml, params), params);
+    if (!browseItems.length) throw new Error("未解析到影片列表");
+    return browseItems;
+  }
+
   if (isLikelyLegacyMakerSlug(basePath)) {
     var legacyTitle = lookupCategoryOptionTitle(basePath);
     if (!legacyTitle) {
@@ -2921,13 +2932,13 @@ async function fetchMovieList(path, params) {
     try {
       var url = buildPageUrl(javdbBase(params), candidates[i], params);
       var html = await fetchHtml(url, params);
+      var items = enrichMovieItems(parseListItems(html, params), params);
+      if (items.length) return items;
       if (isCategoryErrorHtml(html)) {
         lastError = new Error("分类页面不可用: " + candidates[i]);
         continue;
       }
-      var items = enrichMovieItems(parseListItems(html, params), params);
-      if (items.length) return items;
-      if (!isCategoryErrorHtml(html)) return items;
+      return items;
     } catch (err) {
       lastError = err;
     }
@@ -2935,6 +2946,18 @@ async function fetchMovieList(path, params) {
   var fallbackTitle = lookupCategoryOptionTitle(basePath);
   if (fallbackTitle) return fetchSearchMovieList(params, fallbackTitle);
   throw lastError || new Error("未解析到影片列表");
+}
+
+async function loadBrowseList(path, params) {
+  try {
+    params = syncGlobalParams(params || {});
+    var items = await fetchMovieList(path, params);
+    if (!items.length) throw new Error("未解析到影片列表");
+    return items;
+  } catch (error) {
+    console.error("[javdb] 列表加载失败:", error.message || error);
+    throw error;
+  }
 }
 
 async function loadListByPath(path, params) {
@@ -2955,18 +2978,18 @@ async function loadListByPath(path, params) {
 }
 
 async function loadLatest(params) {
-  return loadListByPath("/", params || {});
+  return loadBrowseList("/", params || {});
 }
 
 async function loadRankings(params) {
   var period = String((params && params.period) || "daily");
-  return loadListByPath("/rankings/movies?period=" + encodeURIComponent(period), params || {});
+  return loadBrowseList("/rankings/movies?period=" + encodeURIComponent(period), params || {});
 }
 
 async function loadMovies(params) {
   params = params || {};
   var path = String(params.path || "/censored");
-  return loadListByPath(path, params);
+  return loadBrowseList(path, params);
 }
 
 async function searchJavdb(params) {
