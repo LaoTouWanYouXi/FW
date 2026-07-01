@@ -964,8 +964,8 @@ WidgetMetadata = {
   title: "JavDB",
   version: "1.8.7",
   requiredVersion: "0.0.1",
-  description: "获取 JavDB 影片列表、演员/系列/标签/片商（静态选择项，兼容 Forward 1.3.x）与高清详情",
-  author: "Forward",
+  description: "获取 JavDB 影片列表、演员/系列/标签/片商",
+  author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
   globalParams: [
