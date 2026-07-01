@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.7",
+  version: "1.8.8",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -1629,16 +1629,69 @@ function isLowResGalleryUrl(url) {
 var DETAIL_GALLERY_LIMIT = 12;
 var DETAIL_RELATED_LIMIT = 10;
 var FORWARD_POSTER_CROP_SUFFIX = "@50%_0_50%_100%";
+var POSTER_VERIFY_MIN_BYTES = 15360;
 
-function buildDetailPosterUrl(coverUrl, code) {
-  var candidates = code ? buildCoverCandidatesFromVideoId(code) : { posterCandidates: [] };
-  if (candidates.posterCandidates && candidates.posterCandidates[0]) {
-    return candidates.posterCandidates[0];
-  }
+function buildDetailPosterUrlFromJavdb(coverUrl) {
   var cover = String(coverUrl || "").trim();
   if (!cover) return "";
   if (cover.indexOf("@") >= 0) return cover;
   return cover + FORWARD_POSTER_CROP_SUFFIX;
+}
+
+function isExternalPosterCandidate(url) {
+  var u = String(url || "").toLowerCase();
+  return u.indexOf("dmm.co.jp") >= 0 || u.indexOf("dmm.com") >= 0 || u.indexOf("mgstage.com") >= 0;
+}
+
+function posterResponseSize(data) {
+  if (!data) return 0;
+  if (typeof data === "string") return data.length;
+  if (typeof data.length === "number") return data.length;
+  if (typeof data.byteLength === "number") return data.byteLength;
+  return 0;
+}
+
+async function verifyPosterUrl(url, params) {
+  if (!url) return "";
+  if (!isExternalPosterCandidate(url)) return url;
+  try {
+    var resp = await Widget.http.get(url, {
+      timeout: 4000,
+      headers: { "User-Agent": JAVDB_UA },
+    });
+    var size = posterResponseSize(resp && resp.data);
+    if (size < POSTER_VERIFY_MIN_BYTES) return "";
+    return url;
+  } catch (err) {
+    return "";
+  }
+}
+
+async function pickFirstVerifiedPosterUrl(urls, params) {
+  urls = urls || [];
+  for (var i = 0; i < urls.length; i++) {
+    var verified = await verifyPosterUrl(urls[i], params);
+    if (verified) return verified;
+  }
+  return "";
+}
+
+function buildDetailPosterUrl(coverUrl, code) {
+  var fromJavdb = buildDetailPosterUrlFromJavdb(coverUrl);
+  if (fromJavdb) return fromJavdb;
+  return "";
+}
+
+async function resolveDetailPosterUrl(javdbCover, code, params) {
+  var fromJavdb = buildDetailPosterUrlFromJavdb(javdbCover);
+  var candidates = code ? buildCoverCandidatesFromVideoId(code).posterCandidates || [] : [];
+
+  if (candidates.length) {
+    var verified = await pickFirstVerifiedPosterUrl(candidates, params);
+    if (verified) return verified;
+  }
+
+  return fromJavdb || "";
 }
 
 function collectPageGalleryUrls($, base) {
@@ -2157,10 +2210,9 @@ function buildCoverBundle(code, fallbackCover, options, params) {
   options = options || {};
   var videoId = options.videoId;
   var javdbCover = resolveJavdbCoverUrl(fallbackCover, videoId);
-  var candidates = buildCoverCandidatesFromVideoId(code);
   var listBackdrop = resolveListBackdropPath(code, fallbackCover, videoId, params);
   var detailBackdrop = resolveDetailBackdropPath(code, fallbackCover, videoId);
-  var detailPosterPath = candidates.posterCandidates[0] || javdbCover || buildDetailPosterUrl(javdbCover, code);
+  var detailPosterPath = buildDetailPosterUrl(javdbCover, code) || javdbCover || "";
   return {
     listBackdrop: listBackdrop,
     backdropPath: detailBackdrop,
@@ -2923,8 +2975,8 @@ async function parseDetailPage(html, link, params) {
   params = getEffectiveParams(params);
   var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
   var backdropPath = coverBundle.backdropPath || fallbackCover;
-  var detailPoster = coverBundle.detailPoster || buildDetailPosterUrl(fallbackCover, displayCode);
-  var posterPath = coverBundle.posterPath || detailPoster;
+  var detailPoster = await resolveDetailPosterUrl(fallbackCover, displayCode, params);
+  var posterPath = detailPoster || coverBundle.posterPath || fallbackCover || "";
 
   var allBackdropPaths = buildDetailBackdropPaths(backdropPaths, displayCode, params, {
     coverUrl: fallbackCover,
