@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.5",
+  version: "1.8.6",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商（静态选择项，兼容 Forward 1.3.x）与高清详情",
   author: "Forward",
@@ -1465,6 +1465,7 @@ function parseJavCodeParts(title) {
     FGAN: "1",
     FSNF: "1",
     FLAV: "1",
+    DLDSS: "1",
     ABP: "118",
     CHN: "118",
     STARS: "1",
