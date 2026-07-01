@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.4",
+  version: "1.8.3",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商（静态选择项，兼容 Forward 1.3.x）与高清详情",
   author: "Forward",
@@ -1100,7 +1100,6 @@ WidgetMetadata = {
   search: {
     title: "\u756a\u53f7\u641c\u7d22",
     functionName: "searchJavdb",
-    cacheDuration: 1200,
     params: [
       { name: "keyword", title: "\u756a\u53f7/\u5173\u952e\u8bcd", type: "input", value: "" },
       { name: "page", title: "\u9875\u7801", type: "page", value: "1" },
@@ -1109,9 +1108,6 @@ WidgetMetadata = {
 };
 
 var JAVDB_DEFAULT_BASE = "https://javdb.com";
-var JAVDB_MAX_CATEGORY_FETCH_ATTEMPTS = 2;
-var JAVDB_RETRY_DELAY_MIN_MS = 300;
-var JAVDB_RETRY_DELAY_MAX_MS = 800;
 var JAVDB_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -2218,29 +2214,10 @@ function buildCategoryFetchCandidates(path) {
   return candidates;
 }
 
-function isCloudflareBlockedHtml(html) {
-  var text = String(html || "");
-  return /Cloudflare|Attention Required|Sorry, you have been blocked/i.test(text);
-}
-
-function isCloudflareBlockedError(err) {
-  var msg = String((err && err.message) || err || "");
-  return /Cloudflare|风控拦截|被拦截|HTTP 403|HTTP 429|HTTP 503/i.test(msg);
-}
-
-function delayBeforeRetry(attemptIndex) {
-  if (!attemptIndex) return Promise.resolve();
-  var span = JAVDB_RETRY_DELAY_MAX_MS - JAVDB_RETRY_DELAY_MIN_MS + 1;
-  var ms = JAVDB_RETRY_DELAY_MIN_MS + Math.floor(Math.random() * span);
-  return new Promise(function (resolve) {
-    setTimeout(resolve, ms);
-  });
-}
-
 function isCategoryErrorHtml(html) {
   var text = String(html || "");
   if (!text) return true;
-  if (isCloudflareBlockedHtml(text)) return true;
+  if (/Cloudflare|Attention Required|Sorry, you have been blocked/i.test(text)) return true;
   if (/此內容需要登入|需要登录|需要登入才能查看/i.test(text)) return true;
   if (/404|Not Found|页面不存在|Page Not Found/i.test(text) && text.indexOf("movie-list") < 0 && text.indexOf('class="item"') < 0) {
     return true;
@@ -2255,14 +2232,7 @@ async function fetchHtml(url, params) {
   });
   if (!res || !res.data) throw new Error("空响应: " + url);
   if (res.status && Number(res.status) >= 400) {
-    var status = Number(res.status);
-    if (status === 403 || status === 429 || status === 503) {
-      throw new Error("风控拦截 HTTP " + status + " " + url);
-    }
-    throw new Error("HTTP " + status + " " + url);
-  }
-  if (isCloudflareBlockedHtml(res.data)) {
-    throw new Error("访问被 Cloudflare 拦截，请稍后重试");
+    throw new Error("HTTP " + res.status + " " + url);
   }
   return res.data;
 }
@@ -2945,10 +2915,9 @@ async function fetchMovieList(path, params) {
     }
     if (legacyTitle) return fetchSearchMovieList(params, legacyTitle);
   }
-  var candidates = buildCategoryFetchCandidates(basePath).slice(0, JAVDB_MAX_CATEGORY_FETCH_ATTEMPTS);
+  var candidates = buildCategoryFetchCandidates(basePath);
   var lastError = null;
   for (var i = 0; i < candidates.length; i++) {
-    await delayBeforeRetry(i);
     try {
       var url = buildPageUrl(javdbBase(params), candidates[i], params);
       var html = await fetchHtml(url, params);
@@ -2960,7 +2929,6 @@ async function fetchMovieList(path, params) {
       if (items.length) return items;
       if (!isCategoryErrorHtml(html)) return items;
     } catch (err) {
-      if (isCloudflareBlockedError(err)) throw err;
       lastError = err;
     }
   }
