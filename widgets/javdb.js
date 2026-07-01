@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.8",
+  version: "1.8.9",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -1629,7 +1629,7 @@ function isLowResGalleryUrl(url) {
 var DETAIL_GALLERY_LIMIT = 12;
 var DETAIL_RELATED_LIMIT = 10;
 var FORWARD_POSTER_CROP_SUFFIX = "@50%_0_50%_100%";
-var POSTER_VERIFY_MIN_BYTES = 15360;
+var POSTER_PLACEHOLDER_MAX_BYTES = 512;
 
 function buildDetailPosterUrlFromJavdb(coverUrl) {
   var cover = String(coverUrl || "").trim();
@@ -1643,6 +1643,10 @@ function isExternalPosterCandidate(url) {
   return u.indexOf("dmm.co.jp") >= 0 || u.indexOf("dmm.com") >= 0 || u.indexOf("mgstage.com") >= 0;
 }
 
+function isNowPrintingPosterTarget(url) {
+  return String(url || "").toLowerCase().indexOf("now_printing") >= 0;
+}
+
 function posterResponseSize(data) {
   if (!data) return 0;
   if (typeof data === "string") return data.length;
@@ -1654,13 +1658,23 @@ function posterResponseSize(data) {
 async function verifyPosterUrl(url, params) {
   if (!url) return "";
   if (!isExternalPosterCandidate(url)) return url;
+  if (isNowPrintingPosterTarget(url)) return "";
   try {
     var resp = await Widget.http.get(url, {
       timeout: 4000,
       headers: { "User-Agent": JAVDB_UA },
     });
+    var finalUrl = url;
+    if (resp && resp.request && resp.request.uri && resp.request.uri.href) {
+      finalUrl = resp.request.uri.href;
+    } else if (resp && resp.config && resp.config.url) {
+      finalUrl = resp.config.url;
+    }
+    if (isNowPrintingPosterTarget(finalUrl)) return "";
+    var loc = resp && resp.headers && (resp.headers.location || resp.headers.Location);
+    if (isNowPrintingPosterTarget(loc)) return "";
     var size = posterResponseSize(resp && resp.data);
-    if (size < POSTER_VERIFY_MIN_BYTES) return "";
+    if (size <= POSTER_PLACEHOLDER_MAX_BYTES) return "";
     return url;
   } catch (err) {
     return "";
@@ -2153,15 +2167,8 @@ function resolveListBackdropPath(code, fallbackCover, videoId, params) {
   params = params || {};
   var pageUrl = upgradeJavdbImageUrl(fallbackCover);
   var idCover = buildJavdbCoverFromVideoId(videoId);
-  var coverMode = String(params.coverMode || "fast");
 
   if (pageUrl && isLandscapeListCoverUrl(pageUrl)) return pageUrl;
-
-  if (coverMode === "hd") {
-    var hdCandidates = code ? buildCoverCandidatesFromVideoId(code) : { backdropCandidates: [] };
-    var hdBackdrop = hdCandidates.backdropCandidates && hdCandidates.backdropCandidates[0];
-    if (hdBackdrop) return hdBackdrop;
-  }
 
   return idCover || pageUrl || "";
 }
@@ -2209,14 +2216,23 @@ function extractBestImageUrl($, node, base) {
 function buildCoverBundle(code, fallbackCover, options, params) {
   options = options || {};
   var videoId = options.videoId;
+  var forList = !!options.forList;
   var javdbCover = resolveJavdbCoverUrl(fallbackCover, videoId);
   var listBackdrop = resolveListBackdropPath(code, fallbackCover, videoId, params);
   var detailBackdrop = resolveDetailBackdropPath(code, fallbackCover, videoId);
-  var detailPosterPath = buildDetailPosterUrl(javdbCover, code) || javdbCover || "";
+  var javdbPoster = buildDetailPosterUrl(javdbCover, code) || javdbCover || "";
+  if (forList) {
+    return {
+      listBackdrop: listBackdrop,
+      backdropPath: listBackdrop,
+      posterPath: "",
+      detailPoster: "",
+    };
+  }
   return {
     listBackdrop: listBackdrop,
     backdropPath: detailBackdrop,
-    posterPath: detailPosterPath,
+    posterPath: javdbPoster,
     detailPoster: buildDetailPosterUrl(javdbCover, code),
   };
 }
@@ -2407,7 +2423,7 @@ function enrichMovieItems(rawItems, params) {
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId || raw.id }, params);
+    var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId || raw.id, forList: true }, params);
     var backdropPath = covers.listBackdrop || "";
     items.push(Object.assign(
       {
@@ -2416,7 +2432,6 @@ function enrichMovieItems(rawItems, params) {
         mediaType: raw.mediaType,
         title: raw.title,
         backdropPath: backdropPath,
-        detailPoster: covers.detailPoster,
         rating: raw.rating,
         releaseDate: raw.releaseDate,
         link: raw.link,
