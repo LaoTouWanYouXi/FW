@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.7",
+  version: "1.8.8",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商（静态选择项，兼容 Forward 1.3.x）与高清详情",
   author: "Forward",
@@ -1629,60 +1629,16 @@ var DETAIL_GALLERY_LIMIT = 12;
 var DETAIL_RELATED_LIMIT = 10;
 var FORWARD_POSTER_CROP_SUFFIX = "@50%_0_50%_100%";
 
-function buildDetailPosterUrl(coverUrl, code) {
-  var candidates = code ? buildCoverCandidatesFromVideoId(code) : { posterCandidates: [] };
-  if (candidates.posterCandidates && candidates.posterCandidates[0]) {
-    if (!isNowPrintingPosterUrl(candidates.posterCandidates[0])) {
-      return candidates.posterCandidates[0];
-    }
-  }
-  return formatDetailPosterUrl(coverUrl);
-}
-
-function isNowPrintingPosterUrl(url) {
-  var u = String(url || "").toLowerCase();
-  if (!u) return true;
-  if (/now[\s_-]?printing|nowprinting|noimage|no_image|placeholder|default\.jpe?g/i.test(u)) return true;
-  if (/mono\/movie\/|\/n\/npg\//i.test(u)) return true;
-  return false;
-}
-
-function formatDetailPosterUrl(coverUrl) {
+function cropDetailPosterFromJavdbCover(coverUrl, videoId) {
   var cover = upgradeJavdbCoverUrl(String(coverUrl || "").trim());
-  if (!cover || isNowPrintingPosterUrl(cover)) return "";
+  if (!cover && videoId) cover = buildJavdbCoverFromVideoId(videoId);
+  if (!cover) return "";
   if (cover.indexOf("@") >= 0) return cover;
-  if (isPortraitListCoverUrl(cover)) return cover;
-  if (/\/samples\//i.test(cover)) return cover;
-  if (/ps\.jpe?g/i.test(cover) || /pf_e_|pf_o1_/.test(cover)) return cover;
   return cover + FORWARD_POSTER_CROP_SUFFIX;
 }
 
-function resolveDetailPosterUrl(pageCover, videoId, displayCode, galleryUrls) {
-  var candidates = displayCode ? buildCoverCandidatesFromVideoId(displayCode) : { posterCandidates: [] };
-  var picks = [];
-
-  function add(url) {
-    url = String(url || "").trim();
-    if (!url || isNowPrintingPosterUrl(url)) return;
-    for (var i = 0; i < picks.length; i++) {
-      if (picks[i] === url) return;
-    }
-    picks.push(url);
-  }
-
-  add(pageCover);
-  add(resolveJavdbCoverUrl(pageCover, videoId));
-  add(buildJavdbCoverFromVideoId(videoId));
-  var posterList = candidates.posterCandidates || [];
-  for (var p = 0; p < posterList.length; p++) add(posterList[p]);
-  var gallery = galleryUrls || [];
-  for (var g = 0; g < gallery.length; g++) add(gallery[g]);
-
-  for (var i = 0; i < picks.length; i++) {
-    var formatted = formatDetailPosterUrl(picks[i]);
-    if (formatted) return formatted;
-  }
-  return "";
+function buildDetailPosterUrl(coverUrl, code) {
+  return cropDetailPosterFromJavdbCover(coverUrl);
 }
 
 function collectPageGalleryUrls($, base) {
@@ -2967,8 +2923,7 @@ async function parseDetailPage(html, link, params) {
   params = getEffectiveParams(params);
   var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
   var backdropPath = coverBundle.backdropPath || fallbackCover;
-  var detailPoster = resolveDetailPosterUrl(cover, videoId, displayCode, backdropPaths);
-  if (!detailPoster) detailPoster = formatDetailPosterUrl(fallbackCover);
+  var detailPoster = cropDetailPosterFromJavdbCover(cover, videoId);
   var posterPath = detailPoster;
 
   var allBackdropPaths = buildDetailBackdropPaths(backdropPaths, displayCode, params, {
