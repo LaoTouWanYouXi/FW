@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.9.2",
+  version: "1.9.3",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -1628,15 +1628,19 @@ function isLowResGalleryUrl(url) {
 
 var DETAIL_GALLERY_LIMIT = 12;
 var DETAIL_RELATED_LIMIT = 10;
-var FORWARD_POSTER_CROP_SUFFIX = "@50%_0_50%_100%";
 var POSTER_PLACEHOLDER_MAX_BYTES = 512;
 var POSTER_VERIFY_TIMEOUT_MS = 2500;
 
-function buildDetailPosterUrlFromJavdb(coverUrl) {
-  var cover = String(coverUrl || "").trim();
+function normalizePosterUrl(url) {
+  var cover = String(url || "").trim();
   if (!cover) return "";
-  if (cover.indexOf("@") >= 0) return cover;
-  return cover + FORWARD_POSTER_CROP_SUFFIX;
+  var at = cover.indexOf("@");
+  if (at >= 0) cover = cover.slice(0, at);
+  return cover;
+}
+
+function buildDetailPosterUrlFromJavdb(coverUrl) {
+  return normalizePosterUrl(coverUrl);
 }
 
 function isExternalPosterCandidate(url) {
@@ -2162,10 +2166,7 @@ function isLandscapeListCoverUrl(url) {
 }
 
 function resolvePortraitFallbackForList(portraitUrl) {
-  var url = upgradeJavdbCoverUrl(portraitUrl);
-  if (!url || !isPortraitListCoverUrl(url)) return url;
-  if (url.indexOf("@") >= 0) return url;
-  return url + FORWARD_POSTER_CROP_SUFFIX;
+  return upgradeJavdbCoverUrl(portraitUrl);
 }
 
 function extractListCardCover($, box, base) {
