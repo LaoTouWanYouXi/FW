@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.9",
+  version: "1.8.5",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商（静态选择项，兼容 Forward 1.3.x）与高清详情",
   author: "Forward",
@@ -1626,33 +1626,17 @@ function isLowResGalleryUrl(url) {
 }
 
 var DETAIL_GALLERY_LIMIT = 12;
-var DETAIL_RELATED_LIMIT = 10;
 var FORWARD_POSTER_CROP_SUFFIX = "@50%_0_50%_100%";
 
-function isUnusableDetailCoverUrl(url) {
-  var u = String(url || "").toLowerCase();
-  if (!u) return true;
-  if (/now[\s_-]?printing|nowprinting|noimage|no_image|placeholder|default\.jpe?g/i.test(u)) return true;
-  if (/mono\/movie\/|\/n\/npg\//i.test(u)) return true;
-  if (/\/thumbs\//i.test(u)) return true;
-  return false;
-}
-
-function cropDetailPosterFromJavdbCover(coverUrl, videoId) {
-  var cover = upgradeJavdbCoverUrl(String(coverUrl || "").trim());
-  if (isUnusableDetailCoverUrl(cover)) cover = "";
-  if (!cover && videoId) {
-    cover = buildJavdbCoverFromVideoId(videoId);
-    if (isUnusableDetailCoverUrl(cover)) cover = "";
+function buildDetailPosterUrl(coverUrl, code) {
+  var candidates = code ? buildCoverCandidatesFromVideoId(code) : { posterCandidates: [] };
+  if (candidates.posterCandidates && candidates.posterCandidates[0]) {
+    return candidates.posterCandidates[0];
   }
+  var cover = String(coverUrl || "").trim();
   if (!cover) return "";
   if (cover.indexOf("@") >= 0) return cover;
-  if (isPortraitListCoverUrl(cover)) return cover;
   return cover + FORWARD_POSTER_CROP_SUFFIX;
-}
-
-function buildDetailPosterUrl(coverUrl, code) {
-  return cropDetailPosterFromJavdbCover(coverUrl);
 }
 
 function collectPageGalleryUrls($, base) {
@@ -1901,7 +1885,7 @@ function mergeRelatedRawLists() {
   return merged;
 }
 
-function parseRelatedBucketsFromHtml(html, params, options) {
+function parseRelatedSectionsFromHtml(html, params, options) {
   options = options || {};
   var base = javdbBase(params);
   var $ = Widget.html.load(html);
@@ -1922,9 +1906,6 @@ function parseRelatedBucketsFromHtml(html, params, options) {
     ".message.video-panel",
     ".video-panel",
     ".panel:not(.movie-panel-info)",
-    "#recommend-videos",
-    ".video-recommend",
-    "section.recommend",
   ].join(", ");
 
   $(sectionSelectors).each(function () {
@@ -1935,97 +1916,31 @@ function parseRelatedBucketsFromHtml(html, params, options) {
     pushBucket(bucket, collectRelatedSectionItems($, section, base));
   });
 
-  if (!buckets.recommend.length) {
-    $(".panel-heading, .message-header, .message-header p, .title, h2, h3, h4").each(function () {
+  if (!buckets.sameActor.length && !buckets.recommend.length) {
+    $(".panel-heading, .message-header, .message-header p").each(function () {
       var heading = textOf($, $(this));
-      if (matchRelatedSectionBucket(heading) !== "recommend") return;
-      var section = $(this).closest(".panel-block, article.message, .message, .panel, section, .video-recommend, #recommend-videos");
+      var bucket = matchRelatedSectionBucket(heading);
+      if (!bucket) return;
+      var section = $(this).closest(".panel-block, article.message, .message, .panel, section");
       if (!section.length) section = $(this).parent();
-      pushBucket("recommend", collectRelatedSectionItems($, section, base));
+      pushBucket(bucket, collectRelatedSectionItems($, section, base));
     });
   }
 
   if (!buckets.sameActor.length && !buckets.recommend.length) {
     buckets.other = parseRelatedFromHtml(html, params, options);
-  }
-
-  return buckets;
-}
-
-function parseRecommendItemsFromHtml(html, params, options) {
-  var buckets = parseRelatedBucketsFromHtml(html, params, options);
-  return (buckets.recommend || []).slice(0, DETAIL_RELATED_LIMIT);
-}
-
-function pickLeadActressSearchKeyword(peoples, displayCode) {
-  var list = peoples || [];
-  for (var i = 0; i < list.length; i++) {
-    var person = list[i];
-    if (!person || !person.title) continue;
-    var role = String(person.role || "");
-    if (role.indexOf("演") >= 0 || role === "演员" || role === "女优" || !role) {
-      return String(person.title).replace(/\s+/g, " ").trim();
-    }
-  }
-  if (list[0] && list[0].title) return String(list[0].title).replace(/\s+/g, " ").trim();
-  return String(displayCode || "").replace(/\s+/g, " ").trim();
-}
-
-async function searchDetailRelatedItems(params, keyword, options, displayCode) {
-  keyword = normalizeSearchKeyword(keyword);
-  if (!keyword) return [];
-  try {
-    var items = await fetchSearchMovieList(params, keyword);
-    items = filterSelfFromRelatedItems(
-      items,
-      options.currentPath || "",
-      options.currentVideoId || "",
-      displayCode,
-      params
-    );
-    return items.slice(0, DETAIL_RELATED_LIMIT);
-  } catch (err) {
-    console.error("[javdb] 相似影片搜索回退失败:", err.message || err);
-    return [];
-  }
-}
-
-async function resolveDetailRelatedItems(html, params, options, displayCode, peoples) {
-  options = options || {};
-  var parsed = parseRecommendItemsFromHtml(html, params, options);
-  var relatedParams = Object.assign({}, params, { coverMode: "fast" });
-  if (parsed.length) {
-    return enrichMovieItems(parsed, relatedParams);
-  }
-
-  var actressKeyword = pickLeadActressSearchKeyword(peoples, "");
-  if (actressKeyword) {
-    var byActress = await searchDetailRelatedItems(params, actressKeyword, options, displayCode);
-    if (byActress.length) return byActress;
-  }
-
-  if (displayCode) {
-    var byCode = await searchDetailRelatedItems(params, displayCode, options, displayCode);
-    if (byCode.length) return byCode;
-  }
-
-  return [];
-}
-
-function parseRelatedSectionsFromHtml(html, params, options) {
-  var buckets = parseRelatedBucketsFromHtml(html, params, options);
-  if (!buckets.sameActor.length && !buckets.recommend.length) {
-    return (buckets.other || []).slice(0, 24);
-  }
-  var generic = buckets.other || [];
-  buckets.other = generic.filter(function (item) {
-    var key = item.link || item.id;
-    return !buckets.sameActor.some(function (x) {
-      return (x.link || x.id) === key;
-    }) && !buckets.recommend.some(function (y) {
-      return (y.link || y.id) === key;
+  } else {
+    var generic = parseRelatedFromHtml(html, params, options);
+    buckets.other = generic.filter(function (item) {
+      var key = item.link || item.id;
+      return !buckets.sameActor.some(function (x) {
+        return (x.link || x.id) === key;
+      }) && !buckets.recommend.some(function (y) {
+        return (y.link || y.id) === key;
+      });
     });
-  });
+  }
+
   return mergeRelatedRawLists(buckets.sameActor, buckets.recommend, buckets.other).slice(0, 24);
 }
 
@@ -2165,20 +2080,6 @@ function extractBestImageUrl($, node, base) {
     }
   }
   return upgradeJavdbImageUrl(absUrl(best, base));
-}
-
-function extractDetailPageCover($, base, videoId) {
-  var selectors = [
-    ".column-video-cover img.video-cover",
-    ".video-detail img.video-cover",
-    "img.video-cover",
-  ];
-  for (var i = 0; i < selectors.length; i++) {
-    var url = extractBestImageUrl($, $(selectors[i]).first(), base);
-    if (url && !isUnusableDetailCoverUrl(url)) return url;
-  }
-  var fromId = buildJavdbCoverFromVideoId(videoId);
-  return isUnusableDetailCoverUrl(fromId) ? "" : fromId;
 }
 
 function buildCoverBundle(code, fallbackCover, options, params) {
@@ -2934,11 +2835,18 @@ async function parseDetailPage(html, link, params) {
 
   var backdropPaths = collectPageGalleryUrls($, base);
 
-  var cover = extractDetailPageCover($, base, videoId);
+  var cover = extractBestImageUrl($, $("img.video-cover").first(), base);
+  if (!cover && backdropPaths.length) cover = absUrl(backdropPaths[0], base);
 
   var detailMeta = parseDetailMeta($, base);
   var genreItems = detailMeta.genreItems;
   var peoples = detailMeta.peoples;
+
+  var rawRelated = parseRelatedSectionsFromHtml(html, params, {
+    currentPath: path,
+    currentVideoId: videoId,
+    currentCode: code,
+  });
 
   var displayCode = code || extractMatchCode(title);
   if (!displayCode && description) {
@@ -2950,24 +2858,21 @@ async function parseDetailPage(html, link, params) {
   params = getEffectiveParams(params);
   var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
   var backdropPath = coverBundle.backdropPath || fallbackCover;
-  var detailPoster = cropDetailPosterFromJavdbCover(cover, videoId);
-  var posterPath = detailPoster;
+  var detailPoster = coverBundle.detailPoster || buildDetailPosterUrl(fallbackCover, displayCode);
+  var posterPath = coverBundle.posterPath || detailPoster;
 
   var allBackdropPaths = buildDetailBackdropPaths(backdropPaths, displayCode, params, {
     coverUrl: fallbackCover,
   });
   var trailers = parseTrailersFromHtml($, base, displayCode, backdropPath || fallbackCover);
 
-  var relatedItems = await resolveDetailRelatedItems(
-    html,
-    params,
-    {
-      currentPath: path,
-      currentVideoId: videoId,
-      currentCode: code,
-    },
+  var relatedParams = Object.assign({}, params, { coverMode: "fast" });
+  var relatedItems = filterSelfFromRelatedItems(
+    enrichMovieItems(rawRelated, relatedParams),
+    path,
+    videoId,
     displayCode,
-    peoples
+    params
   );
 
   return enrichDetailLinks(
