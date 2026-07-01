@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.8",
+  version: "1.8.9",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商（静态选择项，兼容 Forward 1.3.x）与高清详情",
   author: "Forward",
@@ -1629,11 +1629,25 @@ var DETAIL_GALLERY_LIMIT = 12;
 var DETAIL_RELATED_LIMIT = 10;
 var FORWARD_POSTER_CROP_SUFFIX = "@50%_0_50%_100%";
 
+function isUnusableDetailCoverUrl(url) {
+  var u = String(url || "").toLowerCase();
+  if (!u) return true;
+  if (/now[\s_-]?printing|nowprinting|noimage|no_image|placeholder|default\.jpe?g/i.test(u)) return true;
+  if (/mono\/movie\/|\/n\/npg\//i.test(u)) return true;
+  if (/\/thumbs\//i.test(u)) return true;
+  return false;
+}
+
 function cropDetailPosterFromJavdbCover(coverUrl, videoId) {
   var cover = upgradeJavdbCoverUrl(String(coverUrl || "").trim());
-  if (!cover && videoId) cover = buildJavdbCoverFromVideoId(videoId);
+  if (isUnusableDetailCoverUrl(cover)) cover = "";
+  if (!cover && videoId) {
+    cover = buildJavdbCoverFromVideoId(videoId);
+    if (isUnusableDetailCoverUrl(cover)) cover = "";
+  }
   if (!cover) return "";
   if (cover.indexOf("@") >= 0) return cover;
+  if (isPortraitListCoverUrl(cover)) return cover;
   return cover + FORWARD_POSTER_CROP_SUFFIX;
 }
 
@@ -2151,6 +2165,20 @@ function extractBestImageUrl($, node, base) {
     }
   }
   return upgradeJavdbImageUrl(absUrl(best, base));
+}
+
+function extractDetailPageCover($, base, videoId) {
+  var selectors = [
+    ".column-video-cover img.video-cover",
+    ".video-detail img.video-cover",
+    "img.video-cover",
+  ];
+  for (var i = 0; i < selectors.length; i++) {
+    var url = extractBestImageUrl($, $(selectors[i]).first(), base);
+    if (url && !isUnusableDetailCoverUrl(url)) return url;
+  }
+  var fromId = buildJavdbCoverFromVideoId(videoId);
+  return isUnusableDetailCoverUrl(fromId) ? "" : fromId;
 }
 
 function buildCoverBundle(code, fallbackCover, options, params) {
@@ -2906,8 +2934,7 @@ async function parseDetailPage(html, link, params) {
 
   var backdropPaths = collectPageGalleryUrls($, base);
 
-  var cover = extractBestImageUrl($, $("img.video-cover").first(), base);
-  if (!cover && backdropPaths.length) cover = absUrl(backdropPaths[0], base);
+  var cover = extractDetailPageCover($, base, videoId);
 
   var detailMeta = parseDetailMeta($, base);
   var genreItems = detailMeta.genreItems;
