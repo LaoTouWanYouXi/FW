@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.2.5",
+  version: "1.2.6",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -1195,6 +1195,10 @@ function parseDetailInfo($, html) {
   return info;
 }
 
+function buildSynopsisDescription(synopsisText) {
+  return sanitizeSourceText(synopsisText) || "";
+}
+
 function stripDuplicateTitleFromSynopsis(synopsis, displayTitle, movieCode) {
   let text = sanitizeSourceText(synopsis);
   if (!text) return "";
@@ -1211,14 +1215,49 @@ function stripDuplicateTitleFromSynopsis(synopsis, displayTitle, movieCode) {
       .replace(new RegExp("^" + code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*", "i"), "")
       .trim();
     const looseCode = normalizeCodeToken(code);
-    const looseText = normalizeCodeToken(text);
-    if (looseCode && looseText === looseCode) return "";
+    if (looseCode && normalizeCodeToken(text) === looseCode) return "";
   }
   return text;
 }
 
-function buildSynopsisDescription(synopsisText) {
-  return sanitizeSourceText(synopsisText) || "";
+function extractChineseOnlyText(text, sourceRaw) {
+  let value = sanitizeSourceText(text);
+  if (!value) return "";
+
+  const raw = sanitizeSourceText(sourceRaw);
+  if (raw) {
+    if (value.indexOf(raw) === 0) {
+      value = value.slice(raw.length).replace(/^[\s\n\r:：\-–—]+/, "").trim();
+    }
+    const rawUpper = raw.toUpperCase();
+    const valueUpper = value.toUpperCase();
+    if (valueUpper.indexOf(rawUpper) === 0) {
+      value = value.slice(raw.length).replace(/^[\s\n\r:：\-–—]+/, "").trim();
+    }
+  }
+
+  if (!/[\u4e00-\u9fff]/.test(value)) return "";
+
+  const hasForeign =
+    /[a-zA-Z]{3,}/.test(value) || /[\u3040-\u30ff]/.test(value);
+  if (hasForeign) {
+    const lines = value.split(/\r?\n+/);
+    const chineseLines = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const cjk = (line.match(/[\u4e00-\u9fff]/g) || []).length;
+      const latin = (line.match(/[a-zA-Z]/g) || []).length;
+      const kana = (line.match(/[\u3040-\u30ff]/g) || []).length;
+      if (cjk === 0) continue;
+      if (cjk >= latin && cjk >= kana) {
+        chineseLines.push(line);
+      }
+    }
+    if (chineseLines.length) value = chineseLines.join("\n").trim();
+  }
+
+  return /[\u4e00-\u9fff]/.test(value) ? value : "";
 }
 
 async function resolvePartPlayback(parts, baseUrl) {
@@ -1292,7 +1331,6 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
   );
   coverBundle =
     coverBundle || buildDetailCoverBundle(fields.cover, movieCode || fields.displayTitle);
-  const originalTitle = fields.synopsisRaw || fields.displayTitle;
   return finalizeDetailItem(
     {
       id: movieCode || baseUrl,
@@ -1312,7 +1350,7 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
       playerType: isMultiPartMovie(parts) ? "system" : undefined,
     },
     movieCode,
-    originalTitle,
+    fields.displayTitle,
     fields.synopsisDisplay || "",
     fields.rating
   );
@@ -1375,7 +1413,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v16:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v17:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1389,7 +1427,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v16:" + String(baseUrl),
+      "detail:v17:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1666,26 +1704,25 @@ function buildGuangyaMatchFields(rawCode, rawTitle, description) {
   return fields;
 }
 
-function buildDetailMatchFields(movieCode, rawTitle, synopsisText, rating) {
+function buildDetailMatchFields(movieCode, displayTitle, synopsisText, rating) {
   const synopsis = sanitizeSourceText(synopsisText);
   const matchDescription =
     synopsis || (movieCode ? "\u756a\u53f7: " + movieCode : "");
-  const match = buildGuangyaMatchFields(movieCode, rawTitle, matchDescription);
+  const match = buildGuangyaMatchFields(movieCode, displayTitle, matchDescription);
   return {
     id: movieCode || undefined,
     name: match.name,
     seriesName: match.seriesName,
     episodeName: match.episodeName,
-    originalTitle: match.originalTitle,
     code: match.code,
     matchCode: match.matchCode,
     rating: rating !== undefined && rating !== null ? rating : 0,
   };
 }
 
-function finalizeDetailItem(baseItem, movieCode, rawTitle, synopsisText, rating) {
+function finalizeDetailItem(baseItem, movieCode, displayTitle, synopsisText, rating) {
   const synopsis = buildSynopsisDescription(synopsisText);
-  const matchFields = buildDetailMatchFields(movieCode, rawTitle, synopsis, rating);
+  const matchFields = buildDetailMatchFields(movieCode, displayTitle, synopsis, rating);
   return stripUndefined(
     Object.assign({}, baseItem, matchFields, {
       description: synopsis || undefined,
@@ -2042,6 +2079,14 @@ async function resolveDetailCoverBundle(pageCover, code, params) {
 }
 
 function extractSynopsisRaw(html, rawTitle) {
+  let raw = decodeHtml(String(rawTitle || ""))
+    .replace(/\|\s*JAVMove\s*$/i, "")
+    .trim();
+  if (raw) {
+    const stripped = raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
+    if (stripped.length >= 16) return sanitizeSourceText(stripped);
+  }
+
   const metaMatch = String(html || "").match(/name="description"\s+content="([^"]+)"/i);
   if (metaMatch) {
     let meta = decodeHtml(metaMatch[1]).replace(/^Watch online\s+/i, "").trim();
@@ -2049,7 +2094,16 @@ function extractSynopsisRaw(html, rawTitle) {
     if (meta.length >= 16) return sanitizeSourceText(meta);
   }
 
-  return "";
+  const titleMatch = String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (titleMatch) {
+    let pageTitle = decodeHtml(titleMatch[1])
+      .replace(/\|\s*JAVMove\s*$/i, "")
+      .trim();
+    pageTitle = pageTitle.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
+    if (pageTitle.length >= 16) return sanitizeSourceText(pageTitle);
+  }
+
+  return sanitizeSourceText(raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim() || raw);
 }
 
 function hashText(text) {
@@ -2220,9 +2274,11 @@ function shouldTranslateText(text) {
 function resolveDisplaySynopsis(source, translated) {
   const raw = sanitizeSourceText(source);
   if (!raw) return "";
-  if (!shouldTranslateText(raw)) return raw;
-  const zh = sanitizeSourceText(translated);
+  const zh = extractChineseOnlyText(translated || "", raw);
   if (zh && isValidChineseTranslation(zh)) return zh;
+  if (!shouldTranslateText(raw) && /[\u4e00-\u9fff]/.test(raw)) {
+    return extractChineseOnlyText(raw, "");
+  }
   return "";
 }
 
@@ -2233,12 +2289,18 @@ function applySynopsisToFields(fields, parts, synopsisText) {
     fields.displayTitle,
     fields.synopsisRaw || ""
   );
-  let displaySynopsis = buildSynopsisDescription(synopsisText);
+  let displaySynopsis = extractChineseOnlyText(
+    buildSynopsisDescription(synopsisText),
+    fields.synopsisRaw || ""
+  );
   displaySynopsis = stripDuplicateTitleFromSynopsis(
     displaySynopsis,
     fields.displayTitle,
     movieCode
   );
+  if (displaySynopsis && !/[\u4e00-\u9fff]/.test(displaySynopsis)) {
+    displaySynopsis = "";
+  }
   fields.synopsisDisplay = displaySynopsis;
   fields.description = displaySynopsis;
   return fields;
@@ -2247,12 +2309,19 @@ function applySynopsisToFields(fields, parts, synopsisText) {
 async function translateSynopsisText(source) {
   const text = sanitizeSourceText(source);
   if (!text) return "";
-  if (!shouldTranslateText(text)) return text;
+  if (!shouldTranslateText(text)) {
+    if (/[\u4e00-\u9fff]/.test(text)) return extractChineseOnlyText(text, "");
+    return "";
+  }
   const cacheKey = hashText(text);
   const cached = readTranslateCache(cacheKey);
-  if (cached && isValidChineseTranslation(cached)) return cached;
+  if (cached && isValidChineseTranslation(cached)) {
+    return extractChineseOnlyText(cached, text);
+  }
   const translated = await translateToChinese(text);
-  if (translated && isValidChineseTranslation(translated)) return translated;
+  if (translated && isValidChineseTranslation(translated)) {
+    return extractChineseOnlyText(translated, text);
+  }
   return "";
 }
 
@@ -2712,7 +2781,13 @@ function buildDetailFieldsFromHtml(html, baseUrl, parts) {
     $("video").attr("poster") ||
     meta.cover ||
     "";
-  const backdropPaths = extractDetailStills(html, $, cover, movieCode, baseUrl);
+  const backdropPaths = extractDetailStills(
+    html,
+    $,
+    cover,
+    displayTitle,
+    baseUrl
+  );
   const rating = parseDetailRating($, html);
   const genreItems = collectDetailGenreItems(html, $);
   const peoples = collectDetailPeoples($);
@@ -2748,7 +2823,6 @@ function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
   coverBundle =
     coverBundle || buildDetailCoverBundle(fields.cover, movieCode || fields.displayTitle);
   const isSeries = isMultiPartMovie(parts);
-  const originalTitle = fields.synopsisRaw || fields.displayTitle;
 
   const item = finalizeDetailItem(
     {
@@ -2769,7 +2843,7 @@ function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
       playerType: "system",
     },
     movieCode,
-    originalTitle,
+    fields.displayTitle,
     fields.synopsisDisplay || "",
     fields.rating
   );
