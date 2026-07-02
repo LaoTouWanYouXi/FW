@@ -963,7 +963,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.9.8",
+  version: "1.9.9",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2154,13 +2154,18 @@ function buildCoverBundle(code, fallbackCover, options, params) {
   };
 }
 
+function omitDetailRelatedItems(item) {
+  if (!item || typeof item !== "object") return item;
+  if ("relatedItems" in item) delete item.relatedItems;
+  return item;
+}
+
 function enrichDetailLinks(item, pageUrl, displayCode, cover, currentPath, params) {
   var openItem = buildOpenJavdbItem(pageUrl, "打开 JavDB 官网 · " + (displayCode || "详情"), cover);
   item.webUrl = pageUrl;
   item.childItems = [openItem];
   item.description = appendPageUrlToDescription(item.description, pageUrl);
-  item.relatedItems = [];
-  return item;
+  return omitDetailRelatedItems(item);
 }
 
 function parseRatingText(text) {
@@ -2537,7 +2542,7 @@ async function parseCategoryDetailPage(html, path, params) {
   title = stripCountSuffix(title);
   var avatar = absUrl(attrOf($, $("img.avatar").first(), "src"), base);
   var movies = await fetchMovieList(path, params);
-  return {
+  return omitDetailRelatedItems({
     id: path.split("/").pop() || encodeLink(path),
     type: "url",
     title: title,
@@ -2545,8 +2550,7 @@ async function parseCategoryDetailPage(html, path, params) {
     detailPoster: avatar || "",
     description: "共收录 " + movies.length + " 部影片（当前页）",
     link: encodeLink(path),
-    relatedItems: movies,
-  };
+  });
 }
 
 function normalizePanelLabel(text) {
