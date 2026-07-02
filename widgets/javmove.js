@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.1.1",
+  version: "1.1.4",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -1866,6 +1866,12 @@ function hashText(text) {
 const TRANSLATE_CACHE_TTL = 604800;
 
 const TRANSLATE_CACHE_PREFIX = "tr:zh:v2:";
+const TRANSLATE_SEP = "\u001e";
+const TRANSLATE_BATCH_MAX_CHARS = 4200;
+const TRANSLATE_LIST_SNIPPET_LEN = 200;
+const TRANSLATE_PARALLEL_BATCHES = 2;
+const TRANSLATE_TIMEOUT_MS = 8000;
+const translateBatchInflight = {};
 
 function readTranslateCache(key) {
   try {
@@ -2259,14 +2265,11 @@ async function fetchGenreVideoList(genreRef, page) {
   const fetchUrl = buildGenrePageUrl(baseUrl, page);
   try {
     const html = await fetchHtml(fetchUrl, baseUrl);
-    return await parseVideoList(html);
+    return parseVideoList(html);
   } catch (e) {
     return [];
   }
 }
-
-const LIST_SYNOPSIS_MAX_LEN = 56;
-const LIST_TITLE_TRANSLATE_BATCH = 5;
 
 function normalizeListRawTitle(rawTitle) {
   return sanitizeSourceText(
@@ -2276,61 +2279,9 @@ function normalizeListRawTitle(rawTitle) {
   );
 }
 
-function splitListRawTitle(rawTitle) {
-  const raw = normalizeListRawTitle(rawTitle);
-  if (!raw) return { code: "", synopsis: "", raw: "" };
-  const code = formatMovieCode("", raw);
-  let synopsis = raw;
-  if (code) {
-    synopsis = raw
-      .replace(new RegExp("^" + code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*", "i"), "")
-      .trim();
-    if (!synopsis) synopsis = raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
-  }
-  return { code: code, synopsis: synopsis, raw: raw };
-}
-
-function truncateListSynopsis(text, maxLen) {
-  const value = sanitizeSourceText(text);
-  const limit = maxLen || LIST_SYNOPSIS_MAX_LEN;
-  if (!value || value.length <= limit) return value;
-  return value.slice(0, limit) + "\u2026";
-}
-
-function buildListDisplayTitle(code, synopsisText) {
-  const movieCode = formatMovieCode(code, "") || String(code || "").trim();
-  const intro = truncateListSynopsis(synopsisText);
-  if (movieCode && intro) return movieCode + " " + intro;
-  if (movieCode) return movieCode;
-  if (intro) return intro;
-  return "\u76f8\u5173\u5f71\u7247";
-}
-
-async function applyListItemTitle(item, rawTitle) {
-  if (!item) return item;
-  const parts = splitListRawTitle(rawTitle);
-  let synopsisText = parts.synopsis || "";
-  if (synopsisText && shouldTranslateText(synopsisText)) {
-    synopsisText = await translateSynopsisText(synopsisText);
-  } else {
-    synopsisText = sanitizeSourceText(synopsisText);
-  }
-  item.title = buildListDisplayTitle(parts.code, synopsisText);
-  delete item._listRawTitle;
-  return item;
-}
-
-async function enrichListItemTitles(items) {
-  if (!items || !items.length) return items || [];
-  for (let i = 0; i < items.length; i += LIST_TITLE_TRANSLATE_BATCH) {
-    const batch = items.slice(i, i + LIST_TITLE_TRANSLATE_BATCH);
-    await Promise.all(
-      batch.map(function (item) {
-        return applyListItemTitle(item, item._listRawTitle || item.title || "");
-      })
-    );
-  }
-  return items;
+function parseListTitle(rawTitle) {
+  const title = normalizeListRawTitle(rawTitle);
+  return title || "\u76f8\u5173\u5f71\u7247";
 }
 
 function parseVideoListRegex(html) {
@@ -2355,7 +2306,6 @@ function parseVideoListRegex(html) {
       block.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i) ||
       block.match(/\balt="([^"]+)"/i);
     const rawTitle = titleM ? decodeHtml(titleM[1].replace(/<[^>]+>/g, "")) : href.split("/").pop();
-    const listRawTitle = normalizeListRawTitle(rawTitle);
 
     const coverM = parseListCover(block);
     const pubM = block.match(/datetime="([^"]+)"/i);
@@ -2363,8 +2313,7 @@ function parseVideoListRegex(html) {
     items.push({
       id: detailLink,
       type: "url",
-      title: formatMovieCode("", listRawTitle) || listRawTitle.split(/\s+/)[0] || listRawTitle,
-      _listRawTitle: listRawTitle,
+      title: parseListTitle(rawTitle),
       backdropPath: coverM || undefined,
       releaseDate: pubM ? pubM[1].split("T")[0] : "",
       link: detailLink,
@@ -2391,8 +2340,8 @@ function parseVideoListSync(html) {
         $h2.text().trim() ||
         $el.find("img.movie-image").attr("alt") ||
         "";
-      const rawTitle = normalizeListRawTitle(titleRaw);
-      if (!rawTitle || !href) return;
+      const listTitle = parseListTitle(titleRaw);
+      if (!listTitle || listTitle === "\u76f8\u5173\u5f71\u7247" || !href) return;
 
       const cover = parseListCover($el.html(), $el.find("img.movie-image, .movie-image").first());
       const pubdate = $el.find("time").first().attr("datetime") || "";
@@ -2401,8 +2350,7 @@ function parseVideoListSync(html) {
       items.push({
         id: detailLink,
         type: "url",
-        title: formatMovieCode("", rawTitle) || rawTitle.split(/\s+/)[0] || rawTitle,
-        _listRawTitle: rawTitle,
+        title: listTitle,
         backdropPath: cover || undefined,
         releaseDate: pubdate ? pubdate.split("T")[0] : "",
         link: detailLink,
@@ -2415,9 +2363,8 @@ function parseVideoListSync(html) {
   return parseVideoListRegex(scoped);
 }
 
-async function parseVideoList(html) {
-  const items = parseVideoListSync(html);
-  return enrichListItemTitles(items);
+function parseVideoList(html) {
+  return parseVideoListSync(html);
 }
 
 async function loadGenreList(params) {
@@ -2438,7 +2385,7 @@ async function loadLatest(params) {
   try {
     const url = BASE_URL + "/release?page=" + page;
     const html = await fetchHtml(url, BASE_URL + "/");
-    return await parseVideoList(html);
+    return parseVideoList(html);
   } catch (e) {
     return [];
   }
@@ -2450,7 +2397,7 @@ async function loadUpcoming(params) {
   try {
     const url = BASE_URL + "/upcoming?page=" + page;
     const html = await fetchHtml(url, BASE_URL + "/");
-    return await parseVideoList(html);
+    return parseVideoList(html);
   } catch (e) {
     return [];
   }
@@ -2725,7 +2672,7 @@ async function search(params) {
       "&page=" +
       page;
     const html = await fetchHtml(url, BASE_URL + "/");
-    return await parseVideoList(html);
+    return parseVideoList(html);
   } catch (e) {
     return [];
   }

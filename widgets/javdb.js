@@ -963,7 +963,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.9.11",
+  version: "2.0.0",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -993,7 +993,7 @@ WidgetMetadata = {
       type: "enumeration",
       enumOptions: [
         { title: "\u5feb\u901f\uff08JavDB \u9875\u9762\u5c01\u9762\uff09", value: "fast" },
-        { title: "\u9ad8\u6e05\uff08\u6821\u9a8c DMM\uff0c\u5931\u8d25\u7528 JavDB\uff09", value: "hd" },
+        { title: "\u9ad8\u6e05\uff08DMM \u76f4\u94fe\u6821\u9a8c\uff0c\u5931\u8d25\u7528 JavDB\uff09", value: "hd" },
       ],
       value: "fast",
     },
@@ -1231,16 +1231,12 @@ function appendPageUrlToDescription(description, pageUrl) {
   return base ? base + "\n\n" + footer : footer;
 }
 
-function buildOpenJavdbItem(pageUrl, title, cover) {
-  return {
-    id: pageUrl,
-    type: "url",
-    mediaType: "movie",
-    title: title || "打开 JavDB 官网",
-    description: pageUrl,
-    link: pageUrl,
-    backdropPath: cover || undefined,
-  };
+function sanitizeDetailOutput(item) {
+  if (!item || typeof item !== "object") return item;
+  if ("relatedItems" in item) delete item.relatedItems;
+  if ("recommendations" in item) delete item.recommendations;
+  if ("childItems" in item) delete item.childItems;
+  return item;
 }
 
 function normalizePath(href, base) {
@@ -1641,42 +1637,25 @@ function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
   return buildDmmCoverCandidatesFromParts(parts);
 }
 
-function buildDmmPosterCandidatesFromVideoId(videoIdOrTitle, posterSize) {
-  posterSize = String(posterSize || "large").toLowerCase();
-  var parts = parseJavCodeParts(videoIdOrTitle);
-  if (!parts) return [];
-  var rule = MGSTAGE_COVER_RULES[parts.prefix];
-  if (rule) {
-    var mg = buildMgstageCoverCandidatesFromParts(parts, rule);
-    if (posterSize === "small") return mg.posterCandidates || [];
-    return compactUniqueUrls((mg.posterCandidates || []).concat(mg.backdropCandidates || []));
-  }
-  var contentId = String(parts.code || "").toLowerCase();
-  if (!contentId) return [];
-  var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
-  var picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
-  if (posterSize === "small") {
-    return compactUniqueUrls([
-      awsBase + "/" + contentId + "ps.jpg",
-      picsBase + "/" + contentId + "ps.jpg",
-    ]);
-  }
-  return compactUniqueUrls([
-    awsBase + "/" + contentId + "pl.jpg",
-    picsBase + "/" + contentId + "pl.jpg",
-    awsBase + "/" + contentId + "jp-1.jpg",
-    picsBase + "/" + contentId + "jp-1.jpg",
-    awsBase + "/" + contentId + "ps.jpg",
-    picsBase + "/" + contentId + "ps.jpg",
-  ]);
-}
-
 function buildCoverUrlsFromVideoId(videoIdOrTitle) {
   var candidates = buildCoverCandidatesFromVideoId(videoIdOrTitle);
   return {
     posterUrl: candidates.posterCandidates[0] || "",
     backdropUrl: candidates.backdropCandidates[0] || "",
+    posterCandidates: candidates.posterCandidates || [],
+    backdropCandidates: candidates.backdropCandidates || [],
   };
+}
+
+function pickSyncHdCoverUrls(code, posterSize) {
+  posterSize = String(posterSize || "large").toLowerCase();
+  var candidates = buildCoverCandidatesFromVideoId(code);
+  if (posterSize === "small") {
+    return compactUniqueUrls(candidates.posterCandidates || []).slice(0, 2);
+  }
+  return compactUniqueUrls(
+    (candidates.backdropCandidates || []).concat(candidates.posterCandidates || [])
+  ).slice(0, 2);
 }
 
 function cleanDvdId(raw) {
@@ -1777,9 +1756,8 @@ function isLowResGalleryUrl(url) {
 }
 
 var DETAIL_GALLERY_LIMIT = 12;
-var POSTER_PLACEHOLDER_MAX_BYTES = 512;
-var POSTER_VERIFY_TIMEOUT_MS = 1800;
-var POSTER_VERIFY_RANGE = "bytes=0-2047";
+var COVER_VERIFY_MIN_BYTES = 15360;
+var COVER_VERIFY_TIMEOUT_MS = 3000;
 
 function normalizePosterUrl(url) {
   var cover = String(url || "").trim();
@@ -1795,11 +1773,6 @@ function buildDetailPosterUrlFromJavdb(coverUrl) {
 
 function isNowPrintingPosterTarget(url) {
   return String(url || "").toLowerCase().indexOf("now_printing") >= 0;
-}
-
-function isExternalPosterCandidate(url) {
-  var u = String(url || "").toLowerCase();
-  return u.indexOf("dmm.co.jp") >= 0 || u.indexOf("dmm.com") >= 0 || u.indexOf("mgstage.com") >= 0;
 }
 
 function posterResponseSize(data) {
@@ -1829,37 +1802,46 @@ function extractPosterFinalUrl(resp, url) {
   return String(url || "");
 }
 
-async function verifyPosterUrl(url, params) {
-  if (!url) return "";
-  if (isNowPrintingPosterTarget(url)) return "";
+async function verifyCoverUrl(url, params) {
+  if (!url || isNowPrintingPosterTarget(url)) return "";
   try {
     var resp = await Widget.http.get(url, {
-      timeout: POSTER_VERIFY_TIMEOUT_MS,
-      headers: Object.assign({}, posterRequestHeaders(params), { Range: POSTER_VERIFY_RANGE }),
+      timeout: COVER_VERIFY_TIMEOUT_MS,
+      headers: posterRequestHeaders(params),
       allow_redirects: true,
     });
     var finalUrl = extractPosterFinalUrl(resp, url);
     if (isNowPrintingPosterTarget(finalUrl)) return "";
-    var loc = resp && resp.headers && (resp.headers.location || resp.headers.Location);
-    if (isNowPrintingPosterTarget(loc)) return "";
-    if (isExternalPosterCandidate(url) && finalUrl !== url && isNowPrintingPosterTarget(finalUrl)) {
-      return "";
-    }
     var size = posterResponseSize(resp && resp.data);
-    if (size <= POSTER_PLACEHOLDER_MAX_BYTES) return "";
+    if (size < COVER_VERIFY_MIN_BYTES) return "";
     return url;
   } catch (err) {
     return "";
   }
 }
 
-async function pickFirstVerifiedPosterUrl(urls, params) {
-  urls = urls || [];
-  for (var i = 0; i < urls.length; i++) {
-    var ok = await verifyPosterUrl(urls[i], params);
-    if (ok) return ok;
-  }
-  return "";
+async function resolveFirstVerifiedCoverUrl(urls, params) {
+  urls = compactUniqueUrls(urls || []).slice(0, 2);
+  if (!urls.length) return "";
+  if (urls.length === 1) return verifyCoverUrl(urls[0], params);
+
+  return new Promise(function (resolve) {
+    var settled = false;
+    var remaining = urls.length;
+    function finish(result) {
+      if (settled) return;
+      if (result) {
+        settled = true;
+        resolve(result);
+        return;
+      }
+      remaining--;
+      if (remaining <= 0) resolve("");
+    }
+    for (var i = 0; i < urls.length; i++) {
+      verifyCoverUrl(urls[i], params).then(finish);
+    }
+  });
 }
 
 function resolveJavdbDetailPosterFallback(javdbCover, pageCover, galleryUrls) {
@@ -1894,11 +1876,12 @@ async function resolveDetailPosterUrl(javdbCover, code, params, options) {
   options = options || {};
   params = getEffectiveParams(params || {});
   var posterSize = String(params.dmmPosterSize || "large");
-  var dmmCandidates = code ? buildDmmPosterCandidatesFromVideoId(code, posterSize) : [];
+  var syncUrls = code ? pickSyncHdCoverUrls(code, posterSize) : [];
+  var primary = syncUrls[0] || "";
 
-  if (dmmCandidates.length) {
-    var verifiedDmm = await pickFirstVerifiedPosterUrl(dmmCandidates, params);
-    if (verifiedDmm) return verifiedDmm;
+  if (primary) {
+    var verified = await resolveFirstVerifiedCoverUrl(syncUrls, params);
+    if (verified) return verified;
   }
 
   return resolveJavdbDetailPosterFallback(javdbCover, options.pageCover, options.galleryUrls);
@@ -2156,18 +2139,10 @@ function buildCoverBundle(code, fallbackCover, options, params) {
   };
 }
 
-function omitDetailRelatedItems(item) {
-  if (!item || typeof item !== "object") return item;
-  if ("relatedItems" in item) delete item.relatedItems;
-  return item;
-}
-
 function enrichDetailLinks(item, pageUrl, displayCode, cover, currentPath, params) {
-  var openItem = buildOpenJavdbItem(pageUrl, "打开 JavDB 官网 · " + (displayCode || "详情"), cover);
   item.webUrl = pageUrl;
-  item.childItems = [openItem];
   item.description = appendPageUrlToDescription(item.description, pageUrl);
-  return omitDetailRelatedItems(item);
+  return sanitizeDetailOutput(item);
 }
 
 function parseRatingText(text) {
@@ -2544,7 +2519,7 @@ async function parseCategoryDetailPage(html, path, params) {
   title = stripCountSuffix(title);
   var avatar = absUrl(attrOf($, $("img.avatar").first(), "src"), base);
   var movies = await fetchMovieList(path, params);
-  return omitDetailRelatedItems({
+  return sanitizeDetailOutput({
     id: path.split("/").pop() || encodeLink(path),
     type: "url",
     title: title,
@@ -3046,7 +3021,7 @@ async function loadDetail(link) {
       var html = await fetchHtml(pageUrl, params);
       var detail = await parseDetailPage(html, videoPath, params);
       if (!detail || !detail.title) return null;
-      return detail;
+      return sanitizeDetailOutput(detail);
     }
 
     var path = resolveDetailPath(link, params);
@@ -3060,7 +3035,7 @@ async function loadDetail(link) {
     ) {
       var categoryUrl = detailPageUrl(path, params);
       var categoryHtml = await fetchHtml(categoryUrl, params);
-      return await parseCategoryDetailPage(categoryHtml, path, params);
+      return sanitizeDetailOutput(await parseCategoryDetailPage(categoryHtml, path, params));
     }
 
     return null;
