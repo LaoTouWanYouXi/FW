@@ -1,12 +1,34 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.1.4",
+  version: "1.2.0",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
   site: "https://javmove.com",
   detailCacheDuration: 300,
+  globalParams: [
+    {
+      name: "coverMode",
+      title: "\u5c01\u9762\u6a21\u5f0f",
+      type: "enumeration",
+      enumOptions: [
+        { title: "\u5feb\u901f\uff08JavMove \u9875\u9762\u5c01\u9762\uff09", value: "fast" },
+        { title: "\u9ad8\u6e05\uff08DMM \u76f4\u94fe\u6821\u9a8c\uff0c\u5931\u8d25\u7528 JavMove\uff09", value: "hd" },
+      ],
+      value: "fast",
+    },
+    {
+      name: "dmmPosterSize",
+      title: "DMM \u5c01\u9762\u89c4\u683c",
+      type: "enumeration",
+      enumOptions: [
+        { title: "\u5927\u56fe (pl)", value: "large" },
+        { title: "\u5c0f\u5c01\u9762 (ps)", value: "small" },
+      ],
+      value: "large",
+    },
+  ],
   modules: [
     {
       id: "loadResource",
@@ -419,6 +441,7 @@ WidgetMetadata = {
 };
 
 const BASE_URL = "https://javmove.com";
+const GLOBAL_PARAM_KEYS = ["coverMode", "dmmPosterSize"];
 const VIDEO_CACHE_TTL = 3600;
 const PARTS_BUNDLE_TTL = 3600;
 const DETAIL_ITEM_CACHE_TTL = 300;
@@ -435,6 +458,36 @@ const HEADERS = {
 
 function mergeHeaders(extra) {
   return Object.assign({}, HEADERS, extra || {});
+}
+
+function syncGlobalParams(params) {
+  params = params || {};
+  for (let i = 0; i < GLOBAL_PARAM_KEYS.length; i++) {
+    const key = GLOBAL_PARAM_KEYS[i];
+    if (params[key] !== undefined && params[key] !== null && String(params[key]) !== "") {
+      Widget.storage.set("javmove.global." + key, params[key]);
+    }
+  }
+  return Object.assign({}, params, getEffectiveParams(params));
+}
+
+function getEffectiveParams(params) {
+  params = params || {};
+  const out = {};
+  for (let i = 0; i < GLOBAL_PARAM_KEYS.length; i++) {
+    const key = GLOBAL_PARAM_KEYS[i];
+    if (params[key] !== undefined && params[key] !== null && String(params[key]) !== "") {
+      out[key] = params[key];
+    } else {
+      const stored = Widget.storage.get("javmove.global." + key);
+      if (stored !== undefined && stored !== null && String(stored) !== "") {
+        out[key] = stored;
+      }
+    }
+  }
+  if (!out.coverMode) out.coverMode = "fast";
+  if (!out.dmmPosterSize) out.dmmPosterSize = "large";
+  return out;
 }
 
 function isErrorPage(body) {
@@ -1501,8 +1554,8 @@ function formatMovieCode(movieId, rawTitle) {
   return code;
 }
 
-const POSTER_PLACEHOLDER_MAX_BYTES = 512;
-const POSTER_VERIFY_TIMEOUT_MS = 2500;
+const COVER_VERIFY_MIN_BYTES = 15360;
+const COVER_VERIFY_TIMEOUT_MS = 3000;
 
 const MGSTAGE_COVER_RULES = {
   ABF: { maker: "prestige" },
@@ -1635,6 +1688,27 @@ function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
   return { posterCandidates: [], backdropCandidates: [] };
 }
 
+function buildCoverUrlsFromVideoId(videoIdOrTitle) {
+  const candidates = buildCoverCandidatesFromVideoId(videoIdOrTitle);
+  return {
+    posterUrl: candidates.posterCandidates[0] || "",
+    backdropUrl: candidates.backdropCandidates[0] || "",
+    posterCandidates: candidates.posterCandidates || [],
+    backdropCandidates: candidates.backdropCandidates || [],
+  };
+}
+
+function pickSyncHdCoverUrls(code, posterSize) {
+  posterSize = String(posterSize || "large").toLowerCase();
+  const candidates = buildCoverCandidatesFromVideoId(code);
+  if (posterSize === "small") {
+    return compactUniqueUrls(candidates.posterCandidates || []).slice(0, 2);
+  }
+  return compactUniqueUrls(
+    (candidates.backdropCandidates || []).concat(candidates.posterCandidates || [])
+  ).slice(0, 2);
+}
+
 function pickBestFromSrcset(srcset) {
   const text = String(srcset || "").trim();
   if (!text) return "";
@@ -1707,15 +1781,6 @@ function isNowPrintingPosterTarget(url) {
   return false;
 }
 
-function isExternalPosterCandidate(url) {
-  const u = String(url || "").toLowerCase();
-  return u.indexOf("dmm.co.jp") >= 0 || u.indexOf("dmm.com") >= 0 || u.indexOf("mgstage.com") >= 0;
-}
-
-function isJavmovePosterUrl(url) {
-  return /javmove\.com/i.test(String(url || ""));
-}
-
 function posterRequestHeaders(url) {
   const u = String(url || "").toLowerCase();
   let referer = BASE_URL + "/";
@@ -1741,50 +1806,46 @@ function extractPosterFinalUrl(resp, url) {
   return String(url || "");
 }
 
-async function verifyPosterUrl(url) {
+async function verifyCoverUrl(url) {
   if (!url || isNowPrintingPosterTarget(url)) return "";
   try {
     const resp = await Widget.http.get(url, {
-      timeout: POSTER_VERIFY_TIMEOUT_MS,
+      timeout: COVER_VERIFY_TIMEOUT_MS,
       headers: posterRequestHeaders(url),
+      allow_redirects: true,
     });
     const finalUrl = extractPosterFinalUrl(resp, url);
     if (isNowPrintingPosterTarget(finalUrl)) return "";
-    const loc = resp && resp.headers && (resp.headers.location || resp.headers.Location);
-    if (isNowPrintingPosterTarget(loc)) return "";
-    if (
-      isExternalPosterCandidate(url) &&
-      finalUrl &&
-      finalUrl !== url &&
-      isNowPrintingPosterTarget(finalUrl)
-    ) {
-      return "";
-    }
     const size = posterResponseSize(resp && resp.data);
-    if (size <= POSTER_PLACEHOLDER_MAX_BYTES) return "";
+    if (size < COVER_VERIFY_MIN_BYTES) return "";
     return url;
   } catch (e) {
     return "";
   }
 }
 
-async function pickFirstVerifiedPosterUrl(urls) {
-  urls = urls || [];
+async function resolveFirstVerifiedCoverUrl(urls) {
+  urls = compactUniqueUrls(urls || []).slice(0, 2);
   if (!urls.length) return "";
-  const results = await Promise.all(
-    urls.map(function (url, idx) {
-      return verifyPosterUrl(url).then(function (ok) {
-        return { idx: idx, url: ok };
-      });
-    })
-  );
-  results.sort(function (a, b) {
-    return a.idx - b.idx;
+  if (urls.length === 1) return verifyCoverUrl(urls[0]);
+
+  return new Promise(function (resolve) {
+    let settled = false;
+    let remaining = urls.length;
+    function finish(result) {
+      if (settled) return;
+      if (result) {
+        settled = true;
+        resolve(result);
+        return;
+      }
+      remaining--;
+      if (remaining <= 0) resolve("");
+    }
+    for (let i = 0; i < urls.length; i++) {
+      verifyCoverUrl(urls[i]).then(finish);
+    }
   });
-  for (let i = 0; i < results.length; i++) {
-    if (results[i].url) return results[i].url;
-  }
-  return "";
 }
 
 function resolvePagePosterFallback(pageCover) {
@@ -1793,28 +1854,40 @@ function resolvePagePosterFallback(pageCover) {
 
 function buildDetailCoverBundle(pageCover, code) {
   const pagePoster = resolvePagePosterFallback(pageCover);
-  const candidates = buildCoverCandidatesFromVideoId(code);
   return {
-    backdropPath: candidates.backdropCandidates[0] || pagePoster || undefined,
-    posterPath: candidates.posterCandidates[0] || pagePoster || undefined,
-    detailPoster: pagePoster || candidates.posterCandidates[0] || undefined,
+    backdropPath: pagePoster || undefined,
+    posterPath: pagePoster || undefined,
+    detailPoster: pagePoster || undefined,
   };
 }
 
-async function resolveDetailCoverBundle(pageCover, code) {
+async function resolveDetailCoverBundle(pageCover, code, params) {
+  params = getEffectiveParams(params || {});
   const pagePoster = resolvePagePosterFallback(pageCover);
-  const candidates = buildCoverCandidatesFromVideoId(code);
+  const coverMode = String(params.coverMode || "fast");
 
-  const verifiedPoster = await pickFirstVerifiedPosterUrl(
-    candidates.posterCandidates || []
-  );
-  const detailPoster = verifiedPoster || pagePoster;
+  if (coverMode !== "hd") {
+    return buildDetailCoverBundle(pageCover, code);
+  }
 
-  const backdropCandidates = compactUniqueUrls(
-    (candidates.backdropCandidates || []).concat(candidates.posterCandidates || [])
-  );
-  const verifiedBackdrop = await pickFirstVerifiedPosterUrl(backdropCandidates);
-  const backdropPath = verifiedBackdrop || detailPoster || pagePoster;
+  const posterSize = String(params.dmmPosterSize || "large");
+  const syncUrls = code ? pickSyncHdCoverUrls(code, posterSize) : [];
+  let detailPoster = "";
+  if (syncUrls.length) {
+    detailPoster = await resolveFirstVerifiedCoverUrl(syncUrls);
+  }
+  if (!detailPoster) detailPoster = pagePoster;
+
+  let backdropPath = detailPoster || pagePoster;
+  if (posterSize === "small" && code) {
+    const backdropUrls = compactUniqueUrls(
+      buildCoverCandidatesFromVideoId(code).backdropCandidates || []
+    ).slice(0, 2);
+    if (backdropUrls.length) {
+      const verifiedBackdrop = await resolveFirstVerifiedCoverUrl(backdropUrls);
+      if (verifiedBackdrop) backdropPath = verifiedBackdrop;
+    }
+  }
 
   return {
     backdropPath: backdropPath || undefined,
@@ -2571,8 +2644,9 @@ async function loadDetailInternal(link) {
     if (!parts.length || !fields) return null;
 
     const movieCode = formatMovieCode(fields.detailInfo.movieId, fields.displayTitle);
+    const effectiveParams = getEffectiveParams({});
 
-    const coverPromise = resolveDetailCoverBundle(fields.cover, movieCode);
+    const coverPromise = resolveDetailCoverBundle(fields.cover, movieCode, effectiveParams);
     let resolvedPartsPromise;
     if (parts.length > 1) {
       resolvedPartsPromise = resolveFreshPlayableParts(baseUrl);
