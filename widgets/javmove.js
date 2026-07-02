@@ -1958,7 +1958,11 @@ function writeTranslateCache(key, text, source) {
 }
 
 function sanitizeSourceText(text) {
-  let value = decodeHtml(String(text || "")).trim();
+  let value = String(text || "");
+  if (value.indexOf("%") >= 0) {
+    try { value = decodeURIComponent(value); } catch (e) {}
+  }
+  value = decodeHtml(value).trim();
   if (!value) return "";
   if (/[\u00c0-\u00ff]{2,}/.test(value) && !/[\u4e00-\u9fff\u3040-\u30ff]/.test(value)) {
     try {
