@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.2.1",
+  version: "1.2.2",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -17,6 +17,17 @@ WidgetMetadata = {
         { title: "\u9ad8\u6e05\uff08DMM \u76f4\u94fe\u6821\u9a8c\uff0c\u5931\u8d25\u7528 JavMove\uff09", value: "hd" },
       ],
       value: "fast",
+    },
+    {
+      name: "dmmPosterSize",
+      title: "DMM 海报尺寸",
+      type: "enumeration",
+      enumOptions: [
+        { title: "小图（竖版 ps.jpg，详情海报位）", value: "small" },
+        { title: "大图（横版 pl.jpg）", value: "large" },
+      ],
+      value: "small",
+      belongTo: { paramName: "coverMode", value: ["hd"] },
     },
   ],
   modules: [
@@ -431,7 +442,7 @@ WidgetMetadata = {
 };
 
 const BASE_URL = "https://javmove.com";
-const GLOBAL_PARAM_KEYS = ["coverMode"];
+const GLOBAL_PARAM_KEYS = ["coverMode", "dmmPosterSize"];
 const VIDEO_CACHE_TTL = 3600;
 const PARTS_BUNDLE_TTL = 3600;
 const DETAIL_ITEM_CACHE_TTL = 300;
@@ -476,6 +487,7 @@ function getEffectiveParams(params) {
     }
   }
   if (!out.coverMode) out.coverMode = "fast";
+  if (!out.dmmPosterSize) out.dmmPosterSize = "small";
   return out;
 }
 
@@ -1304,7 +1316,7 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
 
 function readDetailMetaCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:meta:v1:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:meta:v2:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (
@@ -1323,7 +1335,7 @@ function writeDetailMetaCache(baseUrl, meta) {
   if (!meta) return;
   try {
     Widget.storage.set(
-      "detail:meta:v1:" + String(baseUrl),
+      "detail:meta:v2:" + String(baseUrl),
       JSON.stringify({ meta: meta, ts: Date.now() })
     );
   } catch (e) {}
@@ -1359,7 +1371,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v12:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v13:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1373,7 +1385,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v12:" + String(baseUrl),
+      "detail:v13:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1706,9 +1718,19 @@ function buildCoverUrlsFromVideoId(videoIdOrTitle) {
 }
 
 function pickSyncHdCoverUrls(code, posterSize) {
+  posterSize = String(posterSize || "small").toLowerCase();
   const candidates = buildCoverCandidatesFromVideoId(code);
-  // 高清模式统一使用小图(ps.jpg)，体积小加载快
-  return compactUniqueUrls(candidates.posterCandidates || []).slice(0, 2);
+  if (posterSize === "small") {
+    return compactUniqueUrls(candidates.posterCandidates || []).slice(0, 2);
+  }
+  return compactUniqueUrls(
+    (candidates.backdropCandidates || []).concat(candidates.posterCandidates || [])
+  ).slice(0, 2);
+}
+
+function pickSyncHdBackdropUrls(code) {
+  const candidates = buildCoverCandidatesFromVideoId(code);
+  return compactUniqueUrls(candidates.backdropCandidates || []).slice(0, 2);
 }
 
 function pickBestFromSrcset(srcset) {
@@ -1858,7 +1880,7 @@ function buildDetailCoverBundle(pageCover, code) {
   const pagePoster = resolvePagePosterFallback(pageCover);
   return {
     backdropPath: pagePoster || undefined,
-    posterPath: pagePoster || undefined,
+    posterPath: undefined,
     detailPoster: pagePoster || undefined,
   };
 }
@@ -1867,21 +1889,22 @@ async function resolveDetailCoverBundle(pageCover, code, params) {
   params = getEffectiveParams(params || {});
   const pagePoster = resolvePagePosterFallback(pageCover);
   const coverMode = String(params.coverMode || "fast");
+  const posterSize = String(params.dmmPosterSize || "small");
 
   if (coverMode !== "hd") {
     return buildDetailCoverBundle(pageCover, code);
   }
 
-  // 高清模式只获取小图(ps.jpg)，体积小加载快
-  const syncUrls = code ? pickSyncHdCoverUrls(code) : [];
-  let detailPoster = "";
-  if (syncUrls.length) {
-    detailPoster = await resolveFirstVerifiedCoverUrl(syncUrls);
-  }
+  const posterUrls = code ? pickSyncHdCoverUrls(code, posterSize) : [];
+  const backdropUrls = code ? pickSyncHdBackdropUrls(code) : [];
+  let detailPoster = posterUrls.length ? await resolveFirstVerifiedCoverUrl(posterUrls) : "";
+  let backdropPath = backdropUrls.length ? await resolveFirstVerifiedCoverUrl(backdropUrls) : "";
+
   if (!detailPoster) detailPoster = pagePoster;
+  if (!backdropPath) backdropPath = detailPoster || pagePoster;
 
   return {
-    backdropPath: detailPoster || pagePoster || undefined,
+    backdropPath: backdropPath || undefined,
     posterPath: detailPoster || undefined,
     detailPoster: detailPoster || undefined,
   };
@@ -1899,8 +1922,6 @@ function extractSynopsisRaw(html, rawTitle) {
   const metaMatch = String(html || "").match(/name="description"\s+content="([^"]+)"/i);
   if (metaMatch) {
     let meta = decodeHtml(metaMatch[1]).replace(/^Watch online\s+/i, "").trim();
-    const cut = meta.indexOf(", ");
-    if (cut > 0) meta = meta.slice(0, cut);
     meta = meta.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
     if (meta.length >= 16) return sanitizeSourceText(meta);
   }
@@ -2069,11 +2090,17 @@ function isValidChineseTranslation(text) {
   return /[\u4e00-\u9fff]/.test(value);
 }
 
-function shouldTranslateText(text) {
+function detectTranslateSourceLang(text) {
   const source = String(text || "").trim();
-  if (!source) return false;
-  if (/[\u3040-\u30ff\u4e00-\u9fff]/.test(source)) return false;
-  return /[a-zA-Z]/.test(source);
+  if (!source) return "";
+  if (/[\u3040-\u30ff]/.test(source)) return "ja";
+  if (/[\u4e00-\u9fff]/.test(source) && !/[a-zA-Z]{4,}/.test(source)) return "";
+  if (/[a-zA-Z]/.test(source)) return "en";
+  return "auto";
+}
+
+function shouldTranslateText(text) {
+  return !!detectTranslateSourceLang(text);
 }
 
 function resolveDisplaySynopsis(source, translated) {
@@ -2082,7 +2109,7 @@ function resolveDisplaySynopsis(source, translated) {
   if (!shouldTranslateText(raw)) return raw;
   const zh = sanitizeSourceText(translated);
   if (zh && isValidChineseTranslation(zh)) return zh;
-  return "";
+  return raw;
 }
 
 function applySynopsisToFields(fields, parts, synopsisText) {
@@ -2125,30 +2152,57 @@ async function applySynopsisTranslation(fields, parts) {
 async function translateToChinese(text) {
   const source = sanitizeSourceText(text);
   if (!source) return "";
-  const cacheKey = hashText(source);
+  const sl = detectTranslateSourceLang(source) || "auto";
+  const cacheKey = hashText(sl + ":" + source);
   const cached = readTranslateCache(cacheKey);
   if (cached) return cached;
 
-  // 限制文本长度为300字符，简介足够用且更快
-  const truncated = source.slice(0, 300);
-  const httpOpts = { timeout: 3000, headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" } };
+  const truncated = source.slice(0, 500);
+  const httpOpts = {
+    timeout: 8000,
+    headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" },
+  };
 
-  // 并行请求两个翻译服务，取最快的成功结果
-  const googlePromise = Widget.http.get(
-    "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=" + encodeURIComponent(truncated),
-    httpOpts
-  ).then(function(r) { return parseTranslatePayload(r.data); }).catch(function() { return ""; });
+  const googlePromise = Widget.http
+    .get(
+      "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" +
+        encodeURIComponent(sl) +
+        "&tl=zh-CN&dt=t&q=" +
+        encodeURIComponent(truncated),
+      httpOpts
+    )
+    .then(function (r) {
+      return parseTranslatePayload(r.data);
+    })
+    .catch(function () {
+      return "";
+    });
 
-  const mmPromise = Widget.http.get(
-    "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(truncated) + "&langpair=en|zh-CN",
-    httpOpts
-  ).then(function(r) { return parseTranslatePayload(r.data); }).catch(function() { return ""; });
+  const mmLang = sl === "ja" ? "ja" : sl === "en" ? "en" : "auto";
+  const mmPromise = Widget.http
+    .get(
+      "https://api.mymemory.translated.net/get?q=" +
+        encodeURIComponent(truncated) +
+        "&langpair=" +
+        encodeURIComponent(mmLang + "|zh-CN"),
+      httpOpts
+    )
+    .then(function (r) {
+      return parseTranslatePayload(r.data);
+    })
+    .catch(function () {
+      return "";
+    });
 
-  var results = await Promise.allSettled([googlePromise, mmPromise]);
+  const results = await Promise.allSettled([googlePromise, mmPromise]);
 
-  var part = "";
-  for (var i = 0; i < results.length; i++) {
-    if (results[i].status === "fulfilled" && results[i].value && isValidChineseTranslation(results[i].value)) {
+  let part = "";
+  for (let i = 0; i < results.length; i++) {
+    if (
+      results[i].status === "fulfilled" &&
+      results[i].value &&
+      isValidChineseTranslation(results[i].value)
+    ) {
       part = results[i].value;
       break;
     }
@@ -2622,6 +2676,41 @@ async function loadDetail(link) {
   return detailInflight[baseUrl];
 }
 
+async function refreshDetailPresentation(item, baseUrl) {
+  if (!item) return item;
+  let fields = readDetailMetaCache(baseUrl);
+  if (!fields) return item;
+
+  const parts = fields.parts && fields.parts.length ? fields.parts : [];
+  await applySynopsisTranslation(fields, parts);
+
+  const movieCode = formatMovieCode(fields.detailInfo.movieId, fields.displayTitle);
+  const coverBundle = await resolveDetailCoverBundle(
+    fields.cover,
+    movieCode,
+    getEffectiveParams({})
+  );
+
+  const merged = Object.assign({}, item, {
+    title: fields.displayTitle || item.title,
+    description: fields.description || item.description,
+    backdropPath: coverBundle.backdropPath,
+    posterPath: coverBundle.posterPath,
+    detailPoster: coverBundle.detailPoster,
+    backdropPaths: fields.backdropPaths || item.backdropPaths,
+    releaseDate: fields.detailInfo.releaseDate || item.releaseDate,
+    genreItems:
+      fields.genreItems && fields.genreItems.length ? fields.genreItems : item.genreItems,
+    peoples: fields.peoples && fields.peoples.length ? fields.peoples : item.peoples,
+    relatedItems:
+      fields.relatedItems && fields.relatedItems.length ? fields.relatedItems : item.relatedItems,
+  });
+
+  return stripUndefined(
+    Object.assign(merged, buildExternalMatchFields(movieCode, fields.displayTitle))
+  );
+}
+
 async function loadDetailInternal(link) {
   try {
     const baseUrl = normalizeMoviePageUrl(String(link));
@@ -2630,7 +2719,8 @@ async function loadDetailInternal(link) {
     const cachedItem = readDetailItemCache(baseUrl);
     if (cachedItem && hasCompleteMeta(cachedItem)) {
       const freshParts = await resolveFreshPlayableParts(baseUrl);
-      return mergeFreshPlayback(cachedItem, freshParts);
+      const refreshed = await refreshDetailPresentation(cachedItem, baseUrl);
+      return mergeFreshPlayback(refreshed, freshParts);
     }
 
     let parts = [];
