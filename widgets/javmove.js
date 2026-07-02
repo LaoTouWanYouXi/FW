@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.2.3",
+  version: "1.2.4",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -14,7 +14,7 @@ WidgetMetadata = {
       type: "enumeration",
       enumOptions: [
         { title: "\u5feb\u901f\uff08JavMove \u9875\u9762\u5c01\u9762\uff09", value: "fast" },
-        { title: "\u9ad8\u6e05\uff08DMM \u76f4\u94fe\u6821\u9a8c\uff0c\u5931\u8d25\u7528 JavMove\uff09", value: "hd" },
+        { title: "\u9ad8\u6e05\uff08DMM \u76f4\u94fe\uff0c\u5931\u8d25\u7528 JavMove\uff09", value: "hd" },
       ],
       value: "fast",
     },
@@ -1195,44 +1195,20 @@ function parseDetailInfo($, html) {
   return info;
 }
 
-function buildDetailDescription(info, partCount, totalSec, partSec, synopsisText) {
-  const lines = [];
-  if (synopsisText) lines.push("\u7b80\u4ecb\uff1a" + synopsisText);
-  if (info.movieId) lines.push("\u756a\u53f7\uff1a" + formatMovieCode(info.movieId, ""));
-  if (info.releaseDate) lines.push("\u53d1\u5e03\u65e5\u671f\uff1a" + info.releaseDate);
-  if (info.publishDate) lines.push("\u4e0a\u67b6\u65e5\u671f\uff1a" + info.publishDate);
-  if (info.actresses.length) {
-    lines.push("\u5973\u4f18\uff1a" + info.actresses.join("\u3001"));
-  }
-  if (info.label) lines.push("\u53d1\u884c\u5546\uff1a" + info.label);
-  if (info.maker) lines.push("\u5236\u4f5c\u5546\uff1a" + info.maker);
-  if (totalSec > 0) {
-    lines.push("\u65f6\u957f\uff1a" + formatDurationSeconds(totalSec));
-  }
-  if (partCount > 1) {
-    let segmentLine =
-      "\u5206\u96c6\uff1a\u5171" + partCount + "\u96c6";
-    if (partSec > 0) {
-      segmentLine += "\uff0c\u6bcf\u96c6\u7ea6" + formatDurationSeconds(partSec);
-    }
-    segmentLine +=
-      "\u3002\u8bf7\u5728\u64ad\u653e\u5668\u300c\u64ad\u653e\u6e90\u300d\u4e2d\u5207\u6362\u5404\u5206\u6bb5\u3002";
-    lines.push(segmentLine);
-  }
-  return lines.join("\n");
+function buildSynopsisDescription(synopsisText) {
+  return sanitizeSourceText(synopsisText) || "";
 }
 
 async function resolvePartPlayback(parts, baseUrl) {
   const referer = baseUrl || BASE_URL + "/";
-  const resolved = [];
-  for (let index = 0; index < parts.length; index++) {
-    const part = parts[index];
-    let playback = await resolveVideoUrlForPage(part.pageUrl, referer);
-    if (!playback && index === 0) {
-      playback = await resolveVideoUrlForPage(part.pageUrl, part.pageUrl);
-    }
-    resolved.push(
-      playback
+  const tasks = (parts || []).map(function (part, index) {
+    return resolveVideoUrlForPage(part.pageUrl, referer).then(function (playback) {
+      if (!playback && index === 0) {
+        return resolveVideoUrlForPage(part.pageUrl, part.pageUrl);
+      }
+      return playback;
+    }).then(function (playback) {
+      return playback
         ? {
             label: part.label,
             pageUrl: part.pageUrl,
@@ -1244,10 +1220,10 @@ async function resolvePartPlayback(parts, baseUrl) {
             pageUrl: part.pageUrl,
             videoUrl: "",
             customHeaders: null,
-          }
-    );
-  }
-  return resolved;
+          };
+    });
+  });
+  return Promise.all(tasks);
 }
 
 async function measurePartDurations(resolvedParts) {
@@ -1270,16 +1246,15 @@ function stripUndefined(obj) {
 function hasCompleteMeta(item) {
   return !!(
     item &&
-    item.description &&
     item.backdropPaths &&
-    item.backdropPaths.length > 0
+    item.backdropPaths.length > 0 &&
+    (item.seriesName || item.name || item.matchCode)
   );
 }
 
 function hasCompleteMetaFields(fields) {
   return !!(
     fields &&
-    fields.description &&
     fields.backdropPaths &&
     fields.backdropPaths.length > 0 &&
     fields.parts &&
@@ -1296,27 +1271,28 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
   coverBundle =
     coverBundle || buildDetailCoverBundle(fields.cover, movieCode || fields.displayTitle);
   const originalTitle = fields.synopsisRaw || fields.displayTitle;
-  return stripUndefined(
-    Object.assign(
-      {
-        id: movieCode || baseUrl,
-        type: "url",
-        title: fields.displayTitle,
-        backdropPath: coverBundle.backdropPath || undefined,
-        posterPath: coverBundle.posterPath || undefined,
-        detailPoster: coverBundle.detailPoster || undefined,
-        backdropPaths: fields.backdropPaths,
-        description: fields.description || undefined,
-        releaseDate: fields.detailInfo.releaseDate || undefined,
-        genreItems: fields.genreItems.length > 0 ? fields.genreItems : undefined,
-        peoples: fields.peoples.length > 0 ? fields.peoples : undefined,
-        relatedItems: fields.relatedItems.length > 0 ? fields.relatedItems : undefined,
-        link: baseUrl,
-        mediaType: "movie",
-        playerType: isMultiPartMovie(parts) ? "system" : undefined,
-      },
-      buildDetailMatchFields(movieCode, originalTitle, fields.synopsisDisplay || "")
-    )
+  return finalizeDetailItem(
+    {
+      id: movieCode || baseUrl,
+      type: "url",
+      title: fields.displayTitle,
+      backdropPath: coverBundle.backdropPath || undefined,
+      posterPath: coverBundle.posterPath || undefined,
+      detailPoster: coverBundle.detailPoster || undefined,
+      backdropPaths: fields.backdropPaths,
+      releaseDate: fields.detailInfo.releaseDate || undefined,
+      genreItems: fields.genreItems.length > 0 ? fields.genreItems : undefined,
+      peoples: fields.peoples.length > 0 ? fields.peoples : undefined,
+      relatedItems: fields.relatedItems.length > 0 ? fields.relatedItems : undefined,
+      link: baseUrl,
+      webUrl: baseUrl,
+      mediaType: "movie",
+      playerType: isMultiPartMovie(parts) ? "system" : undefined,
+    },
+    movieCode,
+    originalTitle,
+    fields.synopsisDisplay || "",
+    fields.rating
   );
 }
 
@@ -1377,7 +1353,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v14:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v15:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1391,7 +1367,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v14:" + String(baseUrl),
+      "detail:v15:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1606,6 +1582,44 @@ function resolveMovieCode(movieId, displayTitle, extraText) {
   return code || "";
 }
 
+function formatDisplayTitle(code, title) {
+  code = String(code || "").trim();
+  title = String(title || "").replace(/\s+/g, " ").trim();
+  if (!code) return title;
+  if (!title) return code;
+  const upperTitle = title.toUpperCase();
+  const upperCode = code.toUpperCase();
+  const looseCode = upperCode.replace(/[^A-Z0-9]/g, "");
+  const looseTitlePrefix = upperTitle.replace(/[^A-Z0-9]/g, "");
+  if (upperTitle.indexOf(upperCode) === 0) {
+    title = title.slice(code.length).replace(/^[\s\-–—:]+/, "").trim();
+  } else if (looseTitlePrefix.indexOf(looseCode) === 0) {
+    title = title
+      .replace(/^[\s\-–—:]*/, "")
+      .replace(new RegExp("^" + code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&"), "i"), "")
+      .trim();
+  }
+  return title ? code + " " + title : code;
+}
+
+function parseDetailRating($, html) {
+  const text = String(html || "");
+  let scoreText = "";
+  try {
+    scoreText = $(".rating, .score, [class*='rating'], [class*='score']").first().text();
+  } catch (e) {}
+  if (!scoreText) {
+    const match = text.match(/(?:rating|score|stars?)[^>]*>[\s\S]{0,120}?([\d.]+)/i);
+    if (match) scoreText = match[1];
+  }
+  if (!scoreText) return 0;
+  const numMatch = String(scoreText).match(/([\d.]+)/);
+  if (!numMatch) return 0;
+  let score = parseFloat(numMatch[1]);
+  if (isNaN(score)) return 0;
+  return score <= 5 ? Math.round(score * 2 * 10) / 10 : score;
+}
+
 /** Forward 详情 TMDB / 豆瓣匹配（与 javdb.js buildGuangyaMatchFields 相同） */
 function buildGuangyaMatchFields(rawCode, rawTitle, description) {
   rawCode = String(rawCode || "").trim();
@@ -1630,8 +1644,10 @@ function buildGuangyaMatchFields(rawCode, rawTitle, description) {
   return fields;
 }
 
-function buildDetailMatchFields(movieCode, rawTitle, synopsisText) {
-  const matchDescription = synopsisText || (movieCode ? "\u756a\u53f7: " + movieCode : "");
+function buildDetailMatchFields(movieCode, rawTitle, synopsisText, rating) {
+  const synopsis = sanitizeSourceText(synopsisText);
+  const matchDescription =
+    synopsis || (movieCode ? "\u756a\u53f7: " + movieCode : "");
   const match = buildGuangyaMatchFields(movieCode, rawTitle, matchDescription);
   return {
     id: movieCode || undefined,
@@ -1641,7 +1657,18 @@ function buildDetailMatchFields(movieCode, rawTitle, synopsisText) {
     originalTitle: match.originalTitle,
     code: match.code,
     matchCode: match.matchCode,
+    rating: rating !== undefined && rating !== null ? rating : 0,
   };
+}
+
+function finalizeDetailItem(baseItem, movieCode, rawTitle, synopsisText, rating) {
+  const synopsis = buildSynopsisDescription(synopsisText);
+  const matchFields = buildDetailMatchFields(movieCode, rawTitle, synopsis, rating);
+  return stripUndefined(
+    Object.assign({}, baseItem, matchFields, {
+      description: synopsis || undefined,
+    })
+  );
 }
 
 function enrichListItemMatchFields(item, rawTitle) {
@@ -1649,7 +1676,9 @@ function enrichListItemMatchFields(item, rawTitle) {
   const movieCode = resolveMovieCode("", item.title || rawTitle || "", rawTitle || "");
   const listDescription = movieCode ? "\u756a\u53f7: " + movieCode : "";
   return stripUndefined(
-    Object.assign({}, item, buildGuangyaMatchFields(movieCode, rawTitle || item.title || "", listDescription))
+    Object.assign({}, item, buildGuangyaMatchFields(movieCode, rawTitle || item.title || "", listDescription), {
+      rating: 0,
+    })
   );
 }
 
@@ -1971,14 +2000,14 @@ async function resolveDetailCoverBundle(pageCover, code, params) {
   const coverMode = String(params.coverMode || "fast");
   const posterSize = String(params.dmmPosterSize || "small");
 
-  if (coverMode !== "hd") {
+  if (coverMode !== "hd" || !code) {
     return buildDetailCoverBundle(pageCover, code);
   }
 
-  const posterUrls = code ? pickSyncHdCoverUrls(code, posterSize) : [];
-  const backdropUrls = code ? pickSyncHdBackdropUrls(code) : [];
-  let detailPoster = posterUrls.length ? await resolveFirstVerifiedCoverUrl(posterUrls) : "";
-  let backdropPath = backdropUrls.length ? await resolveFirstVerifiedCoverUrl(backdropUrls) : "";
+  const posterUrls = pickSyncHdCoverUrls(code, posterSize);
+  const backdropUrls = pickSyncHdBackdropUrls(code);
+  let detailPoster = posterUrls[0] || "";
+  let backdropPath = backdropUrls[0] || "";
 
   if (!detailPoster) detailPoster = pagePoster;
   if (!backdropPath) backdropPath = detailPoster || pagePoster;
@@ -2194,16 +2223,9 @@ function resolveDisplaySynopsis(source, translated) {
 
 function applySynopsisToFields(fields, parts, synopsisText) {
   if (!fields) return fields;
-  const partCount = parts && parts.length ? parts.length : 0;
-  const displaySynopsis = sanitizeSourceText(synopsisText);
+  const displaySynopsis = buildSynopsisDescription(synopsisText);
   fields.synopsisDisplay = displaySynopsis;
-  fields.description = buildDetailDescription(
-    fields.detailInfo,
-    partCount,
-    0,
-    0,
-    displaySynopsis
-  );
+  fields.description = displaySynopsis;
   return fields;
 }
 
@@ -2664,8 +2686,9 @@ function buildDetailFieldsFromHtml(html, baseUrl, parts) {
     $('meta[property="og:title"]').attr("content") ||
     meta.title ||
     "";
+  const movieCode = resolveMovieCode(detailInfo.movieId, rawTitle, "");
   const displayTitle =
-    formatMovieCode(detailInfo.movieId, rawTitle) ||
+    formatDisplayTitle(movieCode, rawTitle) ||
     rawTitle.split("|")[0].trim();
   const synopsisRaw = extractSynopsisRaw(html, rawTitle);
   const cover =
@@ -2681,13 +2704,7 @@ function buildDetailFieldsFromHtml(html, baseUrl, parts) {
     displayTitle,
     baseUrl
   );
-  const description = buildDetailDescription(
-    detailInfo,
-    parts.length,
-    0,
-    0,
-    ""
-  );
+  const rating = parseDetailRating($, html);
   const genreItems = collectDetailGenreItems(html, $);
   const peoples = collectDetailPeoples($);
   const relatedItems = parseNextMovieRelatedItems(html, $, baseUrl, 12);
@@ -2695,8 +2712,10 @@ function buildDetailFieldsFromHtml(html, baseUrl, parts) {
     displayTitle: displayTitle,
     cover: cover,
     backdropPaths: backdropPaths,
-    description: description,
+    description: "",
     synopsisRaw: synopsisRaw,
+    synopsisDisplay: "",
+    rating: rating,
     detailInfo: detailInfo,
     genreItems: genreItems,
     peoples: peoples,
@@ -2722,27 +2741,28 @@ function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
   const isSeries = isMultiPartMovie(parts);
   const originalTitle = fields.synopsisRaw || fields.displayTitle;
 
-  const item = stripUndefined(
-    Object.assign(
-      {
-        id: movieCode || baseUrl,
-        type: "url",
-        title: fields.displayTitle,
-        backdropPath: coverBundle.backdropPath,
-        posterPath: coverBundle.posterPath,
-        detailPoster: coverBundle.detailPoster,
-        backdropPaths: fields.backdropPaths,
-        description: fields.description || undefined,
-        releaseDate: fields.detailInfo.releaseDate || undefined,
-        genreItems: fields.genreItems.length > 0 ? fields.genreItems : undefined,
-        peoples: fields.peoples.length > 0 ? fields.peoples : undefined,
-        relatedItems: fields.relatedItems.length > 0 ? fields.relatedItems : undefined,
-        link: baseUrl,
-        mediaType: "movie",
-        playerType: "system",
-      },
-      buildDetailMatchFields(movieCode, originalTitle, fields.synopsisDisplay || "")
-    )
+  const item = finalizeDetailItem(
+    {
+      id: movieCode || baseUrl,
+      type: "url",
+      title: fields.displayTitle,
+      backdropPath: coverBundle.backdropPath,
+      posterPath: coverBundle.posterPath,
+      detailPoster: coverBundle.detailPoster,
+      backdropPaths: fields.backdropPaths,
+      releaseDate: fields.detailInfo.releaseDate || undefined,
+      genreItems: fields.genreItems.length > 0 ? fields.genreItems : undefined,
+      peoples: fields.peoples.length > 0 ? fields.peoples : undefined,
+      relatedItems: fields.relatedItems.length > 0 ? fields.relatedItems : undefined,
+      link: baseUrl,
+      webUrl: baseUrl,
+      mediaType: "movie",
+      playerType: "system",
+    },
+    movieCode,
+    originalTitle,
+    fields.synopsisDisplay || "",
+    fields.rating
   );
 
   if (!isSeries) {
@@ -2763,47 +2783,6 @@ async function loadDetail(link) {
   return detailInflight[baseUrl];
 }
 
-async function refreshDetailPresentation(item, baseUrl) {
-  if (!item) return item;
-  let fields = readDetailMetaCache(baseUrl);
-  if (!fields) return item;
-
-  const parts = fields.parts && fields.parts.length ? fields.parts : [];
-  await applySynopsisTranslation(fields, parts);
-
-  const movieCode = resolveMovieCode(
-    fields.detailInfo.movieId,
-    fields.displayTitle,
-    fields.synopsisRaw || fields.synopsisDisplay || ""
-  );
-  const coverBundle = await resolveDetailCoverBundle(
-    fields.cover,
-    movieCode || fields.displayTitle,
-    getEffectiveParams({})
-  );
-  const originalTitle = fields.synopsisRaw || fields.displayTitle;
-
-  const merged = Object.assign({}, item, {
-    id: movieCode || item.id || baseUrl,
-    title: fields.displayTitle || item.title,
-    description: fields.description || item.description,
-    backdropPath: coverBundle.backdropPath,
-    posterPath: coverBundle.posterPath,
-    detailPoster: coverBundle.detailPoster,
-    backdropPaths: fields.backdropPaths || item.backdropPaths,
-    releaseDate: fields.detailInfo.releaseDate || item.releaseDate,
-    genreItems:
-      fields.genreItems && fields.genreItems.length ? fields.genreItems : item.genreItems,
-    peoples: fields.peoples && fields.peoples.length ? fields.peoples : item.peoples,
-    relatedItems:
-      fields.relatedItems && fields.relatedItems.length ? fields.relatedItems : item.relatedItems,
-  });
-
-  return stripUndefined(
-    Object.assign(merged, buildDetailMatchFields(movieCode, originalTitle, fields.synopsisDisplay || ""))
-  );
-}
-
 async function loadDetailInternal(link) {
   try {
     const baseUrl = normalizeMoviePageUrl(String(link));
@@ -2812,8 +2791,7 @@ async function loadDetailInternal(link) {
     const cachedItem = readDetailItemCache(baseUrl);
     if (cachedItem && hasCompleteMeta(cachedItem)) {
       const freshParts = await resolveFreshPlayableParts(baseUrl);
-      const refreshed = await refreshDetailPresentation(cachedItem, baseUrl);
-      return mergeFreshPlayback(refreshed, freshParts);
+      return mergeFreshPlayback(cachedItem, freshParts);
     }
 
     let parts = [];
