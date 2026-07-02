@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.9.4",
+  version: "1.9.5",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -1161,9 +1161,27 @@ function decodeLink(link) {
   return raw;
 }
 
+function normalizeVideoDetailPath(link) {
+  var raw = String(link || "").trim();
+  if (!raw) return "";
+  var decoded = decodeLink(raw);
+  if (!decoded) return "";
+  if (decoded.indexOf("http://") === 0 || decoded.indexOf("https://") === 0) {
+    decoded = extractPath(decoded, JAVDB_DEFAULT_BASE);
+  }
+  if (decoded.indexOf("/v/") === 0) return decoded.split("#")[0];
+  var embedded = decoded.match(/\/v\/[A-Za-z0-9]+/);
+  if (embedded) return embedded[0].split("#")[0];
+  if (/^[a-z0-9]{3,20}$/i.test(decoded)) return "/v/" + decoded;
+  return "";
+}
+
 function resolveDetailPath(link, params) {
   var raw = String(link || "").trim();
   if (!raw) return "";
+  var videoPath = normalizeVideoDetailPath(raw);
+  if (videoPath) return videoPath;
+
   var decoded = decodeLink(raw);
   if (!decoded) return "";
   if (decoded.indexOf("http://") === 0 || decoded.indexOf("https://") === 0) {
@@ -2181,35 +2199,48 @@ function extractBackgroundImageUrl(style) {
   return match ? match[1] : "";
 }
 
+function isUselessListCoverUrl(url) {
+  var u = String(url || "").trim().toLowerCase();
+  if (!u || u.indexOf("data:") === 0) return true;
+  if (/placeholder|default_cover|loading|blank|spacer|1x1/.test(u)) return true;
+  return false;
+}
+
 function extractListCardCover($, box, base) {
   var candidates = [];
+  var scopes = [box];
+  var item = box.closest(".item");
+  if (item.length) scopes.push(item.first());
 
   function collect(raw) {
     var url = upgradeJavdbImageUrl(absUrl(String(raw || "").trim(), base));
-    if (!url) return;
+    if (!url || isUselessListCoverUrl(url)) return;
     for (var i = 0; i < candidates.length; i++) {
       if (candidates[i] === url) return;
     }
     candidates.push(url);
   }
 
-  collect(attrOf($, box, "data-preview"));
-  collect(attrOf($, box, "data-src"));
-  collect(extractBackgroundImageUrl(attrOf($, box, "style")));
-  collect(extractBackgroundImageUrl(attrOf($, box.find(".item-image, .video-cover, .cover").first(), "style")));
-  box.find(".item-image img, .video-cover img, img").each(function () {
-    var img = $(this);
-    collect(attrOf($, img, "data-src"));
-    collect(attrOf($, img, "data-original"));
-    collect(attrOf($, img, "src"));
-    var srcset = attrOf($, img, "srcset");
-    if (srcset) {
-      var parts = srcset.split(",");
-      for (var s = parts.length - 1; s >= 0; s--) {
-        collect(String(parts[s] || "").trim().split(/\s+/)[0]);
+  for (var si = 0; si < scopes.length; si++) {
+    var scope = scopes[si];
+    collect(attrOf($, scope, "data-preview"));
+    collect(attrOf($, scope, "data-src"));
+    collect(extractBackgroundImageUrl(attrOf($, scope, "style")));
+    collect(extractBackgroundImageUrl(attrOf($, scope.find(".item-image, .video-cover, .cover").first(), "style")));
+    scope.find(".item-image img, .video-cover img, img").each(function () {
+      var img = $(this);
+      collect(attrOf($, img, "data-src"));
+      collect(attrOf($, img, "data-original"));
+      collect(attrOf($, img, "src"));
+      var srcset = attrOf($, img, "srcset");
+      if (srcset) {
+        var parts = srcset.split(",");
+        for (var s = parts.length - 1; s >= 0; s--) {
+          collect(String(parts[s] || "").trim().split(/\s+/)[0]);
+        }
       }
-    }
-  });
+    });
+  }
 
   for (var i = 0; i < candidates.length; i++) {
     if (isLandscapeListCoverUrl(candidates[i])) return candidates[i];
@@ -2440,30 +2471,34 @@ function parseListItems(html, params) {
   var rawItems = [];
   var seen = {};
 
-  $(".movie-list .item a.box, #videos .grid-item a.box, #videos a.box, .grid-item.column a.box, .grid.columns .grid-item a.box, .items .item a.box, a.box[href*='/v/']").each(function () {
+  $(".movie-list .item a.box, #videos .grid-item a.box, #videos a.box, .grid-item.column a.box, .grid.columns .grid-item a.box, .items .item a.box").each(function () {
     var box = $(this);
     var href = attrOf($, box, "href");
     var path = href.indexOf("http") === 0 ? href.replace(base, "") : href;
+    path = String(path || "").split("#")[0];
     if (!path || path.indexOf("/v/") !== 0 || seen[path]) return;
     seen[path] = true;
+    var videoId = path.split("/").pop() || path;
     var titleNode = box.find(".video-title strong").first();
     var titleText = textOf($, titleNode);
     var subTitle = textOf($, box.find(".video-title").first());
     var rawTitle = box.attr("title") || subTitle || titleText;
     var matchCode = titleText || extractMatchCode(rawTitle);
+    var fallbackCover = extractListCardCover($, box, base);
+    if (!fallbackCover) fallbackCover = buildJavdbCoverFromVideoId(videoId);
     rawItems.push({
-      id: matchCode || path.split("/").pop() || path,
+      id: videoId,
       type: "url",
       mediaType: "movie",
-      title: formatDisplayTitle(matchCode, rawTitle) || String(rawTitle || path.split("/").pop()).replace(/\s+/g, " ").trim(),
-      fallbackCover: extractListCardCover($, box, base),
+      title: formatDisplayTitle(matchCode, rawTitle) || String(rawTitle || videoId).replace(/\s+/g, " ").trim(),
+      fallbackCover: fallbackCover,
       rating: parseRatingText(textOf($, box.find(".score").first())),
       releaseDate: textOf($, box.find(".meta").first()) || "",
       link: encodeLink(path),
       matchCode: matchCode,
       originalTitle: rawTitle,
       code: matchCode,
-      videoId: path.split("/").pop() || path,
+      videoId: videoId,
       description: matchCode ? "番号: " + matchCode : "",
     });
   });
@@ -2476,8 +2511,9 @@ function enrichMovieItems(rawItems, params) {
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId || raw.id, forList: true }, params);
-    var backdropPath = covers.listBackdrop || "";
+    var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId, forList: true }, params);
+    var backdropPath =
+      covers.listBackdrop || buildJavdbCoverFromVideoId(raw.videoId) || raw.fallbackCover || "";
     items.push(Object.assign(
       {
         id: raw.id,
@@ -3230,16 +3266,17 @@ async function searchJavdb(params) {
 async function loadDetail(link) {
   try {
     var params = getEffectiveParams({});
-    var path = resolveDetailPath(link, params);
-    if (!path) return null;
-
-    if (path.indexOf("/v/") === 0) {
-      var pageUrl = detailPageUrl(path, params);
+    var videoPath = normalizeVideoDetailPath(link);
+    if (videoPath && videoPath.indexOf("/v/") === 0) {
+      var pageUrl = detailPageUrl(videoPath, params);
       var html = await fetchHtml(pageUrl, params);
-      var detail = await parseDetailPage(html, path, params);
+      var detail = await parseDetailPage(html, videoPath, params);
       if (!detail || !detail.title) return null;
       return detail;
     }
+
+    var path = resolveDetailPath(link, params);
+    if (!path) return null;
 
     if (
       path.indexOf("/actors/") === 0 ||

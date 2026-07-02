@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.24",
+  version: "1.0.25",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -866,10 +866,6 @@ function findPartIndex(parts, label) {
   return 0;
 }
 
-function buildEpisodeItemId(baseUrl, label) {
-  return normalizeMoviePageUrl(baseUrl) + "|ep|" + label;
-}
-
 function formatDurationSeconds(sec) {
   const total = Math.max(0, Math.round(Number(sec) || 0));
   const h = Math.floor(total / 3600);
@@ -1166,7 +1162,7 @@ function buildDetailDescription(info, partCount, totalSec, partSec, synopsisText
       segmentLine += "\uff0c\u6bcf\u96c6\u7ea6" + formatDurationSeconds(partSec);
     }
     segmentLine +=
-      "\u3002\u64ad\u653e\u5668\u9ed8\u8ba4\u7b2c1\u96c6\uff0c\u8bf7\u5728\u5267\u96c6\u5217\u8868\u5207\u6362\u540e\u7eed\u96c6\u6570\u3002";
+      "\u3002\u8bf7\u5728\u64ad\u653e\u5668\u300c\u64ad\u653e\u6e90\u300d\u4e2d\u5207\u6362\u5404\u5206\u6bb5\u3002";
     lines.push(segmentLine);
   }
   return lines.join("\n");
@@ -1237,40 +1233,24 @@ function hasCompleteMetaFields(fields) {
   );
 }
 
-function composeDetailMetaOnly(baseUrl, fields, parts) {
-  const isSeries = parts.length > 1;
-  const episodeItems = buildEpisodeItemsFromParts(
-    baseUrl,
-    fields.displayTitle,
-    parts,
-    [],
-    fields.cover
-  );
-  const childItems = buildPartChildItemsFromParts(
-    baseUrl,
-    fields.displayTitle,
-    parts,
-    [],
-    fields.cover
-  );
+function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
+  coverBundle = coverBundle || buildDetailCoverBundle(fields.cover, formatMovieCode(fields.detailInfo.movieId, fields.displayTitle));
   return stripUndefined({
     id: baseUrl,
     type: "url",
     title: fields.displayTitle,
-    backdropPath: fields.cover || undefined,
-    posterPath: fields.cover || undefined,
+    backdropPath: coverBundle.backdropPath || undefined,
+    posterPath: coverBundle.posterPath || undefined,
+    detailPoster: coverBundle.detailPoster || undefined,
     backdropPaths: fields.backdropPaths,
     description: fields.description || undefined,
     releaseDate: fields.detailInfo.releaseDate || undefined,
     genreItems: fields.genreItems.length > 0 ? fields.genreItems : undefined,
     peoples: fields.peoples.length > 0 ? fields.peoples : undefined,
-    episodeItems: isSeries ? episodeItems : undefined,
-    childItems: isSeries ? childItems : undefined,
     relatedItems: fields.relatedItems.length > 0 ? fields.relatedItems : undefined,
     link: baseUrl,
     mediaType: "movie",
-    seriesName: isSeries ? fields.displayTitle : undefined,
-    playerType: isSeries ? "system" : undefined,
+    playerType: isMultiPartMovie(parts) ? "system" : undefined,
   });
 }
 
@@ -1301,69 +1281,39 @@ function writeDetailMetaCache(baseUrl, meta) {
   } catch (e) {}
 }
 
-function playbackMapFromResolved(resolvedParts) {
-  const map = {};
-  for (let i = 0; i < (resolvedParts || []).length; i++) {
-    const part = resolvedParts[i];
-    if (part && part.label) map[String(part.label)] = part;
-  }
-  return map;
-}
+function mergeFreshPlayback(item, resolvedParts) {
+  if (!item || !resolvedParts || !resolvedParts.length) return item;
 
-function buildEpisodeItemsFromParts(
-  baseUrl,
-  displayTitle,
-  parts,
-  resolvedParts,
-  cover
-) {
-  if (!parts || parts.length <= 1) return [];
-  const movieUrl = normalizeMoviePageUrl(baseUrl);
-  const items = [];
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    const epNum = Number(part.label) || i + 1;
-    const epLabel = "\u7b2c" + part.label + "\u96c6";
-    const item = stripUndefined({
-      id: buildEpisodeItemId(movieUrl, part.label),
-      type: "url",
-      title: epLabel,
-      episodeName: epLabel,
-      episode: epNum,
-      season: 1,
-      link: movieUrl,
-      mediaType: "movie",
-      backdropPath: cover || undefined,
+  const merged = Object.assign({}, item);
+  const multiPart = isMultiPartMovie(resolvedParts);
+
+  delete merged.episodeItems;
+  delete merged.childItems;
+  delete merged.seriesName;
+  delete merged.episode;
+  delete merged.episodeName;
+
+  if (!multiPart) {
+    const part = resolvedParts.find(function (p) {
+      return p && p.videoUrl;
     });
-    items.push(item);
+    if (part) {
+      merged.videoUrl = part.videoUrl;
+      merged.customHeaders = buildPlayHeaders(part.videoUrl, part.pageUrl);
+      merged.playerType = "system";
+    }
+  } else {
+    delete merged.videoUrl;
+    delete merged.customHeaders;
+    merged.playerType = "system";
   }
-  return items.length > 1 ? items : [];
-}
 
-function buildPartChildItemsFromParts(
-  baseUrl,
-  displayTitle,
-  parts,
-  resolvedParts,
-  cover
-) {
-  const items = buildEpisodeItemsFromParts(
-    baseUrl,
-    displayTitle,
-    parts,
-    resolvedParts,
-    cover
-  );
-  return items.map(function (item) {
-    const child = Object.assign({}, item);
-    delete child.title;
-    return child;
-  });
+  return stripUndefined(merged);
 }
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v7:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v8:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1377,39 +1327,10 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v7:" + String(baseUrl),
+      "detail:v8:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
-}
-
-function mergeFreshPlayback(item, resolvedParts) {
-  if (!item || !resolvedParts || !resolvedParts.length) return item;
-  const playable = resolvedParts.filter(function (part) {
-    return part && part.videoUrl;
-  });
-  if (!playable.length) return item;
-
-  const merged = Object.assign({}, item);
-  const multiPart =
-    isMultiPartMovie(playable) ||
-    (merged.episodeItems && merged.episodeItems.length > 1) ||
-    (merged.childItems && merged.childItems.length > 1);
-
-  if (!multiPart) {
-    merged.videoUrl = playable[0].videoUrl;
-    merged.customHeaders = buildPlayHeaders(
-      playable[0].videoUrl,
-      playable[0].pageUrl
-    );
-    merged.playerType = "system";
-  } else {
-    delete merged.videoUrl;
-    delete merged.customHeaders;
-    merged.playerType = "system";
-  }
-
-  return stripUndefined(merged);
 }
 
 function normalizeCodeToken(code) {
@@ -1648,6 +1569,220 @@ function formatMovieCode(movieId, rawTitle) {
   return code;
 }
 
+const POSTER_PLACEHOLDER_MAX_BYTES = 512;
+const POSTER_VERIFY_TIMEOUT_MS = 2500;
+
+const MGSTAGE_COVER_RULES = {
+  ABF: { maker: "prestige" },
+  ABW: { maker: "prestige" },
+  ABP: { maker: "prestige" },
+  CHN: { maker: "prestige" },
+  JUFE: { maker: "prestige" },
+  MAAN: { maker: "prestige" },
+  PPT: { maker: "prestige" },
+  "390JAC": { maker: "jackson" },
+};
+
+function compactUniqueUrls(urls) {
+  const seen = {};
+  const result = [];
+  for (let i = 0; i < (urls || []).length; i++) {
+    const value = String(urls[i] || "").trim();
+    if (!value || seen[value]) continue;
+    seen[value] = true;
+    result.push(value);
+  }
+  return result;
+}
+
+function parseJavCodeParts(code) {
+  const raw = String(code || "").toUpperCase();
+  const match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
+  if (!match) return null;
+  const prefix = match[1];
+  const prefixLower = prefix.toLowerCase();
+  let number5 = match[2];
+  while (number5.length < 5) number5 = "0" + number5;
+  const numMap = {
+    WSA: "2",
+    FSDSS: "1",
+    FCDSS: "1",
+    FNS: "1",
+    ABP: "118",
+    CHN: "118",
+  };
+  return {
+    prefix: prefix,
+    prefixLower: prefixLower,
+    number: match[2],
+    number5: number5,
+    code: String(numMap[prefix] || "") + prefixLower + number5,
+  };
+}
+
+function buildMgstageCoverCandidatesFromParts(parts, rule) {
+  if (!parts || !rule || !rule.maker) return { posterCandidates: [], backdropCandidates: [] };
+  const number = String(parseInt(parts.number, 10));
+  if (!parts.prefixLower || !number || number === "NaN") {
+    return { posterCandidates: [], backdropCandidates: [] };
+  }
+  const dvdDash = parts.prefixLower + "-" + number;
+  const base =
+    "https://image.mgstage.com/images/" + rule.maker + "/" + parts.prefixLower + "/" + number;
+  return {
+    posterCandidates: compactUniqueUrls([
+      base + "/pf_e_" + dvdDash + ".jpg",
+      base + "/pf_o1_" + dvdDash + ".jpg",
+    ]),
+    backdropCandidates: compactUniqueUrls([base + "/pb_e_" + dvdDash + ".jpg"]),
+  };
+}
+
+function buildDmmCoverCandidatesFromParts(parts) {
+  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
+  const contentId = String(parts.code || "").toLowerCase();
+  if (!contentId) return { posterCandidates: [], backdropCandidates: [] };
+  const awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
+  const picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
+  return {
+    posterCandidates: compactUniqueUrls([
+      awsBase + "/" + contentId + "ps.jpg",
+      picsBase + "/" + contentId + "ps.jpg",
+    ]),
+    backdropCandidates: compactUniqueUrls([
+      awsBase + "/" + contentId + "pl.jpg",
+      picsBase + "/" + contentId + "pl.jpg",
+    ]),
+  };
+}
+
+function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
+  const parts = parseJavCodeParts(videoIdOrTitle);
+  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
+  const rule = MGSTAGE_COVER_RULES[parts.prefix];
+  if (rule) return buildMgstageCoverCandidatesFromParts(parts, rule);
+  return buildDmmCoverCandidatesFromParts(parts);
+}
+
+function pickBestFromSrcset(srcset) {
+  const text = String(srcset || "").trim();
+  if (!text) return "";
+  if (text.indexOf(",") < 0 && text.indexOf("http") === 0) return text.split(/\s+/)[0];
+  const parts = text.split(",");
+  let best = "";
+  let bestW = -1;
+  for (let i = 0; i < parts.length; i++) {
+    const piece = String(parts[i] || "").trim();
+    if (!piece) continue;
+    const chunks = piece.split(/\s+/);
+    const url = chunks[0];
+    let w = 0;
+    if (chunks[1]) {
+      const wm = chunks[1].match(/(\d+)w/i);
+      if (wm) w = parseInt(wm[1], 10);
+      else if (/^\d+x$/i.test(chunks[1])) w = parseInt(chunks[1], 10) || 0;
+    }
+    if (!best || w > bestW) {
+      best = url;
+      bestW = w;
+    }
+  }
+  return best;
+}
+
+function normalizePosterUrl(url) {
+  let cover = String(url || "").trim();
+  if (!cover) return "";
+  const at = cover.indexOf("@");
+  if (at >= 0) cover = cover.slice(0, at);
+  return normalizeImageUrl(cover);
+}
+
+function upgradeJavmoveCoverUrl(url) {
+  let u = normalizePosterUrl(url);
+  if (!u) return "";
+  u = u.replace(/\/thumbs?\//gi, "/covers/").replace(/\/small\//gi, "/large/");
+  u = u.replace(/([_-])(?:small|thumb|s\d+)(\.(?:webp|jpg|jpeg|png))/i, "$1large$2");
+  return u;
+}
+
+function resolvePageCoverUrl(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  if (text.indexOf(",") >= 0 && /https?:\/\//.test(text)) {
+    return upgradeJavmoveCoverUrl(pickBestFromSrcset(text));
+  }
+  return upgradeJavmoveCoverUrl(text);
+}
+
+function posterResponseSize(data) {
+  if (!data) return 0;
+  if (typeof data === "string") return data.length;
+  if (typeof data.length === "number") return data.length;
+  if (typeof data.byteLength === "number") return data.byteLength;
+  return 0;
+}
+
+function isNowPrintingPosterTarget(url) {
+  return String(url || "").toLowerCase().indexOf("now_printing") >= 0;
+}
+
+async function verifyPosterUrl(url) {
+  if (!url || isNowPrintingPosterTarget(url)) return "";
+  try {
+    const resp = await Widget.http.get(url, {
+      timeout: POSTER_VERIFY_TIMEOUT_MS,
+      headers: mergeHeaders({
+        Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        Referer: BASE_URL + "/",
+      }),
+    });
+    const size = posterResponseSize(resp && resp.data);
+    if (size <= POSTER_PLACEHOLDER_MAX_BYTES) return "";
+    return url;
+  } catch (e) {
+    return "";
+  }
+}
+
+async function pickFirstVerifiedPosterUrl(urls) {
+  for (let i = 0; i < (urls || []).length; i++) {
+    const ok = await verifyPosterUrl(urls[i]);
+    if (ok) return ok;
+  }
+  return "";
+}
+
+function buildDetailCoverBundle(pageCover, code) {
+  const pageUrl = resolvePageCoverUrl(pageCover);
+  const candidates = buildCoverCandidatesFromVideoId(code);
+  const backdropPath = candidates.backdropCandidates[0] || pageUrl || pageCover || "";
+  const posterPath = candidates.posterCandidates[0] || pageUrl || pageCover || "";
+  return {
+    backdropPath: backdropPath || undefined,
+    posterPath: posterPath || undefined,
+    detailPoster: posterPath || undefined,
+  };
+}
+
+async function resolveDetailCoverBundle(pageCover, code) {
+  const syncBundle = buildDetailCoverBundle(pageCover, code);
+  const candidates = buildCoverCandidatesFromVideoId(code);
+  const posterCandidates = compactUniqueUrls(
+    (candidates.posterCandidates || []).concat([
+      syncBundle.posterPath,
+      resolvePageCoverUrl(pageCover),
+    ])
+  );
+  const verifiedPoster = await pickFirstVerifiedPosterUrl(posterCandidates);
+  const detailPoster = verifiedPoster || syncBundle.detailPoster || syncBundle.posterPath;
+  return {
+    backdropPath: syncBundle.backdropPath,
+    posterPath: detailPoster,
+    detailPoster: detailPoster,
+  };
+}
+
 function extractSynopsisRaw(html, rawTitle) {
   let raw = decodeHtml(String(rawTitle || ""))
     .replace(/\|\s*JAVMove\s*$/i, "")
@@ -1872,8 +2007,11 @@ function isValidCover(url) {
 function pickCoverFromAttrs(attrs) {
   const list = attrs || [];
   for (let i = 0; i < list.length; i++) {
-    const url = normalizeImageUrl(list[i]);
-    if (isValidCover(url)) return url;
+    const raw = String(list[i] || "").trim();
+    if (!raw) continue;
+    const url = raw.indexOf(",") >= 0 ? pickBestFromSrcset(raw) : raw;
+    const normalized = upgradeJavmoveCoverUrl(normalizeImageUrl(url));
+    if (isValidCover(normalized)) return normalized;
   }
   return "";
 }
@@ -1882,6 +2020,7 @@ function pickCoverFromNode($img) {
   if (!$img || !$img.length) return "";
   return pickCoverFromAttrs([
     $img.attr("data-srcset"),
+    $img.attr("srcset"),
     $img.attr("data-src"),
     $img.attr("data-original"),
     $img.attr("src"),
@@ -1890,22 +2029,29 @@ function pickCoverFromNode($img) {
 
 function extractCoverFromHtml(html, $) {
   const text = String(html || "");
+  const srcsetMatch = text.match(
+    /class="movie-image"[^>]*data-srcset="([^"]+)"/i
+  );
+  if (srcsetMatch) {
+    const fromSrcset = resolvePageCoverUrl(srcsetMatch[1]);
+    if (isValidCover(fromSrcset)) return fromSrcset;
+  }
   const patterns = [
-    /class="movie-image"[^>]*data-srcset="([^"]+)"/i,
-    /data-srcset="(https?:\/\/[^"]+)"/i,
+    /data-srcset="([^"]+)"/i,
     /class="movie-image"[^>]*src="(https?:\/\/[^"]+)"/i,
     /https?:\/\/ie2\.javmove\.com\/media\/[^"'\s]+\.(?:jpg|jpeg|webp|png)/i,
   ];
   for (let i = 0; i < patterns.length; i++) {
     const match = text.match(patterns[i]);
-    const url = normalizeImageUrl(match && (match[1] || match[0]));
+    const raw = match && (match[1] || match[0]);
+    const url = resolvePageCoverUrl(raw);
     if (isValidCover(url)) return url;
   }
   try {
     if ($) {
       const fromNode = pickCoverFromNode($(".movie-image").first());
       if (fromNode) return fromNode;
-      const fromRelated = pickCoverFromNode($("img[data-srcset]").first());
+      const fromRelated = pickCoverFromNode($("img[data-srcset], img[srcset]").first());
       if (fromRelated) return fromRelated;
     }
   } catch (e) {}
@@ -1918,14 +2064,18 @@ function parseListCover(block, $img) {
     if (fromNode) return fromNode;
   }
   const text = String(block || "");
+  const srcsetM = text.match(/data-srcset="([^"]+)"/i);
+  if (srcsetM) {
+    const fromSrcset = resolvePageCoverUrl(srcsetM[1]);
+    if (isValidCover(fromSrcset)) return fromSrcset;
+  }
   const patterns = [
-    /data-srcset="([^"]+)"/i,
     /class="movie-image"[^>]*src="(https?:\/\/[^"]+)"/i,
     /src="(https?:\/\/ie2\.javmove\.com\/[^"]+)"/i,
   ];
   for (let i = 0; i < patterns.length; i++) {
     const match = text.match(patterns[i]);
-    const url = normalizeImageUrl(match && match[1]);
+    const url = resolvePageCoverUrl(match && match[1]);
     if (isValidCover(url)) return url;
   }
   return "";
@@ -2172,48 +2322,34 @@ function buildDetailFieldsFromHtml(html, baseUrl, parts) {
   };
 }
 
-function composeDetailItem(baseUrl, fields, parts, resolvedParts, activeLabel) {
+function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
   const playable = resolvedParts.filter(function (part) {
     return part && part.videoUrl;
   });
   if (!playable.length) return null;
 
   const mainPart = playable[0];
-  const cover = fields.cover;
-  const displayTitle = fields.displayTitle;
-  const episodeItems = buildEpisodeItemsFromParts(
-    baseUrl,
-    displayTitle,
-    parts,
-    resolvedParts,
-    cover
-  );
-  const childItems = buildPartChildItemsFromParts(
-    baseUrl,
-    displayTitle,
-    parts,
-    resolvedParts,
-    cover
+  coverBundle = coverBundle || buildDetailCoverBundle(
+    fields.cover,
+    formatMovieCode(fields.detailInfo.movieId, fields.displayTitle)
   );
   const isSeries = isMultiPartMovie(parts);
 
   const item = stripUndefined({
     id: baseUrl,
     type: "url",
-    title: displayTitle,
-    backdropPath: cover || undefined,
-    posterPath: cover || undefined,
+    title: fields.displayTitle,
+    backdropPath: coverBundle.backdropPath,
+    posterPath: coverBundle.posterPath,
+    detailPoster: coverBundle.detailPoster,
     backdropPaths: fields.backdropPaths,
     description: fields.description || undefined,
     releaseDate: fields.detailInfo.releaseDate || undefined,
     genreItems: fields.genreItems.length > 0 ? fields.genreItems : undefined,
     peoples: fields.peoples.length > 0 ? fields.peoples : undefined,
-    episodeItems: isSeries ? episodeItems : undefined,
-    childItems: isSeries ? childItems : undefined,
     relatedItems: fields.relatedItems.length > 0 ? fields.relatedItems : undefined,
     link: baseUrl,
     mediaType: "movie",
-    seriesName: isSeries ? displayTitle : undefined,
     playerType: "system",
   });
 
@@ -2282,7 +2418,11 @@ async function loadDetailInternal(link) {
     }
 
     if (!resolvedParts.length) {
-      const metaOnly = composeDetailMetaOnly(baseUrl, fields, parts);
+      const coverBundle = await resolveDetailCoverBundle(
+        fields.cover,
+        formatMovieCode(fields.detailInfo.movieId, fields.displayTitle)
+      );
+      const metaOnly = composeDetailMetaOnly(baseUrl, fields, parts, coverBundle);
       writeDetailItemCache(baseUrl, metaOnly);
       return metaOnly;
     }
@@ -2303,12 +2443,16 @@ async function loadDetailInternal(link) {
       }
     }
 
+    const coverBundle = await resolveDetailCoverBundle(
+      fields.cover,
+      formatMovieCode(fields.detailInfo.movieId, fields.displayTitle)
+    );
     const detailItem = composeDetailItem(
       baseUrl,
       fields,
       parts,
       resolvedParts,
-      activeLabel
+      coverBundle
     );
     if (!detailItem) return null;
     writeDetailItemCache(baseUrl, detailItem);
