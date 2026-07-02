@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.2.0",
+  version: "1.2.1",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -1288,23 +1288,29 @@ function hasCompleteMetaFields(fields) {
 
 function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
   coverBundle = coverBundle || buildDetailCoverBundle(fields.cover, formatMovieCode(fields.detailInfo.movieId, fields.displayTitle));
-  return stripUndefined({
-    id: baseUrl,
-    type: "url",
-    title: fields.displayTitle,
-    backdropPath: coverBundle.backdropPath || undefined,
-    posterPath: coverBundle.posterPath || undefined,
-    detailPoster: coverBundle.detailPoster || undefined,
-    backdropPaths: fields.backdropPaths,
-    description: fields.description || undefined,
-    releaseDate: fields.detailInfo.releaseDate || undefined,
-    genreItems: fields.genreItems.length > 0 ? fields.genreItems : undefined,
-    peoples: fields.peoples.length > 0 ? fields.peoples : undefined,
-    relatedItems: fields.relatedItems.length > 0 ? fields.relatedItems : undefined,
-    link: baseUrl,
-    mediaType: "movie",
-    playerType: isMultiPartMovie(parts) ? "system" : undefined,
-  });
+  const movieCode = formatMovieCode(fields.detailInfo.movieId, fields.displayTitle);
+  return stripUndefined(
+    Object.assign(
+      {
+        id: baseUrl,
+        type: "url",
+        title: fields.displayTitle,
+        backdropPath: coverBundle.backdropPath || undefined,
+        posterPath: coverBundle.posterPath || undefined,
+        detailPoster: coverBundle.detailPoster || undefined,
+        backdropPaths: fields.backdropPaths,
+        description: fields.description || undefined,
+        releaseDate: fields.detailInfo.releaseDate || undefined,
+        genreItems: fields.genreItems.length > 0 ? fields.genreItems : undefined,
+        peoples: fields.peoples.length > 0 ? fields.peoples : undefined,
+        relatedItems: fields.relatedItems.length > 0 ? fields.relatedItems : undefined,
+        link: baseUrl,
+        mediaType: "movie",
+        playerType: isMultiPartMovie(parts) ? "system" : undefined,
+      },
+      buildExternalMatchFields(movieCode, fields.displayTitle)
+    )
+  );
 }
 
 function readDetailMetaCache(baseUrl) {
@@ -1342,9 +1348,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
   delete merged.episodeItems;
   delete merged.childItems;
-  delete merged.seriesName;
   delete merged.episode;
-  delete merged.episodeName;
 
   if (!multiPart) {
     const part = resolvedParts.find(function (p) {
@@ -1366,7 +1370,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v11:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v12:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1380,7 +1384,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v11:" + String(baseUrl),
+      "detail:v12:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1552,6 +1556,20 @@ function formatMovieCode(movieId, rawTitle) {
     code = code.replace(/^([A-Z]+)(\d{2,5})$/i, "$1-$2");
   }
   return code;
+}
+
+/** 供 Forward 详情页 TMDB / 豆瓣匹配（与 javdb buildGuangyaMatchFields 一致） */
+function buildExternalMatchFields(rawCode, rawTitle) {
+  rawCode = String(rawCode || "").trim();
+  rawTitle = String(rawTitle || "").replace(/\s+/g, " ").trim();
+  const fields = {};
+  if (rawCode) {
+    fields.name = rawCode;
+    fields.seriesName = rawCode;
+    fields.episodeName = rawCode;
+  }
+  if (rawTitle) fields.originalTitle = rawTitle;
+  return fields;
 }
 
 const COVER_VERIFY_MIN_BYTES = 15360;
@@ -1939,12 +1957,6 @@ function hashText(text) {
 const TRANSLATE_CACHE_TTL = 604800;
 
 const TRANSLATE_CACHE_PREFIX = "tr:zh:v2:";
-const TRANSLATE_SEP = "\u001e";
-const TRANSLATE_BATCH_MAX_CHARS = 4200;
-const TRANSLATE_LIST_SNIPPET_LEN = 200;
-const TRANSLATE_PARALLEL_BATCHES = 2;
-const TRANSLATE_TIMEOUT_MS = 8000;
-const translateBatchInflight = {};
 
 function readTranslateCache(key) {
   try {
@@ -2087,35 +2099,49 @@ function shouldTranslateText(text) {
   return /[a-zA-Z]/.test(source);
 }
 
+function resolveDisplaySynopsis(source, translated) {
+  const raw = sanitizeSourceText(source);
+  if (!raw) return "";
+  if (!shouldTranslateText(raw)) return raw;
+  const zh = sanitizeSourceText(translated);
+  if (zh && isValidChineseTranslation(zh)) return zh;
+  return "";
+}
+
 function applySynopsisToFields(fields, parts, synopsisText) {
   if (!fields) return fields;
   const partCount = parts && parts.length ? parts.length : 0;
+  const displaySynopsis = sanitizeSourceText(synopsisText);
+  fields.synopsisDisplay = displaySynopsis;
   fields.description = buildDetailDescription(
     fields.detailInfo,
     partCount,
     0,
     0,
-    sanitizeSourceText(synopsisText)
+    displaySynopsis
   );
   return fields;
 }
 
 async function translateSynopsisText(source) {
   const text = sanitizeSourceText(source);
-  if (!text || !shouldTranslateText(text)) return text;
+  if (!text) return "";
+  if (!shouldTranslateText(text)) return text;
   const cacheKey = hashText(text);
   const cached = readTranslateCache(cacheKey);
-  if (cached) return cached;
+  if (cached && isValidChineseTranslation(cached)) return cached;
   const translated = await translateToChinese(text);
-  return translated || text;
+  if (translated && isValidChineseTranslation(translated)) return translated;
+  return "";
 }
 
 async function applySynopsisTranslation(fields, parts) {
   if (!fields) return fields;
   const synopsisRaw = sanitizeSourceText(fields.synopsisRaw || "");
   fields.synopsisRaw = synopsisRaw;
-  const synopsisText = await translateSynopsisText(synopsisRaw);
-  applySynopsisToFields(fields, parts, synopsisText);
+  const translated = await translateSynopsisText(synopsisRaw);
+  const displaySynopsis = resolveDisplaySynopsis(synopsisRaw, translated);
+  applySynopsisToFields(fields, parts, displaySynopsis);
   return fields;
 }
 
@@ -2156,7 +2182,7 @@ async function translateToChinese(text) {
     writeTranslateCache(cacheKey, part, source);
     return part;
   }
-  return source;
+  return "";
 }
 
 function parseDetailMeta(html) {
@@ -2546,7 +2572,7 @@ function buildDetailFieldsFromHtml(html, baseUrl, parts) {
     parts.length,
     0,
     0,
-    synopsisRaw
+    ""
   );
   const genreItems = collectDetailGenreItems(html, $);
   const peoples = collectDetailPeoples($);
@@ -2578,23 +2604,29 @@ function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
   );
   const isSeries = isMultiPartMovie(parts);
 
-  const item = stripUndefined({
-    id: baseUrl,
-    type: "url",
-    title: fields.displayTitle,
-    backdropPath: coverBundle.backdropPath,
-    posterPath: coverBundle.posterPath,
-    detailPoster: coverBundle.detailPoster,
-    backdropPaths: fields.backdropPaths,
-    description: fields.description || undefined,
-    releaseDate: fields.detailInfo.releaseDate || undefined,
-    genreItems: fields.genreItems.length > 0 ? fields.genreItems : undefined,
-    peoples: fields.peoples.length > 0 ? fields.peoples : undefined,
-    relatedItems: fields.relatedItems.length > 0 ? fields.relatedItems : undefined,
-    link: baseUrl,
-    mediaType: "movie",
-    playerType: "system",
-  });
+  const movieCode = formatMovieCode(fields.detailInfo.movieId, fields.displayTitle);
+  const item = stripUndefined(
+    Object.assign(
+      {
+        id: baseUrl,
+        type: "url",
+        title: fields.displayTitle,
+        backdropPath: coverBundle.backdropPath,
+        posterPath: coverBundle.posterPath,
+        detailPoster: coverBundle.detailPoster,
+        backdropPaths: fields.backdropPaths,
+        description: fields.description || undefined,
+        releaseDate: fields.detailInfo.releaseDate || undefined,
+        genreItems: fields.genreItems.length > 0 ? fields.genreItems : undefined,
+        peoples: fields.peoples.length > 0 ? fields.peoples : undefined,
+        relatedItems: fields.relatedItems.length > 0 ? fields.relatedItems : undefined,
+        link: baseUrl,
+        mediaType: "movie",
+        playerType: "system",
+      },
+      buildExternalMatchFields(movieCode, fields.displayTitle)
+    )
+  );
 
   if (!isSeries) {
     item.videoUrl = mainPart.videoUrl;
