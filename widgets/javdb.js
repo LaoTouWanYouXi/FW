@@ -962,7 +962,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.9.5",
+  version: "1.9.6",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -1259,6 +1259,8 @@ function stripCountSuffix(title) {
 function resolveGenreReferencePath(raw) {
   var genreId = String(raw || "").trim();
   if (!genreId) return "";
+  genreId = parseCategoryParamRef(genreId).id;
+  if (genreId.indexOf(DETAIL_SEARCH_PREFIX) === 0) return "";
   if (genreId.indexOf("series:") === 0) {
     return normalizeCategoryPath("/series/" + genreId.slice(7));
   }
@@ -1306,11 +1308,23 @@ function syncCategoryParams(params) {
   params = syncGlobalParams(params || {});
   var item = String(params.item || "").trim();
   if (item && !params.genreId && !params.peopleId) {
-    if (item.indexOf("/actors/") === 0) {
-      params.peopleId = item.split("/").pop();
+    var itemRef = parseCategoryParamRef(item);
+    if (item.indexOf("/actors/") === 0 || itemRef.id.indexOf("/actors/") === 0) {
+      params.peopleId = itemRef.id.split("/").pop();
     } else {
-      params.genreId = item;
+      params.genreId = itemRef.id;
     }
+    if (itemRef.title) params.categoryTitle = itemRef.title;
+  }
+  if (params.genreId) {
+    var genreRef = parseCategoryParamRef(params.genreId);
+    params.genreId = genreRef.id;
+    if (genreRef.title) params.categoryTitle = genreRef.title;
+  }
+  if (params.peopleId) {
+    var peopleRef = parseCategoryParamRef(params.peopleId);
+    params.peopleId = peopleRef.id;
+    if (peopleRef.title) params.categoryTitle = peopleRef.title;
   }
   if (params.peopleId && String(params.peopleId).indexOf("/actors/") === 0) {
     params.peopleId = String(params.peopleId).split("/").pop();
@@ -1330,11 +1344,81 @@ function syncCategoryParams(params) {
 }
 
 var DETAIL_SEARCH_PREFIX = "search:";
+var CATEGORY_ID_TITLE_SEP = "~";
 
 function buildDetailSearchId(title) {
   var text = String(title || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
   return DETAIL_SEARCH_PREFIX + text;
+}
+
+function parseCategoryParamRef(raw) {
+  raw = String(raw || "");
+  var sep = raw.indexOf(CATEGORY_ID_TITLE_SEP);
+  if (sep < 0) return { id: raw, title: "" };
+  var title = raw.slice(sep + 1);
+  try {
+    title = decodeURIComponent(title);
+  } catch (err) {
+    title = raw.slice(sep + 1);
+  }
+  return { id: raw.slice(0, sep), title: title };
+}
+
+function isValidCategoryBrowsePath(path) {
+  path = normalizeCategoryPath(String(path || "").split("#")[0]);
+  if (!path) return false;
+  var match;
+  if ((match = path.match(/^\/actors\/([^/?#]+)/))) {
+    return !/^(censored|uncensored|western)$/i.test(match[1]);
+  }
+  if ((match = path.match(/^\/tags\/([^/?#]+)/))) return !!match[1];
+  if (path.indexOf("/tags?") === 0 || path === "/tags") return false;
+  if ((match = path.match(/^\/series\/([^/?#]+)/))) return !!match[1];
+  if (/^\/series\/?(\?|$)/.test(path)) return false;
+  if ((match = path.match(/^\/makers\/([^/?#]+)/))) return !!match[1];
+  return false;
+}
+
+function resolveCategorySearchFallback(params, categoryPath) {
+  params = params || {};
+  if (params.categoryTitle) {
+    var labeled = normalizeSearchKeyword(params.categoryTitle) || String(params.categoryTitle).trim();
+    if (labeled) return labeled;
+  }
+
+  var fields = [params.genreTitle, params.peopleTitle, params.filterTitle, params.item, params.title, params.name];
+  for (var i = 0; i < fields.length; i++) {
+    var text = getText(fields[i]);
+    if (!text) continue;
+    if (text.indexOf("/") === 0 || text.indexOf(DETAIL_SEARCH_PREFIX) === 0) continue;
+    if (text.indexOf(CATEGORY_ID_TITLE_SEP) >= 0) continue;
+    if (/^(actors|tags|makers|series):/i.test(text)) continue;
+    var normalized = normalizeSearchKeyword(text);
+    if (normalized) return normalized;
+    if (text.length >= 2) return text;
+  }
+
+  var lookup = lookupCategoryOptionTitle(categoryPath);
+  if (lookup) return lookup;
+
+  if (params.peopleId) {
+    lookup = lookupCategoryOptionTitle("/actors/" + String(params.peopleId).replace(/^\/actors\//, ""));
+    if (lookup) return lookup;
+  }
+  if (params.genreId) {
+    lookup = lookupCategoryOptionTitle(String(params.genreId));
+    if (lookup) return lookup;
+  }
+
+  var cleanPath = normalizeCategoryPath(categoryPath).split("?")[0];
+  var slug = cleanPath.split("/").pop() || "";
+  if (slug && !/^(censored|uncensored|western|tags|series|makers|actors)$/i.test(slug)) {
+    var makerGuess = legacyMakerSlugToSearchKeyword(slug);
+    if (makerGuess) return makerGuess;
+    if (/^[a-z0-9-]+$/i.test(slug)) return slug.replace(/-/g, " ");
+  }
+  return "";
 }
 
 function resolveDetailJumpKeyword(params) {
@@ -2679,7 +2763,6 @@ async function loadPage(params) {
     }
 
     var movies = await fetchMovieList(path, params);
-    if (!movies.length) throw new Error("未解析到影片列表");
     return movies;
   } catch (error) {
     console.error("[javdb] 分类加载失败:", error.message || error);
@@ -2818,22 +2901,25 @@ function resolveCategoryListPath(params) {
 
 function categoryItemIdFromPath(path, fallbackTitle) {
   path = normalizeCategoryPath(path);
-  if (!path) return buildDetailSearchId(fallbackTitle);
+  if (!isValidCategoryBrowsePath(path)) return buildDetailSearchId(fallbackTitle);
+  var categoryId = "";
   if (path.indexOf("/actors/") === 0) {
-    return path.split("/").filter(Boolean).pop() || buildDetailSearchId(fallbackTitle);
-  }
-  if (path.indexOf("/series/") === 0) {
+    categoryId = path.split("/").filter(Boolean).pop() || buildDetailSearchId(fallbackTitle);
+  } else if (path.indexOf("/series/") === 0) {
     var seriesSlug = path.split("/").filter(Boolean).pop();
-    return seriesSlug ? "series:" + seriesSlug : buildDetailSearchId(fallbackTitle);
-  }
-  if (path.indexOf("/makers/") === 0) {
+    categoryId = seriesSlug ? "series:" + seriesSlug : buildDetailSearchId(fallbackTitle);
+  } else if (path.indexOf("/makers/") === 0) {
     var makerSlug = path.split("/").filter(Boolean).pop();
-    return makerSlug ? "maker:" + makerSlug : buildDetailSearchId(fallbackTitle);
+    categoryId = makerSlug ? "maker:" + makerSlug : buildDetailSearchId(fallbackTitle);
+  } else if (path.indexOf("/tags") === 0) {
+    categoryId = path.replace(/^\//, "");
+  } else {
+    categoryId = path.replace(/^\//, "") || buildDetailSearchId(fallbackTitle);
   }
-  if (path.indexOf("/tags") === 0) {
-    return path.replace(/^\//, "");
-  }
-  return path.replace(/^\//, "") || buildDetailSearchId(fallbackTitle);
+  if (!categoryId || categoryId.indexOf(DETAIL_SEARCH_PREFIX) === 0) return categoryId;
+  var title = String(fallbackTitle || "").replace(/\s+/g, " ").trim();
+  if (!title) return categoryId;
+  return categoryId + CATEGORY_ID_TITLE_SEP + encodeURIComponent(title);
 }
 
 function buildDetailGenreItem(title, path) {
@@ -2903,7 +2989,7 @@ function parsePeopleItemFromPanelLink(kind, href, title, base) {
     return buildDetailPeopleItem(name, kind === "director" ? "导演" : "演员", "", path);
   }
   if (path.indexOf("/directors/") === 0) {
-    return buildDetailPeopleItem(name, "导演", "", path);
+    return buildDetailPeopleItem(name, "导演", "", "");
   }
   return null;
 }
@@ -3193,13 +3279,19 @@ async function fetchMovieList(path, params) {
         lastError = new Error("分类页面不可用: " + candidates[i]);
         continue;
       }
-      return items;
+      lastError = new Error("分类页面无影片: " + candidates[i]);
     } catch (err) {
       lastError = err;
     }
   }
-  var fallbackTitle = lookupCategoryOptionTitle(basePath);
-  if (fallbackTitle) return fetchSearchMovieList(params, fallbackTitle);
+  var fallbackTitle = resolveCategorySearchFallback(params, basePath);
+  if (fallbackTitle) {
+    try {
+      return await fetchSearchMovieList(params, fallbackTitle);
+    } catch (searchErr) {
+      console.error("[javdb] 分类搜索回退失败:", searchErr.message || searchErr);
+    }
+  }
   throw lastError || new Error("未解析到影片列表");
 }
 
@@ -3223,9 +3315,7 @@ async function loadListByPath(path, params) {
       return fetchSearchMovieList(params, jumpKeyword);
     }
     var targetPath = resolveFilteredPath(params, path);
-    var items = await fetchMovieList(targetPath, params);
-    if (!items.length) throw new Error("未解析到影片列表");
-    return items;
+    return await fetchMovieList(targetPath, params);
   } catch (error) {
     console.error("[javdb] 列表加载失败:", error.message || error);
     throw error;

@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.25",
+  version: "1.0.26",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -1313,7 +1313,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v8:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v9:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1327,7 +1327,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v8:" + String(baseUrl),
+      "detail:v9:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1438,7 +1438,7 @@ function parseRelatedArticle($el, seen, items, max) {
   return true;
 }
 
-function parseDetailRelatedItems(html, $, detailUrl, limit) {
+function parseNextMovieRelatedItems(html, $, detailUrl, limit) {
   const items = [];
   const seen = new Set([normalizeMoviePageUrl(detailUrl)]);
   const max = limit || 12;
@@ -1451,106 +1451,38 @@ function parseDetailRelatedItems(html, $, detailUrl, limit) {
     });
   } catch (e) {}
 
-  if (items.length < max) {
-    const articleRe = /<article\b[\s\S]*?<\/article>/gi;
-    const nextBlock = text.match(/id="nextMovie"[\s\S]*$/i);
-    if (nextBlock) {
-      let blockMatch;
-      while ((blockMatch = articleRe.exec(nextBlock[0])) && items.length < max) {
-        const hrefM = blockMatch[0].match(/href="(\/movie\/[^"]+)"[^>]*rel="bookmark"/i);
-        if (!hrefM) continue;
-        const rDetailLink = resolveUrl(hrefM[1]);
-        const relatedKey = normalizeMoviePageUrl(rDetailLink);
-        if (!relatedKey || seen.has(relatedKey)) continue;
-        seen.add(relatedKey);
-        const titleM =
-          blockMatch[0].match(/<h3[^>]*title="([^"]+)"/i) ||
-          blockMatch[0].match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
-        const h3Title = titleM ? decodeHtml(titleM[1].replace(/<[^>]+>/g, "")) : "";
-        const rCover = parseListCover(blockMatch[0]);
-        items.push({
-          id: rDetailLink,
-          type: "url",
-          title: formatMovieCode("", h3Title) || h3Title.split(" ")[0] || "\u76f8\u5173\u5f71\u7247",
-          backdropPath: rCover || undefined,
-          posterPath: rCover || undefined,
-          link: rDetailLink,
-          mediaType: "movie",
-        });
-      }
-    }
-  }
-
-  if (items.length < max) {
-    const articleRe = /<article\b[\s\S]*?<\/article>/gi;
-    let blockMatch;
-    while ((blockMatch = articleRe.exec(text)) && items.length < max) {
-      if (blockMatch[0].indexOf("/movie/") < 0) continue;
-      const hrefM = blockMatch[0].match(/href="(\/movie\/[^"]+)"[^>]*rel="bookmark"/i);
-      if (!hrefM) continue;
-      const rDetailLink = resolveUrl(hrefM[1]);
-      const relatedKey = normalizeMoviePageUrl(rDetailLink);
-      if (!relatedKey || seen.has(relatedKey)) continue;
-      seen.add(relatedKey);
-      const titleM =
-        blockMatch[0].match(/<h3[^>]*title="([^"]+)"/i) ||
-        blockMatch[0].match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
-      const h3Title = titleM ? decodeHtml(titleM[1].replace(/<[^>]+>/g, "")) : "";
-      const rCover = parseListCover(blockMatch[0]);
-      items.push({
-        id: rDetailLink,
-        type: "url",
-        title: formatMovieCode("", h3Title) || h3Title.split(" ")[0] || "\u76f8\u5173\u5f71\u7247",
-        backdropPath: rCover || undefined,
-        posterPath: rCover || undefined,
-        link: rDetailLink,
-        mediaType: "movie",
-      });
-    }
-  }
-
-  if (items.length < max) {
-    try {
-      $("div.thumbnail, #related article, .related-videos article").each(function (_, el) {
-        if (items.length >= max) return false;
-        parseRelatedArticle($(el), seen, items, max);
-      });
-    } catch (e) {}
-  }
-
-  return items;
-}
-
-async function enrichRelatedItems(html, $, detailUrl, limit) {
-  const max = limit || 12;
-  const items = parseDetailRelatedItems(html, $, detailUrl, max);
   if (items.length >= max) return items;
 
-  const slugMatch = String(html || "").match(/var slug = "([^"]+)"/i);
-  if (!slugMatch) return items;
+  const blockStart = text.search(/id=["']nextMovie["']/i);
+  if (blockStart < 0) return items;
 
-  try {
-    const url =
-      BASE_URL +
-      "/fragment/more?slug=" +
-      encodeURIComponent(slugMatch[1]) +
-      "&page=1";
-    const frag = await fetchHtml(url, detailUrl);
-    const seen = new Set(
-      items.map(function (item) {
-        return normalizeMoviePageUrl(item.link || item.id);
-      })
-    );
-    seen.add(normalizeMoviePageUrl(detailUrl));
-    const $frag = safeLoadHtml(frag);
-    const more = parseDetailRelatedItems(frag, $frag, detailUrl, max);
-    for (let i = 0; i < more.length && items.length < max; i++) {
-      const key = normalizeMoviePageUrl(more[i].link || more[i].id);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      items.push(more[i]);
-    }
-  } catch (e) {}
+  const blockSlice = text.slice(blockStart);
+  const blockEnd = blockSlice.slice(20).search(/<(?:section|footer)\b/i);
+  const nextBlock = blockEnd >= 0 ? blockSlice.slice(0, 20 + blockEnd) : blockSlice;
+  const articleRe = /<article\b[\s\S]*?<\/article>/gi;
+  let blockMatch;
+  while ((blockMatch = articleRe.exec(nextBlock)) && items.length < max) {
+    const hrefM = blockMatch[0].match(/href="(\/movie\/[^"]+)"[^>]*rel="bookmark"/i);
+    if (!hrefM) continue;
+    const rDetailLink = resolveUrl(hrefM[1]);
+    const relatedKey = normalizeMoviePageUrl(rDetailLink);
+    if (!relatedKey || seen.has(relatedKey)) continue;
+    seen.add(relatedKey);
+    const titleM =
+      blockMatch[0].match(/<h3[^>]*title="([^"]+)"/i) ||
+      blockMatch[0].match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
+    const h3Title = titleM ? decodeHtml(titleM[1].replace(/<[^>]+>/g, "")) : "";
+    const rCover = parseListCover(blockMatch[0]);
+    items.push({
+      id: rDetailLink,
+      type: "url",
+      title: formatMovieCode("", h3Title) || h3Title.split(" ")[0] || "\u76f8\u5173\u5f71\u7247",
+      backdropPath: rCover || undefined,
+      posterPath: rCover || undefined,
+      link: rDetailLink,
+      mediaType: "movie",
+    });
+  }
 
   return items;
 }
@@ -1724,11 +1656,35 @@ function posterResponseSize(data) {
 }
 
 function isNowPrintingPosterTarget(url) {
-  return String(url || "").toLowerCase().indexOf("now_printing") >= 0;
+  const u = String(url || "").toLowerCase();
+  if (u.indexOf("now_printing") >= 0) return true;
+  if (/\/pics\/mono\/movie\/n\//.test(u)) return true;
+  return false;
+}
+
+function isExternalPosterCandidate(url) {
+  const u = String(url || "").toLowerCase();
+  return u.indexOf("dmm.co.jp") >= 0 || u.indexOf("dmm.com") >= 0 || u.indexOf("mgstage.com") >= 0;
+}
+
+function isJavmovePosterUrl(url) {
+  return /javmove\.com/i.test(String(url || ""));
+}
+
+function extractPosterFinalUrl(resp, url) {
+  const respObj = resp && resp.request && resp.request.res;
+  if (respObj && respObj.responseUrl) return String(respObj.responseUrl);
+  if (resp && resp.responseURL) return String(resp.responseURL);
+  if (resp && resp.request && resp.request.uri && resp.request.uri.href) {
+    return String(resp.request.uri.href);
+  }
+  if (resp && resp.config && resp.config.url) return String(resp.config.url);
+  return String(url || "");
 }
 
 async function verifyPosterUrl(url) {
   if (!url || isNowPrintingPosterTarget(url)) return "";
+  if (isJavmovePosterUrl(url)) return normalizePosterUrl(url);
   try {
     const resp = await Widget.http.get(url, {
       timeout: POSTER_VERIFY_TIMEOUT_MS,
@@ -1737,6 +1693,18 @@ async function verifyPosterUrl(url) {
         Referer: BASE_URL + "/",
       }),
     });
+    const finalUrl = extractPosterFinalUrl(resp, url);
+    if (isNowPrintingPosterTarget(finalUrl)) return "";
+    const loc = resp && resp.headers && (resp.headers.location || resp.headers.Location);
+    if (isNowPrintingPosterTarget(loc)) return "";
+    if (
+      isExternalPosterCandidate(url) &&
+      finalUrl &&
+      finalUrl !== url &&
+      isNowPrintingPosterTarget(finalUrl)
+    ) {
+      return "";
+    }
     const size = posterResponseSize(resp && resp.data);
     if (size <= POSTER_PLACEHOLDER_MAX_BYTES) return "";
     return url;
@@ -1754,32 +1722,36 @@ async function pickFirstVerifiedPosterUrl(urls) {
 }
 
 function buildDetailCoverBundle(pageCover, code) {
-  const pageUrl = resolvePageCoverUrl(pageCover);
-  const candidates = buildCoverCandidatesFromVideoId(code);
-  const backdropPath = candidates.backdropCandidates[0] || pageUrl || pageCover || "";
-  const posterPath = candidates.posterCandidates[0] || pageUrl || pageCover || "";
+  const pagePoster = resolvePageCoverUrl(pageCover) || normalizePosterUrl(pageCover) || "";
   return {
-    backdropPath: backdropPath || undefined,
-    posterPath: posterPath || undefined,
-    detailPoster: posterPath || undefined,
+    backdropPath: pagePoster || undefined,
+    posterPath: pagePoster || undefined,
+    detailPoster: pagePoster || undefined,
   };
 }
 
 async function resolveDetailCoverBundle(pageCover, code) {
-  const syncBundle = buildDetailCoverBundle(pageCover, code);
-  const candidates = buildCoverCandidatesFromVideoId(code);
+  const pagePoster = resolvePageCoverUrl(pageCover) || normalizePosterUrl(pageCover) || "";
+  const dmmCandidates = buildCoverCandidatesFromVideoId(code);
   const posterCandidates = compactUniqueUrls(
-    (candidates.posterCandidates || []).concat([
-      syncBundle.posterPath,
-      resolvePageCoverUrl(pageCover),
-    ])
+    [pagePoster].concat(dmmCandidates.posterCandidates || [])
   );
   const verifiedPoster = await pickFirstVerifiedPosterUrl(posterCandidates);
-  const detailPoster = verifiedPoster || syncBundle.detailPoster || syncBundle.posterPath;
+  const detailPoster = verifiedPoster || pagePoster;
+
+  const backdropCandidates = compactUniqueUrls(
+    [pagePoster].concat(
+      dmmCandidates.backdropCandidates || [],
+      dmmCandidates.posterCandidates || []
+    )
+  );
+  const verifiedBackdrop = await pickFirstVerifiedPosterUrl(backdropCandidates);
+  const backdropPath = verifiedBackdrop || detailPoster || pagePoster;
+
   return {
-    backdropPath: syncBundle.backdropPath,
-    posterPath: detailPoster,
-    detailPoster: detailPoster,
+    backdropPath: backdropPath || undefined,
+    posterPath: detailPoster || undefined,
+    detailPoster: detailPoster || undefined,
   };
 }
 
@@ -1879,10 +1851,70 @@ function parseTranslatePayload(raw) {
   return "";
 }
 
-function translateCachedOnly(text) {
+function shouldTranslateText(text) {
   const source = String(text || "").trim();
-  if (!source) return "";
-  return readTranslateCache(hashText(source)) || source;
+  if (!source) return false;
+  if (/[\u3040-\u30ff\u4e00-\u9fff]/.test(source)) return false;
+  return /[a-zA-Z]/.test(source);
+}
+
+function isGenreCategoryItem(item) {
+  return String(item && item.id || "").indexOf("/genres/") >= 0;
+}
+
+async function applyDetailTranslations(fields, parts) {
+  if (!fields) return fields;
+  const info = Object.assign({}, fields.detailInfo || {});
+  const partCount = parts && parts.length ? parts.length : 0;
+
+  const synopsisRaw = String(fields.synopsisRaw || "").trim();
+  let synopsisText = synopsisRaw;
+  if (shouldTranslateText(synopsisRaw)) {
+    synopsisText = await translateToChinese(synopsisRaw);
+  }
+
+  const translateJobs = [];
+  if (shouldTranslateText(info.maker)) {
+    translateJobs.push(
+      translateToChinese(info.maker).then(function (text) {
+        info.maker = text;
+      })
+    );
+  }
+  if (shouldTranslateText(info.label)) {
+    translateJobs.push(
+      translateToChinese(info.label).then(function (text) {
+        info.label = text;
+      })
+    );
+  }
+  await Promise.all(translateJobs);
+
+  const genreItems = [];
+  const genreJobs = (fields.genreItems || []).map(function (item, idx) {
+    if (!isGenreCategoryItem(item) || !shouldTranslateText(item.title)) {
+      genreItems[idx] = item;
+      return Promise.resolve();
+    }
+    return translateToChinese(item.title).then(function (title) {
+      genreItems[idx] = Object.assign({}, item, { title: title });
+    });
+  });
+  await Promise.all(genreJobs);
+  for (let i = 0; i < (fields.genreItems || []).length; i++) {
+    if (!genreItems[i]) genreItems[i] = fields.genreItems[i];
+  }
+
+  fields.detailInfo = info;
+  fields.genreItems = genreItems;
+  fields.description = buildDetailDescription(
+    info,
+    partCount,
+    0,
+    0,
+    synopsisText
+  );
+  return fields;
 }
 
 async function translateToChinese(text) {
@@ -2285,7 +2317,6 @@ function buildDetailFieldsFromHtml(html, baseUrl, parts) {
     formatMovieCode(detailInfo.movieId, rawTitle) ||
     rawTitle.split("|")[0].trim();
   const synopsisRaw = extractSynopsisRaw(html, rawTitle);
-  const synopsisText = translateCachedOnly(synopsisRaw);
   const cover =
     extractCoverFromHtml(html, $) ||
     $('meta[property="og:image"]').attr("content") ||
@@ -2304,16 +2335,17 @@ function buildDetailFieldsFromHtml(html, baseUrl, parts) {
     parts.length,
     0,
     0,
-    synopsisText
+    synopsisRaw
   );
   const genreItems = collectDetailGenreItems(html, $);
   const peoples = collectDetailPeoples($);
-  const relatedItems = parseDetailRelatedItems(html, $, baseUrl, 12);
+  const relatedItems = parseNextMovieRelatedItems(html, $, baseUrl, 12);
   return {
     displayTitle: displayTitle,
     cover: cover,
     backdropPaths: backdropPaths,
     description: description,
+    synopsisRaw: synopsisRaw,
     detailInfo: detailInfo,
     genreItems: genreItems,
     peoples: peoples,
@@ -2399,6 +2431,8 @@ async function loadDetailInternal(link) {
     }
 
     if (!parts.length || !fields) return null;
+
+    fields = await applyDetailTranslations(fields, parts);
 
     let resolvedParts = [];
     if (parts.length > 1) {
