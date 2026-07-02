@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.2.6",
+  version: "1.2.7",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -1199,6 +1199,49 @@ function buildSynopsisDescription(synopsisText) {
   return sanitizeSourceText(synopsisText) || "";
 }
 
+function normalizeSynopsisCompareText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isSynopsisSameAsTitle(synopsis, title, movieCode) {
+  let syn = normalizeSynopsisCompareText(synopsis);
+  let ttl = normalizeSynopsisCompareText(title);
+  if (!syn || !ttl) return false;
+  if (syn === ttl) return true;
+  if (movieCode) {
+    const code = normalizeSynopsisCompareText(movieCode);
+    if (code) {
+      syn = syn.replace(new RegExp("^" + code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*"), "").trim();
+      ttl = ttl.replace(new RegExp("^" + code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*"), "").trim();
+      if (syn && ttl && syn === ttl) return true;
+    }
+  }
+  if (syn.indexOf(ttl) === 0 && syn.length - ttl.length < 48) {
+    const rest = syn.slice(ttl.length).replace(/^[\s,，]+/, "").trim();
+    if (!rest || (rest.split(/[\s,，]+/).filter(Boolean).length <= 2 && rest.length < 40)) {
+      return true;
+    }
+  }
+  if (ttl.indexOf(syn) === 0 && ttl.length - syn.length < 48) return true;
+  return false;
+}
+
+function keepOnlyChineseSynopsis(text) {
+  let value = sanitizeSourceText(text);
+  if (!value) return "";
+  const firstCjk = value.search(/[\u4e00-\u9fff]/);
+  if (firstCjk < 0) return "";
+  if (firstCjk > 0) value = value.slice(firstCjk);
+  value = value.replace(/[\u3040-\u30ff\u31f0-\u31ff]+/g, "");
+  value = value.replace(/[a-zA-Z][a-zA-Z0-9'’\-.,;:!?"()\/]*/g, " ");
+  value = value.replace(/\s+/g, " ").trim();
+  return /[\u4e00-\u9fff]/.test(value) ? value : "";
+}
+
 function stripDuplicateTitleFromSynopsis(synopsis, displayTitle, movieCode) {
   let text = sanitizeSourceText(synopsis);
   if (!text) return "";
@@ -1358,7 +1401,7 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
 
 function readDetailMetaCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:meta:v2:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:meta:v3:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (
@@ -1377,7 +1420,7 @@ function writeDetailMetaCache(baseUrl, meta) {
   if (!meta) return;
   try {
     Widget.storage.set(
-      "detail:meta:v2:" + String(baseUrl),
+      "detail:meta:v3:" + String(baseUrl),
       JSON.stringify({ meta: meta, ts: Date.now() })
     );
   } catch (e) {}
@@ -1413,7 +1456,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v17:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v18:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1427,7 +1470,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v17:" + String(baseUrl),
+      "detail:v18:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1444,7 +1487,19 @@ function extractGalleryBlock(html) {
   const match = text.match(
     /<section[^>]*id="main-carousel"[\s\S]*?<\/section>[\s\S]*?<ul[^>]*id="thumbnails"[\s\S]*?<\/ul>/i
   );
-  return match ? match[0] : "";
+  if (match) return match[0];
+  const carousel = text.match(/<section[^>]*id="main-carousel"[\s\S]*?<\/section>/i);
+  const thumbs = text.match(/<ul[^>]*id="thumbnails"[\s\S]*?<\/ul>/i);
+  if (carousel || thumbs) {
+    return (carousel ? carousel[0] : "") + (thumbs ? thumbs[0] : "");
+  }
+  const galleria = text.match(/<div[^>]*class="[^"]*galleria[^"]*"[\s\S]*?<\/div>\s*<\/div>/i);
+  return galleria ? galleria[0] : "";
+}
+
+function isGalleryStillUrl(url) {
+  const u = String(url || "").toLowerCase();
+  return u.indexOf("/media/") >= 0;
 }
 
 function stillAltMatchesMovie(alt, movieCode, movieSlug) {
@@ -1483,28 +1538,37 @@ function extractDetailStills(html, $, cover, movieCode, detailUrl) {
   const galleryHtml = extractGalleryBlock(html);
   const movieSlug = extractMovieSlug(detailUrl);
 
-  function add(url, alt) {
+  function add(url, alt, trustedGallery) {
     const u = normalizeImageUrl(url);
     if (!isValidCover(u) || seen.has(u)) return;
     if (coverNorm && u === coverNorm) return;
-    if (u.indexOf("/media/") < 0) return;
-    if (!stillAltMatchesMovie(alt, movieCode, movieSlug)) return;
+    if (!isGalleryStillUrl(u)) return;
+    const altOk = stillAltMatchesMovie(alt, movieCode, movieSlug);
+    const urlOk = movieCode && normalizeCodeToken(u).indexOf(normalizeCodeToken(movieCode)) >= 0;
+    if (trustedGallery) {
+      if (!altOk && !urlOk) return;
+    } else if (!altOk) {
+      return;
+    }
     seen.add(u);
     paths.push(u);
   }
 
   const galleryImages = extractGalleryImages(galleryHtml);
   for (let i = 0; i < galleryImages.length && paths.length < 24; i++) {
-    add(galleryImages[i].src, galleryImages[i].alt);
+    add(galleryImages[i].src, galleryImages[i].alt, true);
   }
 
   try {
-    $("#main-carousel img, #thumbnails img").each(function (_, el) {
-      add(
-        $(el).attr("src") || $(el).attr("data-src") || "",
-        $(el).attr("alt") || ""
-      );
-    });
+    if ($) {
+      $("#main-carousel img, #thumbnails img").each(function (_, el) {
+        add(
+          $(el).attr("src") || $(el).attr("data-src") || "",
+          $(el).attr("alt") || "",
+          true
+        );
+      });
+    }
   } catch (e) {}
 
   return paths.length > 0 ? paths : undefined;
@@ -2079,31 +2143,23 @@ async function resolveDetailCoverBundle(pageCover, code, params) {
 }
 
 function extractSynopsisRaw(html, rawTitle) {
-  let raw = decodeHtml(String(rawTitle || ""))
+  const titlePart = decodeHtml(String(rawTitle || ""))
     .replace(/\|\s*JAVMove\s*$/i, "")
     .trim();
-  if (raw) {
-    const stripped = raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
-    if (stripped.length >= 16) return sanitizeSourceText(stripped);
-  }
+  const movieCode = resolveMovieCode("", titlePart, "");
 
   const metaMatch = String(html || "").match(/name="description"\s+content="([^"]+)"/i);
   if (metaMatch) {
     let meta = decodeHtml(metaMatch[1]).replace(/^Watch online\s+/i, "").trim();
-    meta = meta.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
-    if (meta.length >= 16) return sanitizeSourceText(meta);
+    if (meta.length >= 16) {
+      meta = sanitizeSourceText(meta);
+      if (!isSynopsisSameAsTitle(meta, titlePart, movieCode)) {
+        return meta;
+      }
+    }
   }
 
-  const titleMatch = String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  if (titleMatch) {
-    let pageTitle = decodeHtml(titleMatch[1])
-      .replace(/\|\s*JAVMove\s*$/i, "")
-      .trim();
-    pageTitle = pageTitle.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
-    if (pageTitle.length >= 16) return sanitizeSourceText(pageTitle);
-  }
-
-  return sanitizeSourceText(raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim() || raw);
+  return "";
 }
 
 function hashText(text) {
@@ -2274,10 +2330,10 @@ function shouldTranslateText(text) {
 function resolveDisplaySynopsis(source, translated) {
   const raw = sanitizeSourceText(source);
   if (!raw) return "";
-  const zh = extractChineseOnlyText(translated || "", raw);
+  let zh = keepOnlyChineseSynopsis(extractChineseOnlyText(translated || "", raw));
   if (zh && isValidChineseTranslation(zh)) return zh;
   if (!shouldTranslateText(raw) && /[\u4e00-\u9fff]/.test(raw)) {
-    return extractChineseOnlyText(raw, "");
+    return keepOnlyChineseSynopsis(extractChineseOnlyText(raw, ""));
   }
   return "";
 }
@@ -2289,9 +2345,11 @@ function applySynopsisToFields(fields, parts, synopsisText) {
     fields.displayTitle,
     fields.synopsisRaw || ""
   );
-  let displaySynopsis = extractChineseOnlyText(
-    buildSynopsisDescription(synopsisText),
-    fields.synopsisRaw || ""
+  let displaySynopsis = keepOnlyChineseSynopsis(
+    extractChineseOnlyText(
+      buildSynopsisDescription(synopsisText),
+      fields.synopsisRaw || ""
+    )
   );
   displaySynopsis = stripDuplicateTitleFromSynopsis(
     displaySynopsis,
@@ -2785,7 +2843,7 @@ function buildDetailFieldsFromHtml(html, baseUrl, parts) {
     html,
     $,
     cover,
-    displayTitle,
+    movieCode,
     baseUrl
   );
   const rating = parseDetailRating($, html);
