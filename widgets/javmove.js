@@ -18,16 +18,6 @@ WidgetMetadata = {
       ],
       value: "fast",
     },
-    {
-      name: "dmmPosterSize",
-      title: "DMM \u5c01\u9762\u89c4\u683c",
-      type: "enumeration",
-      enumOptions: [
-        { title: "\u5927\u56fe (pl)", value: "large" },
-        { title: "\u5c0f\u5c01\u9762 (ps)", value: "small" },
-      ],
-      value: "large",
-    },
   ],
   modules: [
     {
@@ -441,7 +431,7 @@ WidgetMetadata = {
 };
 
 const BASE_URL = "https://javmove.com";
-const GLOBAL_PARAM_KEYS = ["coverMode", "dmmPosterSize"];
+const GLOBAL_PARAM_KEYS = ["coverMode"];
 const VIDEO_CACHE_TTL = 3600;
 const PARTS_BUNDLE_TTL = 3600;
 const DETAIL_ITEM_CACHE_TTL = 300;
@@ -486,7 +476,6 @@ function getEffectiveParams(params) {
     }
   }
   if (!out.coverMode) out.coverMode = "fast";
-  if (!out.dmmPosterSize) out.dmmPosterSize = "large";
   return out;
 }
 
@@ -1717,14 +1706,9 @@ function buildCoverUrlsFromVideoId(videoIdOrTitle) {
 }
 
 function pickSyncHdCoverUrls(code, posterSize) {
-  posterSize = String(posterSize || "large").toLowerCase();
   const candidates = buildCoverCandidatesFromVideoId(code);
-  if (posterSize === "small") {
-    return compactUniqueUrls(candidates.posterCandidates || []).slice(0, 2);
-  }
-  return compactUniqueUrls(
-    (candidates.backdropCandidates || []).concat(candidates.posterCandidates || [])
-  ).slice(0, 2);
+  // 高清模式统一使用小图(ps.jpg)，体积小加载快
+  return compactUniqueUrls(candidates.posterCandidates || []).slice(0, 2);
 }
 
 function pickBestFromSrcset(srcset) {
@@ -1888,27 +1872,16 @@ async function resolveDetailCoverBundle(pageCover, code, params) {
     return buildDetailCoverBundle(pageCover, code);
   }
 
-  const posterSize = String(params.dmmPosterSize || "large");
-  const syncUrls = code ? pickSyncHdCoverUrls(code, posterSize) : [];
+  // 高清模式只获取小图(ps.jpg)，体积小加载快
+  const syncUrls = code ? pickSyncHdCoverUrls(code) : [];
   let detailPoster = "";
   if (syncUrls.length) {
     detailPoster = await resolveFirstVerifiedCoverUrl(syncUrls);
   }
   if (!detailPoster) detailPoster = pagePoster;
 
-  let backdropPath = detailPoster || pagePoster;
-  if (posterSize === "small" && code) {
-    const backdropUrls = compactUniqueUrls(
-      buildCoverCandidatesFromVideoId(code).backdropCandidates || []
-    ).slice(0, 2);
-    if (backdropUrls.length) {
-      const verifiedBackdrop = await resolveFirstVerifiedCoverUrl(backdropUrls);
-      if (verifiedBackdrop) backdropPath = verifiedBackdrop;
-    }
-  }
-
   return {
-    backdropPath: backdropPath || undefined,
+    backdropPath: detailPoster || pagePoster || undefined,
     posterPath: detailPoster || undefined,
     detailPoster: detailPoster || undefined,
   };
@@ -2152,33 +2125,32 @@ async function translateToChinese(text) {
   const cached = readTranslateCache(cacheKey);
   if (cached) return cached;
 
-  let part = "";
-  try {
-    const googleUrl =
-      "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=" +
-      encodeURIComponent(source.slice(0, 1800));
-    const res = await Widget.http.get(googleUrl, {
-      timeout: 2500,
-      headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" },
-    });
-    part = parseTranslatePayload(res.data);
-  } catch (e) {}
+  // 限制文本长度为300字符，简介足够用且更快
+  const truncated = source.slice(0, 300);
+  const httpOpts = { timeout: 3000, headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" } };
 
-  if (!part) {
-    try {
-      const mmUrl =
-        "https://api.mymemory.translated.net/get?q=" +
-        encodeURIComponent(source.slice(0, 500)) +
-        "&langpair=en|zh-CN";
-      const res = await Widget.http.get(mmUrl, {
-        timeout: 2500,
-        headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" },
-      });
-      part = parseTranslatePayload(res.data);
-    } catch (e) {}
+  // 并行请求两个翻译服务，取最快的成功结果
+  const googlePromise = Widget.http.get(
+    "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=" + encodeURIComponent(truncated),
+    httpOpts
+  ).then(function(r) { return parseTranslatePayload(r.data); }).catch(function() { return ""; });
+
+  const mmPromise = Widget.http.get(
+    "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(truncated) + "&langpair=en|zh-CN",
+    httpOpts
+  ).then(function(r) { return parseTranslatePayload(r.data); }).catch(function() { return ""; });
+
+  var results = await Promise.allSettled([googlePromise, mmPromise]);
+
+  var part = "";
+  for (var i = 0; i < results.length; i++) {
+    if (results[i].status === "fulfilled" && results[i].value && isValidChineseTranslation(results[i].value)) {
+      part = results[i].value;
+      break;
+    }
   }
 
-  if (part && isValidChineseTranslation(part)) {
+  if (part) {
     writeTranslateCache(cacheKey, part, source);
     return part;
   }
