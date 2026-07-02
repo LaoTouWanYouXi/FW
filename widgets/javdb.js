@@ -963,7 +963,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.9.9",
+  version: "1.9.11",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -993,7 +993,7 @@ WidgetMetadata = {
       type: "enumeration",
       enumOptions: [
         { title: "\u5feb\u901f\uff08JavDB \u9875\u9762\u5c01\u9762\uff09", value: "fast" },
-        { title: "\u9ad8\u6e05\uff08\u6821\u9a8c DMM\uff09", value: "hd" },
+        { title: "\u9ad8\u6e05\uff08\u6821\u9a8c DMM\uff0c\u5931\u8d25\u7528 JavDB\uff09", value: "hd" },
       ],
       value: "fast",
     },
@@ -1793,13 +1793,13 @@ function buildDetailPosterUrlFromJavdb(coverUrl) {
   return normalizePosterUrl(coverUrl);
 }
 
+function isNowPrintingPosterTarget(url) {
+  return String(url || "").toLowerCase().indexOf("now_printing") >= 0;
+}
+
 function isExternalPosterCandidate(url) {
   var u = String(url || "").toLowerCase();
   return u.indexOf("dmm.co.jp") >= 0 || u.indexOf("dmm.com") >= 0 || u.indexOf("mgstage.com") >= 0;
-}
-
-function isNowPrintingPosterTarget(url) {
-  return String(url || "").toLowerCase().indexOf("now_printing") >= 0;
 }
 
 function posterResponseSize(data) {
@@ -1862,6 +1862,14 @@ async function pickFirstVerifiedPosterUrl(urls, params) {
   return "";
 }
 
+function resolveJavdbDetailPosterFallback(javdbCover, pageCover, galleryUrls) {
+  var fromPage = buildDetailPosterUrlFromJavdb(pageCover);
+  var fromFallback = buildDetailPosterUrlFromJavdb(javdbCover);
+  if (fromPage) return fromPage;
+  if (fromFallback) return fromFallback;
+  return pickBestGalleryPosterUrl(galleryUrls || []);
+}
+
 function pickBestGalleryPosterUrl(galleryUrls) {
   var urls = galleryUrls || [];
   for (var i = 0; i < urls.length; i++) {
@@ -1885,8 +1893,6 @@ function buildFastDetailPoster(pageCover, fallbackCover) {
 async function resolveDetailPosterUrl(javdbCover, code, params, options) {
   options = options || {};
   params = getEffectiveParams(params || {});
-  var fromJavdb = buildDetailPosterUrlFromJavdb(javdbCover);
-  var galleryPoster = pickBestGalleryPosterUrl(options.galleryUrls || []);
   var posterSize = String(params.dmmPosterSize || "large");
   var dmmCandidates = code ? buildDmmPosterCandidatesFromVideoId(code, posterSize) : [];
 
@@ -1895,11 +1901,7 @@ async function resolveDetailPosterUrl(javdbCover, code, params, options) {
     if (verifiedDmm) return verifiedDmm;
   }
 
-  if (galleryPoster) return galleryPoster;
-
-  if (fromJavdb) return fromJavdb;
-
-  return "";
+  return resolveJavdbDetailPosterFallback(javdbCover, options.pageCover, options.galleryUrls);
 }
 
 function collectPageGalleryUrls($, base) {
@@ -2888,6 +2890,7 @@ async function parseDetailPage(html, link, params) {
     coverMode === "hd"
       ? await resolveDetailPosterUrl(fallbackCover, displayCode, params, {
           videoId: videoId,
+          pageCover: cover,
           galleryUrls: backdropPaths,
         })
       : buildFastDetailPoster(cover, fallbackCover);

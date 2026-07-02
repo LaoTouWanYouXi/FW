@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.1.0",
+  version: "1.1.1",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -450,7 +450,7 @@ async function fetchHtml(url, referer) {
   let res = await Widget.http.get(url, {
     headers: mergeHeaders({ Referer: ref }),
   });
-  let html = typeof res.data === "string" ? res.data : String(res.data || "");
+  let html = stringifyHttpBody(res.data);
   if (isErrorPage(html)) {
     res = await Widget.http.get(url, {
       headers: {
@@ -459,7 +459,7 @@ async function fetchHtml(url, referer) {
         Referer: ref,
       },
     });
-    html = typeof res.data === "string" ? res.data : String(res.data || "");
+    html = stringifyHttpBody(res.data);
   }
   return html;
 }
@@ -1829,7 +1829,7 @@ function extractSynopsisRaw(html, rawTitle) {
     .trim();
   if (raw) {
     const stripped = raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
-    if (stripped.length >= 16) return stripped;
+    if (stripped.length >= 16) return sanitizeSourceText(stripped);
   }
 
   const metaMatch = String(html || "").match(/name="description"\s+content="([^"]+)"/i);
@@ -1838,7 +1838,7 @@ function extractSynopsisRaw(html, rawTitle) {
     const cut = meta.indexOf(", ");
     if (cut > 0) meta = meta.slice(0, cut);
     meta = meta.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
-    if (meta.length >= 16) return meta;
+    if (meta.length >= 16) return sanitizeSourceText(meta);
   }
 
   const titleMatch = String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i);
@@ -1847,10 +1847,10 @@ function extractSynopsisRaw(html, rawTitle) {
       .replace(/\|\s*JAVMove\s*$/i, "")
       .trim();
     pageTitle = pageTitle.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
-    if (pageTitle.length >= 16) return pageTitle;
+    if (pageTitle.length >= 16) return sanitizeSourceText(pageTitle);
   }
 
-  return raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim() || raw;
+  return sanitizeSourceText(raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim() || raw);
 }
 
 function hashText(text) {
@@ -1865,9 +1865,11 @@ function hashText(text) {
 
 const TRANSLATE_CACHE_TTL = 604800;
 
+const TRANSLATE_CACHE_PREFIX = "tr:zh:v2:";
+
 function readTranslateCache(key) {
   try {
-    const raw = Widget.storage.get("tr:zh:" + key);
+    const raw = Widget.storage.get(TRANSLATE_CACHE_PREFIX + key);
     if (!raw) return "";
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.text && data.ts && Date.now() - data.ts < TRANSLATE_CACHE_TTL * 1000) {
@@ -1878,11 +1880,31 @@ function readTranslateCache(key) {
   return "";
 }
 
-function writeTranslateCache(key, text) {
+function writeTranslateCache(key, text, source) {
   if (!text) return;
+  if (source && shouldTranslateText(source)) {
+    if (!/[\u4e00-\u9fff]/.test(text)) return;
+    if (looksLikeGarbledTranslation(text)) return;
+  } else if (looksLikeGarbledTranslation(text)) {
+    return;
+  }
   try {
-    Widget.storage.set("tr:zh:" + key, JSON.stringify({ text: text, ts: Date.now() }));
+    Widget.storage.set(TRANSLATE_CACHE_PREFIX + key, JSON.stringify({ text: text, ts: Date.now() }));
   } catch (e) {}
+}
+
+function sanitizeSourceText(text) {
+  let value = decodeHtml(String(text || "")).trim();
+  if (!value) return "";
+  if (/[\u00c0-\u00ff]{2,}/.test(value) && !/[\u4e00-\u9fff\u3040-\u30ff]/.test(value)) {
+    try {
+      if (typeof Buffer !== "undefined") {
+        const fixed = Buffer.from(value, "latin1").toString("utf8").trim();
+        if (fixed && /[\u4e00-\u9fff\u3040-\u30ff]/.test(fixed)) value = fixed;
+      }
+    } catch (e) {}
+  }
+  return value.replace(/\uFFFD/g, "").replace(/\s+/g, " ").trim();
 }
 
 function decodeUnicodeEscapes(text) {
@@ -1927,20 +1949,25 @@ function normalizeTranslateOutput(text) {
 function looksLikeGarbledTranslation(translated) {
   const value = String(translated || "").trim();
   if (!value) return true;
+  if (value.indexOf("\uFFFD") >= 0) return true;
   if (/[\u4e00-\u9fff]/.test(value)) return false;
   if (/[\u00c0-\u00ff]{2,}/.test(value)) return true;
-  if (/[ÃÂâ]/.test(value)) return true;
+  if (/[ÃÂâÃ¢Ã£Ã¤Ã¥Ã¦Ã§Ã¨Ã©]/.test(value)) return true;
+  if (/[\x00-\x08\x0e-\x1f]/.test(value)) return true;
   return false;
 }
 
 function parseTranslatePayload(raw) {
   if (raw == null) return "";
   let data = raw;
-  const body = stringifyHttpBody(raw);
-  if (typeof body === "object" && body !== null) {
-    data = body;
-  } else if (typeof body === "string") {
-    const trimmed = body.trim();
+  if (Array.isArray(raw)) {
+    data = raw;
+  } else if (typeof raw === "object") {
+    data = raw;
+  } else {
+    const body = stringifyHttpBody(raw);
+    if (!body) return "";
+    const trimmed = String(body).trim();
     if (!trimmed) return "";
     if (trimmed.charAt(0) === "[" || trimmed.charAt(0) === "{") {
       try {
@@ -1949,8 +1976,7 @@ function parseTranslatePayload(raw) {
         return "";
       }
     } else {
-      const normalized = normalizeTranslateOutput(trimmed);
-      return looksLikeGarbledTranslation(normalized) ? "" : normalized;
+      return "";
     }
   }
   if (Array.isArray(data) && Array.isArray(data[0])) {
@@ -1959,13 +1985,20 @@ function parseTranslatePayload(raw) {
       if (data[0][i] && data[0][i][0]) out += data[0][i][0];
     }
     out = normalizeTranslateOutput(out.trim());
-    return looksLikeGarbledTranslation(out) ? "" : out;
+    return isValidChineseTranslation(out) ? out : "";
   }
   if (data && data.responseData && data.responseData.translatedText) {
     const out = normalizeTranslateOutput(String(data.responseData.translatedText).trim());
-    return looksLikeGarbledTranslation(out) ? "" : out;
+    return isValidChineseTranslation(out) ? out : "";
   }
   return "";
+}
+
+function isValidChineseTranslation(text) {
+  const value = String(text || "").trim();
+  if (!value) return false;
+  if (looksLikeGarbledTranslation(value)) return false;
+  return /[\u4e00-\u9fff]/.test(value);
 }
 
 function shouldTranslateText(text) {
@@ -1973,30 +2006,6 @@ function shouldTranslateText(text) {
   if (!source) return false;
   if (/[\u3040-\u30ff\u4e00-\u9fff]/.test(source)) return false;
   return /[a-zA-Z]/.test(source);
-}
-
-function readSynopsisTranslation(synopsisRaw) {
-  const source = String(synopsisRaw || "").trim();
-  if (!source || !shouldTranslateText(source)) return source;
-  const cached = readTranslateCache(hashText(source));
-  if (cached && !looksLikeGarbledTranslation(cached)) return cached;
-  return source;
-}
-
-async function translateSynopsisOnly(synopsisRaw) {
-  const source = String(synopsisRaw || "").trim();
-  if (!source) return "";
-  if (!shouldTranslateText(source)) return source;
-
-  const cacheKey = hashText(source);
-  const cached = readTranslateCache(cacheKey);
-  if (cached && !looksLikeGarbledTranslation(cached)) return cached;
-
-  const translated = await translateToChinese(source);
-  if (translated && translated !== source && !looksLikeGarbledTranslation(translated)) {
-    return translated;
-  }
-  return source;
 }
 
 function applySynopsisToFields(fields, parts, synopsisText) {
@@ -2007,41 +2016,45 @@ function applySynopsisToFields(fields, parts, synopsisText) {
     partCount,
     0,
     0,
-    synopsisText
+    sanitizeSourceText(synopsisText)
   );
   return fields;
 }
 
-function applySynopsisTranslation(fields, parts) {
+async function translateSynopsisText(source) {
+  const text = sanitizeSourceText(source);
+  if (!text || !shouldTranslateText(text)) return text;
+  const cacheKey = hashText(text);
+  const cached = readTranslateCache(cacheKey);
+  if (cached) return cached;
+  const translated = await translateToChinese(text);
+  return translated || text;
+}
+
+async function applySynopsisTranslation(fields, parts) {
   if (!fields) return fields;
-  const synopsisRaw = String(fields.synopsisRaw || "").trim();
-  applySynopsisToFields(fields, parts, readSynopsisTranslation(synopsisRaw));
-
-  if (
-    shouldTranslateText(synopsisRaw) &&
-    readSynopsisTranslation(synopsisRaw) === synopsisRaw
-  ) {
-    translateSynopsisOnly(synopsisRaw).catch(function () {});
-  }
-
+  const synopsisRaw = sanitizeSourceText(fields.synopsisRaw || "");
+  fields.synopsisRaw = synopsisRaw;
+  const synopsisText = await translateSynopsisText(synopsisRaw);
+  applySynopsisToFields(fields, parts, synopsisText);
   return fields;
 }
 
 async function translateToChinese(text) {
-  const source = String(text || "").trim();
+  const source = sanitizeSourceText(text);
   if (!source) return "";
   const cacheKey = hashText(source);
   const cached = readTranslateCache(cacheKey);
-  if (cached && !looksLikeGarbledTranslation(cached)) return cached;
+  if (cached) return cached;
 
   let part = "";
   try {
     const googleUrl =
-      "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=" +
+      "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=" +
       encodeURIComponent(source.slice(0, 1800));
     const res = await Widget.http.get(googleUrl, {
       timeout: 2500,
-      headers: { "User-Agent": HEADERS["User-Agent"], Accept: "*/*" },
+      headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" },
     });
     part = parseTranslatePayload(res.data);
   } catch (e) {}
@@ -2060,9 +2073,8 @@ async function translateToChinese(text) {
     } catch (e) {}
   }
 
-  const result = part || source;
-  if (part && part !== source && !looksLikeGarbledTranslation(part)) {
-    writeTranslateCache(cacheKey, part);
+  if (part && isValidChineseTranslation(part)) {
+    writeTranslateCache(cacheKey, part, source);
     return part;
   }
   return source;
@@ -2247,10 +2259,78 @@ async function fetchGenreVideoList(genreRef, page) {
   const fetchUrl = buildGenrePageUrl(baseUrl, page);
   try {
     const html = await fetchHtml(fetchUrl, baseUrl);
-    return parseVideoList(html);
+    return await parseVideoList(html);
   } catch (e) {
     return [];
   }
+}
+
+const LIST_SYNOPSIS_MAX_LEN = 56;
+const LIST_TITLE_TRANSLATE_BATCH = 5;
+
+function normalizeListRawTitle(rawTitle) {
+  return sanitizeSourceText(
+    decodeHtml(String(rawTitle || ""))
+      .replace(/\s*Thumbnail\s*$/i, "")
+      .trim()
+  );
+}
+
+function splitListRawTitle(rawTitle) {
+  const raw = normalizeListRawTitle(rawTitle);
+  if (!raw) return { code: "", synopsis: "", raw: "" };
+  const code = formatMovieCode("", raw);
+  let synopsis = raw;
+  if (code) {
+    synopsis = raw
+      .replace(new RegExp("^" + code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*", "i"), "")
+      .trim();
+    if (!synopsis) synopsis = raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
+  }
+  return { code: code, synopsis: synopsis, raw: raw };
+}
+
+function truncateListSynopsis(text, maxLen) {
+  const value = sanitizeSourceText(text);
+  const limit = maxLen || LIST_SYNOPSIS_MAX_LEN;
+  if (!value || value.length <= limit) return value;
+  return value.slice(0, limit) + "\u2026";
+}
+
+function buildListDisplayTitle(code, synopsisText) {
+  const movieCode = formatMovieCode(code, "") || String(code || "").trim();
+  const intro = truncateListSynopsis(synopsisText);
+  if (movieCode && intro) return movieCode + " " + intro;
+  if (movieCode) return movieCode;
+  if (intro) return intro;
+  return "\u76f8\u5173\u5f71\u7247";
+}
+
+async function applyListItemTitle(item, rawTitle) {
+  if (!item) return item;
+  const parts = splitListRawTitle(rawTitle);
+  let synopsisText = parts.synopsis || "";
+  if (synopsisText && shouldTranslateText(synopsisText)) {
+    synopsisText = await translateSynopsisText(synopsisText);
+  } else {
+    synopsisText = sanitizeSourceText(synopsisText);
+  }
+  item.title = buildListDisplayTitle(parts.code, synopsisText);
+  delete item._listRawTitle;
+  return item;
+}
+
+async function enrichListItemTitles(items) {
+  if (!items || !items.length) return items || [];
+  for (let i = 0; i < items.length; i += LIST_TITLE_TRANSLATE_BATCH) {
+    const batch = items.slice(i, i + LIST_TITLE_TRANSLATE_BATCH);
+    await Promise.all(
+      batch.map(function (item) {
+        return applyListItemTitle(item, item._listRawTitle || item.title || "");
+      })
+    );
+  }
+  return items;
 }
 
 function parseVideoListRegex(html) {
@@ -2272,9 +2352,10 @@ function parseVideoListRegex(html) {
 
     const titleM =
       block.match(/<h2[^>]*title="([^"]+)"/i) ||
+      block.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i) ||
       block.match(/\balt="([^"]+)"/i);
-    const rawTitle = titleM ? decodeHtml(titleM[1]) : href.split("/").pop();
-    const title = rawTitle.split(" Thumbnail")[0].split(" ")[0] || rawTitle;
+    const rawTitle = titleM ? decodeHtml(titleM[1].replace(/<[^>]+>/g, "")) : href.split("/").pop();
+    const listRawTitle = normalizeListRawTitle(rawTitle);
 
     const coverM = parseListCover(block);
     const pubM = block.match(/datetime="([^"]+)"/i);
@@ -2282,7 +2363,8 @@ function parseVideoListRegex(html) {
     items.push({
       id: detailLink,
       type: "url",
-      title: title,
+      title: formatMovieCode("", listRawTitle) || listRawTitle.split(/\s+/)[0] || listRawTitle,
+      _listRawTitle: listRawTitle,
       backdropPath: coverM || undefined,
       releaseDate: pubM ? pubM[1].split("T")[0] : "",
       link: detailLink,
@@ -2292,7 +2374,7 @@ function parseVideoListRegex(html) {
   return items;
 }
 
-function parseVideoList(html) {
+function parseVideoListSync(html) {
   if (!html) return [];
   const scoped = extractMovieListHtml(html);
   let items = [];
@@ -2309,8 +2391,8 @@ function parseVideoList(html) {
         $h2.text().trim() ||
         $el.find("img.movie-image").attr("alt") ||
         "";
-      const title = decodeHtml(titleRaw.split(" Thumbnail")[0].split(" ")[0]);
-      if (!title || !href) return;
+      const rawTitle = normalizeListRawTitle(titleRaw);
+      if (!rawTitle || !href) return;
 
       const cover = parseListCover($el.html(), $el.find("img.movie-image, .movie-image").first());
       const pubdate = $el.find("time").first().attr("datetime") || "";
@@ -2319,7 +2401,8 @@ function parseVideoList(html) {
       items.push({
         id: detailLink,
         type: "url",
-        title: title,
+        title: formatMovieCode("", rawTitle) || rawTitle.split(/\s+/)[0] || rawTitle,
+        _listRawTitle: rawTitle,
         backdropPath: cover || undefined,
         releaseDate: pubdate ? pubdate.split("T")[0] : "",
         link: detailLink,
@@ -2330,6 +2413,11 @@ function parseVideoList(html) {
 
   if (items.length > 0) return items;
   return parseVideoListRegex(scoped);
+}
+
+async function parseVideoList(html) {
+  const items = parseVideoListSync(html);
+  return enrichListItemTitles(items);
 }
 
 async function loadGenreList(params) {
@@ -2350,7 +2438,7 @@ async function loadLatest(params) {
   try {
     const url = BASE_URL + "/release?page=" + page;
     const html = await fetchHtml(url, BASE_URL + "/");
-    return parseVideoList(html);
+    return await parseVideoList(html);
   } catch (e) {
     return [];
   }
@@ -2362,7 +2450,7 @@ async function loadUpcoming(params) {
   try {
     const url = BASE_URL + "/upcoming?page=" + page;
     const html = await fetchHtml(url, BASE_URL + "/");
-    return parseVideoList(html);
+    return await parseVideoList(html);
   } catch (e) {
     return [];
   }
@@ -2536,7 +2624,6 @@ async function loadDetailInternal(link) {
     if (!parts.length || !fields) return null;
 
     const movieCode = formatMovieCode(fields.detailInfo.movieId, fields.displayTitle);
-    applySynopsisTranslation(fields, parts);
 
     const coverPromise = resolveDetailCoverBundle(fields.cover, movieCode);
     let resolvedPartsPromise;
@@ -2555,11 +2642,15 @@ async function loadDetailInternal(link) {
         ];
       });
     }
+    const synopsisPromise = applySynopsisTranslation(fields, parts);
 
-    const [coverBundle, resolvedParts] = await Promise.all([
+    const parallel = await Promise.all([
       coverPromise,
       resolvedPartsPromise,
+      synopsisPromise,
     ]);
+    const coverBundle = parallel[0];
+    const resolvedParts = parallel[1];
 
     if (!resolvedParts.length) {
       const metaOnly = composeDetailMetaOnly(baseUrl, fields, parts, coverBundle);
@@ -2634,7 +2725,7 @@ async function search(params) {
       "&page=" +
       page;
     const html = await fetchHtml(url, BASE_URL + "/");
-    return parseVideoList(html);
+    return await parseVideoList(html);
   } catch (e) {
     return [];
   }
