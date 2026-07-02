@@ -11,7 +11,7 @@ WidgetMetadata = {
   title: "光鸭-番号",
   description: "按番号搜索光鸭云盘，详情页自动匹配播放源",
   author: "老头",
-  version: "1.0.0",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   site: "https://www.guangyapan.com",
   detailCacheDuration: 300,
@@ -334,9 +334,89 @@ function extractWesternDateKey(text) {
   };
 }
 
+function normalizeJavMatchToken(text) {
+  return String(text || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function buildJavSearchTexts(number) {
+  var raw = getText(number);
+  var lower = raw.toLowerCase();
+  var compact = normalizeJavMatchToken(raw);
+  var texts = [];
+  function add(value) {
+    value = getText(value);
+    if (!value || texts.indexOf(value) >= 0) return;
+    texts.push(value);
+  }
+  add(lower);
+  add(compact);
+  add(raw.toUpperCase());
+  return texts;
+}
+
+function filenameMatchesJavTarget(filename, target) {
+  var fn = normalizeJavMatchToken(filename);
+  return !!target && fn.indexOf(target) !== -1;
+}
+
+async function searchGuangyaFiles(token, matchKey) {
+  if (matchKey.type !== "jav") {
+    return await searchFiles(token, matchKey.searchText, 1, 50);
+  }
+
+  var searchTexts = buildJavSearchTexts(matchKey.key);
+  for (var i = 0; i < searchTexts.length; i++) {
+    var files = await searchFiles(token, searchTexts[i], 1, 50);
+    if (files.length) return files;
+  }
+  return [];
+}
+
+async function expandMatchedFiles(token, files, matchKey, target) {
+  var expanded = [];
+  var seen = {};
+
+  function push(file) {
+    if (!file || !file.fileId || seen[file.fileId]) return;
+    seen[file.fileId] = true;
+    expanded.push(file);
+  }
+
+  for (var i = 0; i < files.length; i++) {
+    var file = files[i];
+    if (file.isDir) {
+      var folderKey = normalizeJavMatchToken(file.filename);
+      if (matchKey.type === "jav" && folderKey.indexOf(target) === -1 && target.indexOf(folderKey) === -1) {
+        continue;
+      }
+      var children = await listFolder(token, file.fileId, 1, 100);
+      for (var j = 0; j < children.length; j++) {
+        if (children[j].isDir) continue;
+        if (matchKey.type === "jav") {
+          if (folderKey.indexOf(target) !== -1 || filenameMatchesJavTarget(children[j].filename, target)) {
+            push(children[j]);
+          }
+        } else {
+          push(children[j]);
+        }
+      }
+      continue;
+    }
+    push(file);
+  }
+
+  return expanded;
+}
+
 function extractMatchKey(text) {
   var number = extractNumber(text);
-  if (number) return { type: "jav", key: number, searchText: number };
+  if (number) {
+    return {
+      type: "jav",
+      key: number,
+      searchText: number.toLowerCase()
+    };
+  }
   var western = extractWesternSceneKey(text);
   if (western) return western;
   var dateKey = extractWesternDateKey(text);
@@ -508,16 +588,26 @@ async function loadResource(params) {
     var matchKey = extractMatchKey(texts.join(" "));
     if (!matchKey) return [];
 
-    var files = await searchFiles(token, matchKey.searchText, 1, 50);
+    var files = await searchGuangyaFiles(token, matchKey);
     if (!files.length) return [];
 
     var matched = [];
     if (matchKey.type === "jav") {
-      var target = matchKey.key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+      var target = normalizeJavMatchToken(matchKey.key);
       for (var mi = 0; mi < files.length; mi++) {
-        var fn = String(files[mi].filename).replace(/[^a-z0-9]/gi, "").toLowerCase();
-        if (fn.indexOf(target) !== -1) matched.push(files[mi]);
+        var file = files[mi];
+        if (file.isDir) {
+          if (
+            normalizeJavMatchToken(file.filename).indexOf(target) !== -1 ||
+            target.indexOf(normalizeJavMatchToken(file.filename)) !== -1
+          ) {
+            matched.push(file);
+          }
+          continue;
+        }
+        if (filenameMatchesJavTarget(file.filename, target)) matched.push(file);
       }
+      matched = await expandMatchedFiles(token, matched, matchKey, target);
     } else {
       var strict = matchKey.strictTarget;
       for (var wi = 0; wi < files.length; wi++) {
