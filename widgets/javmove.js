@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.2.2",
+  version: "1.2.3",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -1288,12 +1288,18 @@ function hasCompleteMetaFields(fields) {
 }
 
 function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
-  coverBundle = coverBundle || buildDetailCoverBundle(fields.cover, formatMovieCode(fields.detailInfo.movieId, fields.displayTitle));
-  const movieCode = formatMovieCode(fields.detailInfo.movieId, fields.displayTitle);
+  const movieCode = resolveMovieCode(
+    fields.detailInfo.movieId,
+    fields.displayTitle,
+    fields.synopsisRaw || fields.synopsisDisplay || ""
+  );
+  coverBundle =
+    coverBundle || buildDetailCoverBundle(fields.cover, movieCode || fields.displayTitle);
+  const originalTitle = fields.synopsisRaw || fields.displayTitle;
   return stripUndefined(
     Object.assign(
       {
-        id: baseUrl,
+        id: movieCode || baseUrl,
         type: "url",
         title: fields.displayTitle,
         backdropPath: coverBundle.backdropPath || undefined,
@@ -1309,7 +1315,7 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
         mediaType: "movie",
         playerType: isMultiPartMovie(parts) ? "system" : undefined,
       },
-      buildExternalMatchFields(movieCode, fields.displayTitle)
+      buildDetailMatchFields(movieCode, originalTitle, fields.synopsisDisplay || "")
     )
   );
 }
@@ -1371,7 +1377,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v13:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v14:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1385,7 +1391,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v13:" + String(baseUrl),
+      "detail:v14:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1545,6 +1551,39 @@ function parseNextMovieRelatedItems(html, $, detailUrl, limit) {
   return items;
 }
 
+function extractMatchCode(text) {
+  let s = String(text || "").trim();
+  if (!s) return "";
+  s = s.toUpperCase();
+  s = s.replace(/^[A-Z0-9]+(?:\.[A-Z0-9]+)+@/, "");
+  s = s.replace(/^(?:HHD800|HHB800)[_\-@.\s]?/, "");
+  const normalized = s.replace(/_/g, "-").replace(/\s+/g, " ").trim();
+  const patterns = [
+    /\bFC2(?:[- ]?PPV)?[- ]?(\d{5,8})\b/,
+    /\bCARIB[- ]?(\d{6,8})\b/,
+    /\b1PONDO[- ]?(\d{6,8})\b/,
+    /\bHEYZO[- ]?(\d{3,6})\b/,
+    /\bT28[- ]?(\d{6,8})\b/,
+    /\b([A-Z]{2,15})[- ]?(\d{2,10})\b/,
+    /\b(\d{6}[-_]\d{2,3})\b/,
+  ];
+  for (let i = 0; i < patterns.length; i++) {
+    const match = normalized.match(patterns[i]);
+    if (!match) continue;
+    if (match[1] && match[2]) return match[1] + "-" + match[2];
+    if (match[1]) return match[1].replace(/\s+/g, "");
+  }
+  return "";
+}
+
+function extractJavCode(text) {
+  const code = extractMatchCode(text);
+  if (!code) return "";
+  const parts = code.match(/^([A-Z0-9]+)-(\d+)$/i);
+  if (parts) return parts[1] + "-" + String(parseInt(parts[2], 10));
+  return code;
+}
+
 function formatMovieCode(movieId, rawTitle) {
   let code = String(movieId || "")
     .trim()
@@ -1559,18 +1598,59 @@ function formatMovieCode(movieId, rawTitle) {
   return code;
 }
 
-/** 供 Forward 详情页 TMDB / 豆瓣匹配（与 javdb buildGuangyaMatchFields 一致） */
-function buildExternalMatchFields(rawCode, rawTitle) {
+function resolveMovieCode(movieId, displayTitle, extraText) {
+  let code = formatMovieCode(movieId, "");
+  if (!code && displayTitle) code = formatMovieCode("", displayTitle);
+  if (!code && displayTitle) code = extractJavCode(displayTitle);
+  if (!code && extraText) code = extractJavCode(extraText);
+  return code || "";
+}
+
+/** Forward 详情 TMDB / 豆瓣匹配（与 javdb.js buildGuangyaMatchFields 相同） */
+function buildGuangyaMatchFields(rawCode, rawTitle, description) {
   rawCode = String(rawCode || "").trim();
   rawTitle = String(rawTitle || "").replace(/\s+/g, " ").trim();
+  description = String(description || "").replace(/\s+/g, " ").trim();
   const fields = {};
   if (rawCode) {
     fields.name = rawCode;
     fields.seriesName = rawCode;
     fields.episodeName = rawCode;
+    fields.code = rawCode;
+    fields.matchCode = rawCode;
   }
   if (rawTitle) fields.originalTitle = rawTitle;
+  if (rawCode && description && description.toUpperCase().indexOf(rawCode.toUpperCase()) < 0) {
+    fields.description = rawCode + " " + description;
+  } else if (description) {
+    fields.description = description;
+  } else if (rawCode) {
+    fields.description = rawCode;
+  }
   return fields;
+}
+
+function buildDetailMatchFields(movieCode, rawTitle, synopsisText) {
+  const matchDescription = synopsisText || (movieCode ? "\u756a\u53f7: " + movieCode : "");
+  const match = buildGuangyaMatchFields(movieCode, rawTitle, matchDescription);
+  return {
+    id: movieCode || undefined,
+    name: match.name,
+    seriesName: match.seriesName,
+    episodeName: match.episodeName,
+    originalTitle: match.originalTitle,
+    code: match.code,
+    matchCode: match.matchCode,
+  };
+}
+
+function enrichListItemMatchFields(item, rawTitle) {
+  if (!item) return item;
+  const movieCode = resolveMovieCode("", item.title || rawTitle || "", rawTitle || "");
+  const listDescription = movieCode ? "\u756a\u53f7: " + movieCode : "";
+  return stripUndefined(
+    Object.assign({}, item, buildGuangyaMatchFields(movieCode, rawTitle || item.title || "", listDescription))
+  );
 }
 
 const COVER_VERIFY_MIN_BYTES = 15360;
@@ -2109,7 +2189,7 @@ function resolveDisplaySynopsis(source, translated) {
   if (!shouldTranslateText(raw)) return raw;
   const zh = sanitizeSourceText(translated);
   if (zh && isValidChineseTranslation(zh)) return zh;
-  return raw;
+  return "";
 }
 
 function applySynopsisToFields(fields, parts, synopsisText) {
@@ -2493,7 +2573,11 @@ function parseVideoListSync(html) {
 }
 
 function parseVideoList(html) {
-  return parseVideoListSync(html);
+  const items = parseVideoListSync(html);
+  for (let i = 0; i < items.length; i++) {
+    items[i] = enrichListItemMatchFields(items[i]);
+  }
+  return items;
 }
 
 async function loadGenreList(params) {
@@ -2628,17 +2712,20 @@ function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
   if (!playable.length) return null;
 
   const mainPart = playable[0];
-  coverBundle = coverBundle || buildDetailCoverBundle(
-    fields.cover,
-    formatMovieCode(fields.detailInfo.movieId, fields.displayTitle)
+  const movieCode = resolveMovieCode(
+    fields.detailInfo.movieId,
+    fields.displayTitle,
+    fields.synopsisRaw || fields.synopsisDisplay || ""
   );
+  coverBundle =
+    coverBundle || buildDetailCoverBundle(fields.cover, movieCode || fields.displayTitle);
   const isSeries = isMultiPartMovie(parts);
+  const originalTitle = fields.synopsisRaw || fields.displayTitle;
 
-  const movieCode = formatMovieCode(fields.detailInfo.movieId, fields.displayTitle);
   const item = stripUndefined(
     Object.assign(
       {
-        id: baseUrl,
+        id: movieCode || baseUrl,
         type: "url",
         title: fields.displayTitle,
         backdropPath: coverBundle.backdropPath,
@@ -2654,7 +2741,7 @@ function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
         mediaType: "movie",
         playerType: "system",
       },
-      buildExternalMatchFields(movieCode, fields.displayTitle)
+      buildDetailMatchFields(movieCode, originalTitle, fields.synopsisDisplay || "")
     )
   );
 
@@ -2684,14 +2771,20 @@ async function refreshDetailPresentation(item, baseUrl) {
   const parts = fields.parts && fields.parts.length ? fields.parts : [];
   await applySynopsisTranslation(fields, parts);
 
-  const movieCode = formatMovieCode(fields.detailInfo.movieId, fields.displayTitle);
+  const movieCode = resolveMovieCode(
+    fields.detailInfo.movieId,
+    fields.displayTitle,
+    fields.synopsisRaw || fields.synopsisDisplay || ""
+  );
   const coverBundle = await resolveDetailCoverBundle(
     fields.cover,
-    movieCode,
+    movieCode || fields.displayTitle,
     getEffectiveParams({})
   );
+  const originalTitle = fields.synopsisRaw || fields.displayTitle;
 
   const merged = Object.assign({}, item, {
+    id: movieCode || item.id || baseUrl,
     title: fields.displayTitle || item.title,
     description: fields.description || item.description,
     backdropPath: coverBundle.backdropPath,
@@ -2707,7 +2800,7 @@ async function refreshDetailPresentation(item, baseUrl) {
   });
 
   return stripUndefined(
-    Object.assign(merged, buildExternalMatchFields(movieCode, fields.displayTitle))
+    Object.assign(merged, buildDetailMatchFields(movieCode, originalTitle, fields.synopsisDisplay || ""))
   );
 }
 
@@ -2741,10 +2834,18 @@ async function loadDetailInternal(link) {
 
     if (!parts.length || !fields) return null;
 
-    const movieCode = formatMovieCode(fields.detailInfo.movieId, fields.displayTitle);
+    const movieCode = resolveMovieCode(
+      fields.detailInfo.movieId,
+      fields.displayTitle,
+      fields.synopsisRaw || fields.synopsisDisplay || ""
+    );
     const effectiveParams = getEffectiveParams({});
 
-    const coverPromise = resolveDetailCoverBundle(fields.cover, movieCode, effectiveParams);
+    const coverPromise = resolveDetailCoverBundle(
+      fields.cover,
+      movieCode || fields.displayTitle,
+      effectiveParams
+    );
     let resolvedPartsPromise;
     if (parts.length > 1) {
       resolvedPartsPromise = resolveFreshPlayableParts(baseUrl);
