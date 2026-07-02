@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.0.26",
+  version: "1.1.0",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -1313,7 +1313,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v9:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v11:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1327,7 +1327,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v9:" + String(baseUrl),
+      "detail:v11:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1527,6 +1527,25 @@ function compactUniqueUrls(urls) {
   return result;
 }
 
+function cleanDvdId(raw) {
+  return String(raw || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/-UNCENSORED-LEAK$/i, "")
+    .replace(/-CHINESE-SUBTITLE$/i, "")
+    .replace(/\s+/g, "")
+    .trim();
+}
+
+function buildDmmContentIdFromDvdId(dvdId) {
+  const clean = cleanDvdId(dvdId).toLowerCase();
+  const match = clean.match(/^([a-z]+)[-_ ]*0*(\d+)$/i);
+  if (!match) return clean.replace(/[^a-z0-9]/gi, "");
+  let number5 = String(parseInt(match[2], 10));
+  while (number5.length < 5) number5 = "0" + number5;
+  return match[1].toLowerCase() + number5;
+}
+
 function parseJavCodeParts(code) {
   const raw = String(code || "").toUpperCase();
   const match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
@@ -1540,8 +1559,21 @@ function parseJavCodeParts(code) {
     FSDSS: "1",
     FCDSS: "1",
     FNS: "1",
+    FTHTD: "1",
+    FALENO: "1",
+    FGAN: "1",
+    FSNF: "1",
+    FLAV: "1",
+    DLDSS: "1",
     ABP: "118",
     CHN: "118",
+    STARS: "1",
+    STAR: "1",
+    START: "1",
+    SODS: "1",
+    REBD: "h_346",
+    REBDB: "h_346",
+    GSHRB: "h_346",
   };
   return {
     prefix: prefix,
@@ -1549,6 +1581,7 @@ function parseJavCodeParts(code) {
     number: match[2],
     number5: number5,
     code: String(numMap[prefix] || "") + prefixLower + number5,
+    plainCode: prefixLower + number5,
   };
 }
 
@@ -1590,10 +1623,16 @@ function buildDmmCoverCandidatesFromParts(parts) {
 
 function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
   const parts = parseJavCodeParts(videoIdOrTitle);
-  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
-  const rule = MGSTAGE_COVER_RULES[parts.prefix];
-  if (rule) return buildMgstageCoverCandidatesFromParts(parts, rule);
-  return buildDmmCoverCandidatesFromParts(parts);
+  if (parts) {
+    const rule = MGSTAGE_COVER_RULES[parts.prefix];
+    if (rule) return buildMgstageCoverCandidatesFromParts(parts, rule);
+    return buildDmmCoverCandidatesFromParts(parts);
+  }
+  const contentId = buildDmmContentIdFromDvdId(videoIdOrTitle);
+  if (contentId) {
+    return buildDmmCoverCandidatesFromParts({ code: contentId });
+  }
+  return { posterCandidates: [], backdropCandidates: [] };
 }
 
 function pickBestFromSrcset(srcset) {
@@ -1633,8 +1672,14 @@ function normalizePosterUrl(url) {
 function upgradeJavmoveCoverUrl(url) {
   let u = normalizePosterUrl(url);
   if (!u) return "";
-  u = u.replace(/\/thumbs?\//gi, "/covers/").replace(/\/small\//gi, "/large/");
+  u = u
+    .replace(/\/thumbs?\//gi, "/covers/")
+    .replace(/\/media\/thumb\//gi, "/media/cover/")
+    .replace(/\/small\./gi, "/large.")
+    .replace(/\/small\//gi, "/large/");
   u = u.replace(/([_-])(?:small|thumb|s\d+)(\.(?:webp|jpg|jpeg|png))/i, "$1large$2");
+  u = u.replace(/([_-])medium(\.(?:webp|jpg|jpeg|png))/i, "$1large$2");
+  u = u.replace(/(@|\?)(?:w|h|width|height)=[^&"']+/gi, "");
   return u;
 }
 
@@ -1671,6 +1716,20 @@ function isJavmovePosterUrl(url) {
   return /javmove\.com/i.test(String(url || ""));
 }
 
+function posterRequestHeaders(url) {
+  const u = String(url || "").toLowerCase();
+  let referer = BASE_URL + "/";
+  if (u.indexOf("dmm.co.jp") >= 0 || u.indexOf("dmm.com") >= 0) {
+    referer = "https://www.dmm.co.jp/";
+  } else if (u.indexOf("mgstage.com") >= 0) {
+    referer = "https://www.mgstage.com/";
+  }
+  return mergeHeaders({
+    Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    Referer: referer,
+  });
+}
+
 function extractPosterFinalUrl(resp, url) {
   const respObj = resp && resp.request && resp.request.res;
   if (respObj && respObj.responseUrl) return String(respObj.responseUrl);
@@ -1684,14 +1743,10 @@ function extractPosterFinalUrl(resp, url) {
 
 async function verifyPosterUrl(url) {
   if (!url || isNowPrintingPosterTarget(url)) return "";
-  if (isJavmovePosterUrl(url)) return normalizePosterUrl(url);
   try {
     const resp = await Widget.http.get(url, {
       timeout: POSTER_VERIFY_TIMEOUT_MS,
-      headers: mergeHeaders({
-        Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        Referer: BASE_URL + "/",
-      }),
+      headers: posterRequestHeaders(url),
     });
     const finalUrl = extractPosterFinalUrl(resp, url);
     if (isNowPrintingPosterTarget(finalUrl)) return "";
@@ -1714,36 +1769,49 @@ async function verifyPosterUrl(url) {
 }
 
 async function pickFirstVerifiedPosterUrl(urls) {
-  for (let i = 0; i < (urls || []).length; i++) {
-    const ok = await verifyPosterUrl(urls[i]);
-    if (ok) return ok;
+  urls = urls || [];
+  if (!urls.length) return "";
+  const results = await Promise.all(
+    urls.map(function (url, idx) {
+      return verifyPosterUrl(url).then(function (ok) {
+        return { idx: idx, url: ok };
+      });
+    })
+  );
+  results.sort(function (a, b) {
+    return a.idx - b.idx;
+  });
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].url) return results[i].url;
   }
   return "";
 }
 
+function resolvePagePosterFallback(pageCover) {
+  return resolvePageCoverUrl(pageCover) || normalizePosterUrl(pageCover) || "";
+}
+
 function buildDetailCoverBundle(pageCover, code) {
-  const pagePoster = resolvePageCoverUrl(pageCover) || normalizePosterUrl(pageCover) || "";
+  const pagePoster = resolvePagePosterFallback(pageCover);
+  const candidates = buildCoverCandidatesFromVideoId(code);
   return {
-    backdropPath: pagePoster || undefined,
-    posterPath: pagePoster || undefined,
-    detailPoster: pagePoster || undefined,
+    backdropPath: candidates.backdropCandidates[0] || pagePoster || undefined,
+    posterPath: candidates.posterCandidates[0] || pagePoster || undefined,
+    detailPoster: pagePoster || candidates.posterCandidates[0] || undefined,
   };
 }
 
 async function resolveDetailCoverBundle(pageCover, code) {
-  const pagePoster = resolvePageCoverUrl(pageCover) || normalizePosterUrl(pageCover) || "";
-  const dmmCandidates = buildCoverCandidatesFromVideoId(code);
-  const posterCandidates = compactUniqueUrls(
-    [pagePoster].concat(dmmCandidates.posterCandidates || [])
+  const pagePoster = resolvePagePosterFallback(pageCover);
+  const candidates = buildCoverCandidatesFromVideoId(code);
+
+  const verifiedPoster = await pickFirstVerifiedPosterUrl(
+    candidates.posterCandidates || []
   );
-  const verifiedPoster = await pickFirstVerifiedPosterUrl(posterCandidates);
   const detailPoster = verifiedPoster || pagePoster;
 
   const backdropCandidates = compactUniqueUrls(
-    [pagePoster].concat(
-      dmmCandidates.backdropCandidates || [],
-      dmmCandidates.posterCandidates || []
-    )
+    (candidates.backdropCandidates || []).concat(candidates.posterCandidates || [])
   );
   const verifiedBackdrop = await pickFirstVerifiedPosterUrl(backdropCandidates);
   const backdropPath = verifiedBackdrop || detailPoster || pagePoster;
@@ -1803,6 +1871,7 @@ function readTranslateCache(key) {
     if (!raw) return "";
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.text && data.ts && Date.now() - data.ts < TRANSLATE_CACHE_TTL * 1000) {
+      if (looksLikeGarbledTranslation(data.text)) return "";
       return data.text;
     }
   } catch (e) {}
@@ -1822,20 +1891,66 @@ function decodeUnicodeEscapes(text) {
   });
 }
 
+function stringifyHttpBody(raw) {
+  if (raw == null) return "";
+  if (typeof raw === "string") return raw;
+  if (typeof raw === "object" && !Array.isArray(raw) && !(raw instanceof Uint8Array)) {
+    return raw;
+  }
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(raw)) {
+    return raw.toString("utf8");
+  }
+  if (raw instanceof Uint8Array) {
+    if (typeof Buffer !== "undefined") return Buffer.from(raw).toString("utf8");
+    if (typeof TextDecoder !== "undefined") {
+      return new TextDecoder("utf-8").decode(raw);
+    }
+  }
+  return String(raw);
+}
+
+function normalizeTranslateOutput(text) {
+  let value = decodeUnicodeEscapes(String(text || "").trim());
+  if (!value) return "";
+  if (/[\u4e00-\u9fff]/.test(value)) return value;
+  if (/[\u00c0-\u00ff]{2,}/.test(value) || /[ÃÂâ]/.test(value)) {
+    try {
+      if (typeof Buffer !== "undefined") {
+        const fixed = Buffer.from(value, "latin1").toString("utf8");
+        if (/[\u4e00-\u9fff]/.test(fixed)) return fixed.trim();
+      }
+    } catch (e) {}
+  }
+  return value;
+}
+
+function looksLikeGarbledTranslation(translated) {
+  const value = String(translated || "").trim();
+  if (!value) return true;
+  if (/[\u4e00-\u9fff]/.test(value)) return false;
+  if (/[\u00c0-\u00ff]{2,}/.test(value)) return true;
+  if (/[ÃÂâ]/.test(value)) return true;
+  return false;
+}
+
 function parseTranslatePayload(raw) {
   if (raw == null) return "";
   let data = raw;
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
+  const body = stringifyHttpBody(raw);
+  if (typeof body === "object" && body !== null) {
+    data = body;
+  } else if (typeof body === "string") {
+    const trimmed = body.trim();
     if (!trimmed) return "";
     if (trimmed.charAt(0) === "[" || trimmed.charAt(0) === "{") {
       try {
         data = JSON.parse(trimmed);
       } catch (e) {
-        return trimmed;
+        return "";
       }
     } else {
-      return trimmed;
+      const normalized = normalizeTranslateOutput(trimmed);
+      return looksLikeGarbledTranslation(normalized) ? "" : normalized;
     }
   }
   if (Array.isArray(data) && Array.isArray(data[0])) {
@@ -1843,10 +1958,12 @@ function parseTranslatePayload(raw) {
     for (let i = 0; i < data[0].length; i++) {
       if (data[0][i] && data[0][i][0]) out += data[0][i][0];
     }
-    return out.trim();
+    out = normalizeTranslateOutput(out.trim());
+    return looksLikeGarbledTranslation(out) ? "" : out;
   }
   if (data && data.responseData && data.responseData.translatedText) {
-    return decodeUnicodeEscapes(String(data.responseData.translatedText).trim());
+    const out = normalizeTranslateOutput(String(data.responseData.translatedText).trim());
+    return looksLikeGarbledTranslation(out) ? "" : out;
   }
   return "";
 }
@@ -1858,57 +1975,35 @@ function shouldTranslateText(text) {
   return /[a-zA-Z]/.test(source);
 }
 
-function isGenreCategoryItem(item) {
-  return String(item && item.id || "").indexOf("/genres/") >= 0;
+function readSynopsisTranslation(synopsisRaw) {
+  const source = String(synopsisRaw || "").trim();
+  if (!source || !shouldTranslateText(source)) return source;
+  const cached = readTranslateCache(hashText(source));
+  if (cached && !looksLikeGarbledTranslation(cached)) return cached;
+  return source;
 }
 
-async function applyDetailTranslations(fields, parts) {
+async function translateSynopsisOnly(synopsisRaw) {
+  const source = String(synopsisRaw || "").trim();
+  if (!source) return "";
+  if (!shouldTranslateText(source)) return source;
+
+  const cacheKey = hashText(source);
+  const cached = readTranslateCache(cacheKey);
+  if (cached && !looksLikeGarbledTranslation(cached)) return cached;
+
+  const translated = await translateToChinese(source);
+  if (translated && translated !== source && !looksLikeGarbledTranslation(translated)) {
+    return translated;
+  }
+  return source;
+}
+
+function applySynopsisToFields(fields, parts, synopsisText) {
   if (!fields) return fields;
-  const info = Object.assign({}, fields.detailInfo || {});
   const partCount = parts && parts.length ? parts.length : 0;
-
-  const synopsisRaw = String(fields.synopsisRaw || "").trim();
-  let synopsisText = synopsisRaw;
-  if (shouldTranslateText(synopsisRaw)) {
-    synopsisText = await translateToChinese(synopsisRaw);
-  }
-
-  const translateJobs = [];
-  if (shouldTranslateText(info.maker)) {
-    translateJobs.push(
-      translateToChinese(info.maker).then(function (text) {
-        info.maker = text;
-      })
-    );
-  }
-  if (shouldTranslateText(info.label)) {
-    translateJobs.push(
-      translateToChinese(info.label).then(function (text) {
-        info.label = text;
-      })
-    );
-  }
-  await Promise.all(translateJobs);
-
-  const genreItems = [];
-  const genreJobs = (fields.genreItems || []).map(function (item, idx) {
-    if (!isGenreCategoryItem(item) || !shouldTranslateText(item.title)) {
-      genreItems[idx] = item;
-      return Promise.resolve();
-    }
-    return translateToChinese(item.title).then(function (title) {
-      genreItems[idx] = Object.assign({}, item, { title: title });
-    });
-  });
-  await Promise.all(genreJobs);
-  for (let i = 0; i < (fields.genreItems || []).length; i++) {
-    if (!genreItems[i]) genreItems[i] = fields.genreItems[i];
-  }
-
-  fields.detailInfo = info;
-  fields.genreItems = genreItems;
   fields.description = buildDetailDescription(
-    info,
+    fields.detailInfo,
     partCount,
     0,
     0,
@@ -1917,52 +2012,60 @@ async function applyDetailTranslations(fields, parts) {
   return fields;
 }
 
+function applySynopsisTranslation(fields, parts) {
+  if (!fields) return fields;
+  const synopsisRaw = String(fields.synopsisRaw || "").trim();
+  applySynopsisToFields(fields, parts, readSynopsisTranslation(synopsisRaw));
+
+  if (
+    shouldTranslateText(synopsisRaw) &&
+    readSynopsisTranslation(synopsisRaw) === synopsisRaw
+  ) {
+    translateSynopsisOnly(synopsisRaw).catch(function () {});
+  }
+
+  return fields;
+}
+
 async function translateToChinese(text) {
   const source = String(text || "").trim();
   if (!source) return "";
   const cacheKey = hashText(source);
   const cached = readTranslateCache(cacheKey);
-  if (cached) return cached;
+  if (cached && !looksLikeGarbledTranslation(cached)) return cached;
 
-  const chunkSize = 1200;
-  const chunks = [];
-  for (let i = 0; i < source.length; i += chunkSize) {
-    chunks.push(source.slice(i, i + chunkSize));
-  }
+  let part = "";
+  try {
+    const googleUrl =
+      "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=" +
+      encodeURIComponent(source.slice(0, 1800));
+    const res = await Widget.http.get(googleUrl, {
+      timeout: 2500,
+      headers: { "User-Agent": HEADERS["User-Agent"], Accept: "*/*" },
+    });
+    part = parseTranslatePayload(res.data);
+  } catch (e) {}
 
-  const translatedParts = [];
-  for (let i = 0; i < chunks.length; i++) {
-    let part = "";
+  if (!part) {
     try {
-      const googleUrl =
-        "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=" +
-        encodeURIComponent(chunks[i]);
-      const res = await Widget.http.get(googleUrl, {
-        headers: { "User-Agent": HEADERS["User-Agent"], Accept: "*/*" },
+      const mmUrl =
+        "https://api.mymemory.translated.net/get?q=" +
+        encodeURIComponent(source.slice(0, 500)) +
+        "&langpair=en|zh-CN";
+      const res = await Widget.http.get(mmUrl, {
+        timeout: 2500,
+        headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" },
       });
       part = parseTranslatePayload(res.data);
     } catch (e) {}
-
-    if (!part) {
-      try {
-        const mmUrl =
-          "https://api.mymemory.translated.net/get?q=" +
-          encodeURIComponent(chunks[i]) +
-          "&langpair=en|zh-CN";
-        const res = await Widget.http.get(mmUrl, {
-          headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" },
-        });
-        part = parseTranslatePayload(res.data);
-      } catch (e) {}
-    }
-
-    translatedParts.push(part || chunks[i]);
   }
 
-  const translated = translatedParts.join("").trim();
-  const result = translated || source;
-  if (translated && translated !== source) writeTranslateCache(cacheKey, translated);
-  return result;
+  const result = part || source;
+  if (part && part !== source && !looksLikeGarbledTranslation(part)) {
+    writeTranslateCache(cacheKey, part);
+    return part;
+  }
+  return source;
 }
 
 function parseDetailMeta(html) {
@@ -2432,15 +2535,17 @@ async function loadDetailInternal(link) {
 
     if (!parts.length || !fields) return null;
 
-    fields = await applyDetailTranslations(fields, parts);
+    const movieCode = formatMovieCode(fields.detailInfo.movieId, fields.displayTitle);
+    applySynopsisTranslation(fields, parts);
 
-    let resolvedParts = [];
+    const coverPromise = resolveDetailCoverBundle(fields.cover, movieCode);
+    let resolvedPartsPromise;
     if (parts.length > 1) {
-      resolvedParts = await resolveFreshPlayableParts(baseUrl);
+      resolvedPartsPromise = resolveFreshPlayableParts(baseUrl);
     } else {
-      const playback = await resolveVideoUrlForPage(parts[0].pageUrl, baseUrl);
-      if (playback) {
-        resolvedParts = [
+      resolvedPartsPromise = resolveVideoUrlForPage(parts[0].pageUrl, baseUrl).then(function (playback) {
+        if (!playback) return [];
+        return [
           {
             label: parts[0].label,
             pageUrl: parts[0].pageUrl,
@@ -2448,14 +2553,15 @@ async function loadDetailInternal(link) {
             customHeaders: buildPlayHeaders(playback.videoUrl, parts[0].pageUrl),
           },
         ];
-      }
+      });
     }
 
+    const [coverBundle, resolvedParts] = await Promise.all([
+      coverPromise,
+      resolvedPartsPromise,
+    ]);
+
     if (!resolvedParts.length) {
-      const coverBundle = await resolveDetailCoverBundle(
-        fields.cover,
-        formatMovieCode(fields.detailInfo.movieId, fields.displayTitle)
-      );
       const metaOnly = composeDetailMetaOnly(baseUrl, fields, parts, coverBundle);
       writeDetailItemCache(baseUrl, metaOnly);
       return metaOnly;
@@ -2477,10 +2583,6 @@ async function loadDetailInternal(link) {
       }
     }
 
-    const coverBundle = await resolveDetailCoverBundle(
-      fields.cover,
-      formatMovieCode(fields.detailInfo.movieId, fields.displayTitle)
-    );
     const detailItem = composeDetailItem(
       baseUrl,
       fields,
