@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.2.4",
+  version: "1.2.5",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -1195,6 +1195,28 @@ function parseDetailInfo($, html) {
   return info;
 }
 
+function stripDuplicateTitleFromSynopsis(synopsis, displayTitle, movieCode) {
+  let text = sanitizeSourceText(synopsis);
+  if (!text) return "";
+  const title = sanitizeSourceText(displayTitle);
+  if (title) {
+    if (text.toUpperCase() === title.toUpperCase()) return "";
+    if (text.toUpperCase().indexOf(title.toUpperCase()) === 0) {
+      text = text.slice(title.length).replace(/^[\s\-–—:,，]+/, "").trim();
+    }
+  }
+  if (movieCode) {
+    const code = String(movieCode).trim();
+    text = text
+      .replace(new RegExp("^" + code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*", "i"), "")
+      .trim();
+    const looseCode = normalizeCodeToken(code);
+    const looseText = normalizeCodeToken(text);
+    if (looseCode && looseText === looseCode) return "";
+  }
+  return text;
+}
+
 function buildSynopsisDescription(synopsisText) {
   return sanitizeSourceText(synopsisText) || "";
 }
@@ -1353,7 +1375,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v15:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v16:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1367,7 +1389,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v15:" + String(baseUrl),
+      "detail:v16:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -2020,14 +2042,6 @@ async function resolveDetailCoverBundle(pageCover, code, params) {
 }
 
 function extractSynopsisRaw(html, rawTitle) {
-  let raw = decodeHtml(String(rawTitle || ""))
-    .replace(/\|\s*JAVMove\s*$/i, "")
-    .trim();
-  if (raw) {
-    const stripped = raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
-    if (stripped.length >= 16) return sanitizeSourceText(stripped);
-  }
-
   const metaMatch = String(html || "").match(/name="description"\s+content="([^"]+)"/i);
   if (metaMatch) {
     let meta = decodeHtml(metaMatch[1]).replace(/^Watch online\s+/i, "").trim();
@@ -2035,16 +2049,7 @@ function extractSynopsisRaw(html, rawTitle) {
     if (meta.length >= 16) return sanitizeSourceText(meta);
   }
 
-  const titleMatch = String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  if (titleMatch) {
-    let pageTitle = decodeHtml(titleMatch[1])
-      .replace(/\|\s*JAVMove\s*$/i, "")
-      .trim();
-    pageTitle = pageTitle.replace(/^[A-Za-z0-9-]+\s+/, "").trim();
-    if (pageTitle.length >= 16) return sanitizeSourceText(pageTitle);
-  }
-
-  return sanitizeSourceText(raw.replace(/^[A-Za-z0-9-]+\s+/, "").trim() || raw);
+  return "";
 }
 
 function hashText(text) {
@@ -2223,7 +2228,17 @@ function resolveDisplaySynopsis(source, translated) {
 
 function applySynopsisToFields(fields, parts, synopsisText) {
   if (!fields) return fields;
-  const displaySynopsis = buildSynopsisDescription(synopsisText);
+  const movieCode = resolveMovieCode(
+    fields.detailInfo && fields.detailInfo.movieId,
+    fields.displayTitle,
+    fields.synopsisRaw || ""
+  );
+  let displaySynopsis = buildSynopsisDescription(synopsisText);
+  displaySynopsis = stripDuplicateTitleFromSynopsis(
+    displaySynopsis,
+    fields.displayTitle,
+    movieCode
+  );
   fields.synopsisDisplay = displaySynopsis;
   fields.description = displaySynopsis;
   return fields;
@@ -2697,13 +2712,7 @@ function buildDetailFieldsFromHtml(html, baseUrl, parts) {
     $("video").attr("poster") ||
     meta.cover ||
     "";
-  const backdropPaths = extractDetailStills(
-    html,
-    $,
-    cover,
-    displayTitle,
-    baseUrl
-  );
+  const backdropPaths = extractDetailStills(html, $, cover, movieCode, baseUrl);
   const rating = parseDetailRating($, html);
   const genreItems = collectDetailGenreItems(html, $);
   const peoples = collectDetailPeoples($);
