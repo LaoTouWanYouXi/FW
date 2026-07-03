@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.8.5",
+  version: "1.8.6",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "老头",
@@ -600,7 +600,10 @@ function buildDmmContentId(raw) {
   const text = String(raw || "")
     .toLowerCase()
     .replace(/-(?:uncensored-leaked|chinese-subtitle|english-subtitle|censored|leaked|subtitle)$/gi, "");
-  const codeMatch = text.match(/([a-z0-9]+)[-_]?0*(\d{2,5})/i);
+  if (/^fc2/i.test(text)) return "";
+  const codeMatch =
+    text.match(/^([a-z]{2,10})-?(\d{2,5})$/i) ||
+    text.match(/([a-z]{2,10})[-_]?0*(\d{2,5})/i);
   if (!codeMatch) return "";
   let number5 = String(parseInt(codeMatch[2], 10));
   while (number5.length < 5) number5 = "0" + number5;
@@ -749,6 +752,10 @@ function buildListCoverCandidates(href, coverUrl, scopeHtml) {
     out.push(u);
   }
 
+  buildDmmBackdropCandidates(href).forEach(add);
+  add(buildCoverFallbackUrl(href, "n"));
+  add(buildSlugLandscapeBackdrop(href));
+
   add(extractPreviewFromScope(scopeHtml));
   add(extractBackgroundCoverFromScope(scopeHtml));
 
@@ -760,16 +767,17 @@ function buildListCoverCandidates(href, coverUrl, scopeHtml) {
   const derivedPreview = derivePreviewUrl(coverUrl || fromScope || extractBackgroundCoverFromScope(scopeHtml) || "");
   if (derivedPreview) add(derivedPreview);
 
-  add(buildCoverFallbackUrl(href, "n"));
   add(buildCoverFallbackUrl(href, "jpg"));
   buildCoverFallbackCandidates(href, "n").forEach(add);
   buildCoverFallbackCandidates(href, "jpg").forEach(add);
-  buildDmmBackdropCandidates(href).forEach(add);
   return out;
 }
 
 function resolveListCover(href, coverUrl, scopeHtml) {
   const candidates = buildListCoverCandidates(href, coverUrl, scopeHtml);
+  const dmmFirst = buildDmmBackdropUrl(href);
+  if (dmmFirst) return dmmFirst;
+
   if (!candidates.length) return buildSlugLandscapeBackdrop(href);
 
   function pick(re) {
@@ -779,11 +787,11 @@ function resolveListCover(href, coverUrl, scopeHtml) {
   }
 
   const picked =
-    pick(/icdn[^"']*\/preview\//i) ||
     pick(/dmm\.co\.jp\/[^"']+pl\.jpg/i) ||
+    pick(/icdn[^"']*\/preview\//i) ||
+    pick(/fourhoi\.com\/[^"']+\/cover-n\.jpg/i) ||
     pick(/icdn[^"']*\/img2\/[^"']+\/cover\.(?:webp|jpg|jpeg)/i) ||
     pick(/icdn[^"']*\/img2\/[^"']+\/cover-n\.(?:webp|jpg|jpeg)/i) ||
-    pick(/fourhoi\.com\/[^"']+\/cover-n\.jpg/i) ||
     pick(/fourhoi\.com\/[^"']+\/cover\.jpg/i) ||
     candidates.find(function (u) {
       return isLandscapeListCoverUrl(u);
@@ -791,9 +799,7 @@ function resolveListCover(href, coverUrl, scopeHtml) {
     candidates[0];
 
   if (picked && !isPortraitCoverUrl(picked)) return picked;
-  const dmm = buildDmmBackdropUrl(href);
-  if (dmm) return dmm;
-  return buildSlugLandscapeBackdrop(href) || candidates[0] || "";
+  return buildSlugLandscapeBackdrop(href) || buildCoverFallbackUrl(href, "n") || candidates[0] || "";
 }
 
 function normalizeListCoverSize(url) {
@@ -975,16 +981,50 @@ function pickBestFromSrcset(srcset) {
   return best;
 }
 
+function pickListFromSrcset(srcset) {
+  const text = String(srcset || "").trim();
+  if (!text) return "";
+  if (text.indexOf(",") < 0) return text.split(/\s+/)[0];
+  const entries = [];
+  const parts = text.split(",");
+  for (let i = 0; i < parts.length; i++) {
+    const piece = String(parts[i] || "").trim();
+    if (!piece) continue;
+    const chunks = piece.split(/\s+/);
+    const url = chunks[0];
+    if (!url || url.indexOf("data:image") === 0) continue;
+    let w = 0;
+    if (chunks[1]) {
+      const wm = chunks[1].match(/(\d+)w/i);
+      if (wm) w = parseInt(wm[1], 10);
+    }
+    entries.push({ url: url, w: w });
+  }
+  if (!entries.length) return "";
+  let best = entries[0];
+  let bestScore = Infinity;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const score = e.w ? Math.abs(e.w - 720) : 9999;
+    if (score < bestScore) {
+      best = e;
+      bestScore = score;
+    }
+  }
+  return best.url;
+}
+
 function pickImageAttrs($img, forList) {
   if (!$img || !$img.length) return "";
   const attrs = forList
-    ? ["data-srcset", "data-src", "data-original", "data-lazy-src", "srcset", "src"]
+    ? ["data-srcset", "data-src", "data-original", "data-lazy-src", "data-splash", "srcset", "src"]
     : ["data-src", "data-original", "data-lazy-src", "data-srcset", "srcset", "src"];
   for (let i = 0; i < attrs.length; i++) {
     let val = $img.attr(attrs[i]) || "";
     if (!val) continue;
-    if (val.indexOf(",") >= 0 && /https?:\/\//.test(val)) val = pickBestFromSrcset(val);
-    else if (val.includes(",")) val = val.split(",")[0].trim().split(/\s+/)[0];
+    if (val.indexOf(",") >= 0 && /https?:\/\//.test(val)) {
+      val = forList ? pickListFromSrcset(val) : pickBestFromSrcset(val);
+    } else if (val.includes(",")) val = val.split(",")[0].trim().split(/\s+/)[0];
     val = normalizeImageUrl(val);
     if (!val || val.indexOf("data:image") === 0) continue;
     if (!isValidImageUrl(val)) continue;
@@ -1232,7 +1272,7 @@ function parseVideoListRegex(html) {
       coverRaw = "https:" + coverRaw;
     }
     if (coverRaw && coverRaw.indexOf("http") !== 0 && coverRaw.indexOf(",") >= 0) {
-      coverRaw = pickBestFromSrcset(coverRaw);
+      coverRaw = pickListFromSrcset(coverRaw);
     }
     const durationM = window.match(/\b(\d{1,2}:\d{2}:\d{2})\b/);
     const item = makeListVideoItem(
@@ -1389,6 +1429,14 @@ function parseHttpJson(data) {
 
 function extractM3u8FromHtml(html) {
   const text = String(html || "");
+
+  const seekIdx = text.indexOf("seek");
+  if (seekIdx > 38) {
+    const chunk = text.substring(seekIdx - 38, seekIdx - 2);
+    if (/^[a-f0-9-]{36}$/i.test(chunk)) {
+      return "https://surrit.com/" + chunk + "/playlist.m3u8";
+    }
+  }
 
   const pipeMatch = text.match(/m3u8\|([a-f0-9|]+)\|com\|surrit\|https\|video/i);
   if (pipeMatch) {
@@ -1597,56 +1645,94 @@ function detectSurritBases(html) {
   return unique;
 }
 
+function parseSurritStreamResponse(streamJson) {
+  if (!streamJson || typeof streamJson !== "object") return "";
+  if (typeof streamJson.stream === "string" && streamJson.stream.indexOf("http") === 0) return streamJson.stream;
+  if (typeof streamJson.url === "string" && streamJson.url.indexOf("http") === 0) return streamJson.url;
+  if (streamJson.media) {
+    if (typeof streamJson.media === "string") return "";
+    if (streamJson.media.stream) return streamJson.media.stream;
+    if (streamJson.media.mp4) return streamJson.media.mp4;
+  }
+  if (streamJson.result) {
+    if (typeof streamJson.result.stream === "string") return streamJson.result.stream;
+    if (streamJson.result.media) {
+      if (typeof streamJson.result.media === "object") {
+        return streamJson.result.media.stream || streamJson.result.media.mp4 || "";
+      }
+    }
+  }
+  if (streamJson.data && streamJson.data.stream) return streamJson.data.stream;
+  return "";
+}
+
+function buildSurritReferers(surritBase, videoId, pageReferer, poster) {
+  const embedRef = surritBase + "/e/" + videoId + (poster ? "?poster=" + encodeURIComponent(poster) : "");
+  const refs = [embedRef, pageReferer, BASE_URL + LANG_PREFIX + "/", BASE_URL + "/", "https://123av.com/"];
+  const out = [];
+  const seen = new Set();
+  for (let i = 0; i < refs.length; i++) {
+    const r = String(refs[i] || "").trim();
+    if (!r || seen.has(r)) continue;
+    seen.add(r);
+    out.push(r);
+  }
+  return out;
+}
+
 async function resolveSurritStreamNew(videoId, surritBase, pageReferer, poster) {
   let apiUrl = surritBase + "/stream?id=" + encodeURIComponent(videoId);
   if (poster) apiUrl += "&poster=" + encodeURIComponent(poster);
-  const embedRef = surritBase + "/e/" + videoId + (poster ? "?poster=" + encodeURIComponent(poster) : "");
-  try {
-    const streamRes = await Widget.http.get(apiUrl, {
-      timeout: HTTP_TIMEOUT_MS,
-      headers: {
-        "User-Agent": HEADERS["User-Agent"],
-        Accept: "application/json, text/plain, */*",
-        Referer: embedRef,
-        Origin: surritBase,
-      },
-    });
-    const streamJson = parseHttpJson(streamRes.data);
-    if (!streamJson) return "";
-    return (
-      (streamJson.media && (streamJson.media.stream || streamJson.media.mp4)) ||
-      (streamJson.result && streamJson.result.media && streamJson.result.stream) ||
-      streamJson.stream ||
-      streamJson.url ||
-      ""
-    );
-  } catch (e) {
-    return "";
+  const referers = buildSurritReferers(surritBase, videoId, pageReferer, poster);
+  for (let ri = 0; ri < referers.length; ri++) {
+    try {
+      const streamRes = await Widget.http.get(apiUrl, {
+        timeout: HTTP_TIMEOUT_MS,
+        headers: {
+          "User-Agent": HEADERS["User-Agent"],
+          Accept: "application/json, text/plain, */*",
+          Referer: referers[ri],
+          Origin: surritBase,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+      });
+      const streamJson = parseHttpJson(streamRes.data);
+      const url = parseSurritStreamResponse(streamJson);
+      if (url) return url;
+    } catch (e) {}
   }
+  return "";
 }
 
 async function resolveSurritStreamLegacy(videoId, surritBase, srcName, pageReferer) {
   const token = encodeURIComponent(xorEncrypt(videoId, AES_KEY));
-  const embedRef = surritBase + "/e/" + videoId;
-  try {
-    const streamRes = await Widget.http.get(surritBase + "/stream?src=" + srcName + "&token=" + token, {
-      timeout: HTTP_TIMEOUT_MS,
-      headers: {
-        "User-Agent": HEADERS["User-Agent"],
-        Accept: "application/json, text/plain, */*",
-        Referer: embedRef,
-        Origin: surritBase,
-        "X-Requested-With": "XMLHttpRequest",
-      },
-    });
-    const streamJson = parseHttpJson(streamRes.data);
-    const media = streamJson && streamJson.result && streamJson.result.media;
-    if (!media) return "";
-    const parsed = JSON.parse(xorDecode(media, AES_KEY));
-    return parsed.stream || parsed.mp4 || "";
-  } catch (e) {
-    return "";
+  const referers = buildSurritReferers(surritBase, videoId, pageReferer, "");
+  for (let ri = 0; ri < referers.length; ri++) {
+    try {
+      const streamRes = await Widget.http.get(surritBase + "/stream?src=" + srcName + "&token=" + token, {
+        timeout: HTTP_TIMEOUT_MS,
+        headers: {
+          "User-Agent": HEADERS["User-Agent"],
+          Accept: "application/json, text/plain, */*",
+          Referer: referers[ri],
+          Origin: surritBase,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+      });
+      const streamJson = parseHttpJson(streamRes.data);
+      const media = streamJson && streamJson.result && streamJson.result.media;
+      if (!media) continue;
+      if (typeof media === "object") {
+        const direct = media.stream || media.mp4 || "";
+        if (direct) return direct;
+        continue;
+      }
+      const parsed = JSON.parse(xorDecode(media, AES_KEY));
+      const url = parsed.stream || parsed.mp4 || "";
+      if (url) return url;
+    } catch (e) {}
   }
+  return "";
 }
 
 async function raceFirstNonEmpty(tasks) {
@@ -1672,33 +1758,30 @@ async function raceFirstNonEmpty(tasks) {
 
 async function resolveSurritStreamAny(videoId, html, pageReferer, embedUrl) {
   const poster = extractPosterParam(embedUrl, html);
-  const bases = detectSurritBases(html).slice(0, 2);
+  const bases = detectSurritBases(html).slice(0, 3);
   const tasks = [];
   for (let b = 0; b < bases.length; b++) {
     (function (base) {
       tasks.push(function () { return resolveSurritStreamNew(videoId, base, pageReferer, poster); });
-      tasks.push(function () { return resolveSurritStreamLegacy(videoId, base, "123av", pageReferer); });
+      for (let si = 0; si < STREAM_SOURCES.length; si++) {
+        (function (srcName) {
+          tasks.push(function () { return resolveSurritStreamLegacy(videoId, base, srcName, pageReferer); });
+        })(STREAM_SOURCES[si]);
+      }
     })(bases[b]);
   }
   const raced = await raceFirstNonEmpty(tasks);
   if (raced) return raced;
-  for (let b = 0; b < bases.length; b++) {
-    for (let i = 0; i < STREAM_SOURCES.length; i++) {
-      if (STREAM_SOURCES[i] === "123av") continue;
-      const url = await resolveSurritStreamLegacy(videoId, bases[b], STREAM_SOURCES[i], pageReferer);
-      if (url) return url;
-    }
-  }
   return "";
 }
 
 function pickItemCover(scopeHtml, href, $img) {
+  const dmm = buildDmmBackdropUrl(href);
+  if (dmm) return dmm;
   const fromScope = extractLandscapeCoverFromScope(scopeHtml, href);
   if (fromScope) return fromScope;
   const fromImg = pickListImageUrl($img);
   if (fromImg && !isLogoImage(fromImg) && !isPortraitCoverUrl(fromImg)) return fromImg;
-  const dmm = buildDmmBackdropUrl(href);
-  if (dmm) return dmm;
   const fallbacks = buildCoverFallbackCandidates(href, "n");
   for (let i = 0; i < fallbacks.length; i++) {
     if (isValidImageUrl(fallbacks[i])) return fallbacks[i];
@@ -1935,7 +2018,7 @@ async function resolveVideoUrl(html, detailUrl) {
     if (videoUrl) break;
   }
 
-  for (let ei = 0; !videoUrl && ei < embedUrls.length && ei < 1; ei++) {
+  for (let ei = 0; !videoUrl && ei < embedUrls.length && ei < 2; ei++) {
     const embedHtml = await fetchHtmlText(embedUrls[ei], detailUrl, { maxAttempts: 1 });
     if (!embedHtml) continue;
     const embedIds = extractSurritEmbedIds(embedHtml);
@@ -2081,19 +2164,31 @@ async function loadDetail(link) {
       };
     }
 
-    let cover = extractPosterFromHtml(html, detailUrl, $)
+    let poster = extractPosterFromHtml(html, detailUrl, $)
       || pickImageUrl($ && $.fn ? $(".video-cover img, .movie-cover img, .image img, img[data-src*='icdn'], img[src*='icdn']").first() : null)
       || pickImageUrl($ && $.fn ? $("video").first() : null)
-      || buildDmmBackdropUrl(detailUrl)
       || buildCoverFallbackUrl(detailUrl, "t")
       || buildCoverFallbackUrl(detailUrl, "jpg");
+    const landscapeBackdrop =
+      resolveListCover(detailUrl, poster, html) ||
+      buildDmmBackdropUrl(detailUrl) ||
+      buildCoverFallbackUrl(detailUrl, "n");
+    const cover = poster || landscapeBackdrop;
 
     const embedUrl = extractSurritEmbedUrl(html);
-    let videoUrl = cached ? cached.videoUrl : "";
-    let playHeaders = cached ? cached.customHeaders : null;
+    let videoUrl = "";
+    let playHeaders = null;
 
-    if (videoUrl) {
-      if (!playHeaders) playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
+    if (cached && cached.videoUrl) {
+      videoUrl = cached.videoUrl;
+      playHeaders = cached.customHeaders || buildPlayHeaders(videoUrl, embedUrl || detailUrl);
+    } else if (!isChallengePage(html) && (hasPlaybackMarkers(html) || extractSurritEmbedIds(html).length > 0)) {
+      videoUrl = await resolveVideoUrl(html, detailUrl);
+      if (videoUrl) {
+        playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
+        videoUrl = await finalizeVideoUrl(videoUrl, playHeaders, true);
+        if (videoUrl) writeVideoCache(detailUrl, videoUrl, playHeaders);
+      }
     }
 
     const genreItems = [];
@@ -2147,7 +2242,7 @@ async function loadDetail(link) {
       type: "url",
       title,
       description,
-      backdropPath: cover || undefined,
+      backdropPath: landscapeBackdrop || cover || undefined,
       posterPath: cover || undefined,
       backdropPaths,
       genreItems: genreItems.length > 0 ? genreItems : undefined,
@@ -2176,9 +2271,15 @@ async function loadDetail(link) {
 
 function extractResourceLink(params) {
   if (!params) return "";
-  return normalizeDetailLink(
-    params.link || params.url || params.id || params.href || ""
-  );
+  if (typeof params === "string") return normalizeDetailLink(params);
+  const keys = ["link", "url", "id", "href", "tmdbId", "videoId", "detailUrl"];
+  for (let i = 0; i < keys.length; i++) {
+    const raw = params[keys[i]];
+    if (!raw) continue;
+    const normalized = normalizeDetailLink(String(raw));
+    if (normalized && isVideoDetailUrl(normalized)) return normalized;
+  }
+  return normalizeDetailLink(params.link || params.url || params.id || params.href || "");
 }
 
 async function loadResource(params) {

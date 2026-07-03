@@ -350,6 +350,7 @@ WidgetMetadata = {
 
 const BASE_URL = "https://hanime1.me";
 const REQUEST_TIMEOUT = 12000;
+let siteSessionReady = false;
 
 const S2T_MAP = {
     "无码": "無碼", "AI解码": "AI解碼", "中文字幕": "中文字幕", "中文配音": "中文配音",
@@ -417,23 +418,86 @@ function convertToTraditional(text) {
 
 function getCommonHeaders(refererUrl = BASE_URL + "/") {
     return {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Referer": refererUrl,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-User": "?1",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,zh-CN;q=0.8,en-US;q=0.7,en;q=0.6",
+        "Cache-Control": "no-cache",
         "Upgrade-Insecure-Requests": "1"
     };
 }
 
-async function httpGetWithTimeout(url, referer) {
-    return Widget.http.get(url, {
-        headers: getCommonHeaders(referer),
-        timeout: REQUEST_TIMEOUT
-    });
+function getLiteHeaders(refererUrl = BASE_URL + "/") {
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Referer": refererUrl,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8"
+    };
+}
+
+function stringifyHttpBody(raw) {
+    if (raw == null) return "";
+    if (typeof raw === "string") return raw;
+    if (typeof raw === "object" && !Array.isArray(raw)) {
+        if (typeof raw.body === "string") return raw.body;
+        if (typeof raw.html === "string") return raw.html;
+        if (typeof raw.content === "string") return raw.content;
+    }
+    return String(raw);
+}
+
+function isBlockedHtml(html) {
+    const text = String(html || "").slice(0, 4000);
+    if (/watch\?v=\d+/.test(text)) return false;
+    return /just a moment|cf-browser-verification|challenge-platform|checking your browser|attention required|<title>\s*403/i.test(text);
+}
+
+function scoreListHtml(html) {
+    const text = String(html || "");
+    if (!text || text.length < 200 || isBlockedHtml(text)) return 0;
+    const watchCount = (text.match(/watch\?v=\d+/g) || []).length;
+    const cardCount = (text.match(/video-item-container|home-rows-videos-div|related-watch-wrap/g) || []).length;
+    return watchCount * 10 + cardCount;
+}
+
+async function ensureSiteSession() {
+    if (siteSessionReady) return;
+    siteSessionReady = true;
+    try {
+        await fetchHtml(BASE_URL + "/", BASE_URL + "/");
+    } catch (e) {}
+}
+
+function getMobileHeaders(refererUrl = BASE_URL + "/") {
+    return {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+        "Referer": refererUrl,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8"
+    };
+}
+
+async function fetchHtml(url, referer) {
+    await ensureSiteSession();
+    const ref = referer || BASE_URL + "/";
+    const attempts = [getCommonHeaders(ref), getLiteHeaders(ref), getMobileHeaders(ref)];
+    let best = { html: "", score: 0 };
+    for (let i = 0; i < attempts.length; i++) {
+        try {
+            const response = await Widget.http.get(url, {
+                headers: attempts[i],
+                timeout: REQUEST_TIMEOUT
+            });
+            const status = Number(response.status || response.statusCode || 200);
+            const html = stringifyHttpBody(response.data);
+            if (status >= 400 || !html || html.length < 200) continue;
+            const score = scoreListHtml(html);
+            if (score > best.score) best = { html, score };
+            if (score > 0) return html;
+        } catch (e) {}
+    }
+    return best.html;
 }
 
 function normalizeImageUrl(src) {
@@ -508,7 +572,7 @@ function extractCardData($card, seen) {
 
     const title = safeText(
         $card.find('.title, .home-rows-videos-title, .card-mobile-title, .card-mobile-panel .card-mobile-title, div.title').first().text()
-    );
+    ) || safeText($card.find('img.main-thumb, img').first().attr('alt'));
     if (!title) return null;
 
     const poster = findCardPoster($card);
@@ -560,6 +624,110 @@ function buildCards($) {
     }
 
     return cards;
+}
+
+function extractTitleFromChunk(chunk) {
+    const patterns = [
+        /class="title"[^>]*>([\s\S]*?)<\//i,
+        /class="home-rows-videos-title"[^>]*>([\s\S]*?)<\//i,
+        /class="card-mobile-title"[^>]*>([\s\S]*?)<\//i,
+        /alt="([^"]+)"/i
+    ];
+    for (let i = 0; i < patterns.length; i++) {
+        const m = chunk.match(patterns[i]);
+        if (!m || !m[1]) continue;
+        const title = safeText(m[1].replace(/<[^>]+>/g, ""));
+        if (title && !/^thumb_up$/i.test(title)) return title;
+    }
+    return "";
+}
+
+function extractPosterFromChunk(chunk) {
+    const patterns = [
+        /class="[^"]*main-thumb[^"]*"[^>]+(?:data-src|data-original|src)="([^"]+)"/i,
+        /(?:data-src|data-original|src)="([^"]+)"[^>]+class="[^"]*main-thumb[^"]*"/i,
+        /(?:data-src|data-original|src)="([^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"/i
+    ];
+    for (let i = 0; i < patterns.length; i++) {
+        const m = chunk.match(patterns[i]);
+        if (m && m[1]) return m[1];
+    }
+    return "";
+}
+
+function buildListVideoItem(link, title, poster, durationText, releaseDate, layout) {
+    const normUrl = normalizeImageUrl(poster);
+    const base = {
+        id: link,
+        type: "url",
+        title: convertToTraditional(title),
+        durationText,
+        releaseDate,
+        link,
+        mediaType: "movie",
+        playerType: "system"
+    };
+    if (layout === "portrait") {
+        return Object.assign(base, {
+            posterPath: normUrl || undefined,
+            backdropPath: undefined
+        });
+    }
+    if (layout === "search") {
+        return Object.assign(base, {
+            posterPath: normUrl || undefined,
+            backdropPath: normUrl || undefined
+        });
+    }
+    return Object.assign(base, {
+        posterPath: undefined,
+        backdropPath: normUrl || undefined
+    });
+}
+
+function parseListHtmlRegex(html, layout) {
+    if (!html || !html.trim()) return [];
+    const items = [];
+    const seen = new Set();
+    const text = String(html);
+    const linkRe = /href="((?:https?:\/\/hanime1\.me)?\/watch\?v=\d+[^"]*)"/gi;
+    let m;
+    while ((m = linkRe.exec(text)) && items.length < 80) {
+        const href = m[1].split('"')[0];
+        const link = normalizeWatchUrl(href);
+        if (!link || seen.has(link)) continue;
+        const after = text.slice(m.index, Math.min(text.length, m.index + 1200));
+        const around = text.slice(Math.max(0, m.index - 300), Math.min(text.length, m.index + 1200));
+        let title = extractTitleFromChunk(after) || extractTitleFromChunk(around);
+        if (!title) {
+            const vid = link.match(/v=(\d+)/);
+            if (vid) title = "视频 " + vid[1];
+        }
+        if (!title) continue;
+        const poster = extractPosterFromChunk(after) || extractPosterFromChunk(around);
+        const durationMatch = after.match(/\b(\d{1,2}:\d{2}(?::\d{2})?)\b/) || around.match(/\b(\d{1,2}:\d{2}(?::\d{2})?)\b/);
+        const dateMatch = after.match(/\d{4}-\d{2}-\d{2}/) || around.match(/\d{4}-\d{2}-\d{2}/);
+        seen.add(link);
+        items.push(buildListVideoItem(
+            link,
+            title,
+            poster,
+            durationMatch ? durationMatch[1] : undefined,
+            dateMatch ? dateMatch[0] : undefined,
+            layout
+        ));
+    }
+    return items;
+}
+
+function parseListPage(html, layout) {
+    const domItems = layout === "portrait"
+        ? parseListHtmlPortrait(html)
+        : layout === "search"
+            ? parseListHtmlSearch(html)
+            : parseListHtml(html);
+    if (domItems.length) return domItems;
+    return parseListHtmlRegex(html, layout || "landscape");
 }
 
 function parseListHtml(html) {
@@ -648,11 +816,23 @@ function parseListHtmlSearch(html) {
 
 async function fetchAndParse(url, referer, parser = parseListHtml) {
     try {
-        const response = await httpGetWithTimeout(url, referer);
-        return parser(response.data || "");
+        const html = await fetchHtml(url, referer);
+        if (!html) return [];
+        const layout = parser === parseListHtmlPortrait
+            ? "portrait"
+            : parser === parseListHtmlSearch
+                ? "search"
+                : "landscape";
+        return parseListPage(html, layout);
     } catch (e) {
+        console.error("[hanime1] fetch failed:", url, e && (e.message || e));
         return [];
     }
+}
+
+async function httpGetWithTimeout(url, referer) {
+    const html = await fetchHtml(url, referer);
+    return { data: html, status: html ? 200 : 0 };
 }
 
 function mapSortToApi(v) {
@@ -756,7 +936,7 @@ async function searchVideos(params) {
     const page = parseInt(params.page) || 1;
 
     const jumped = await handleJumpUrl(params, page);
-    if (jumped) return jumped;
+    if (jumped !== null) return jumped;
 
     const rawKeyword = params.keyword || "";
     const sort = mapSortToApi(params.sort_by || 'all');
@@ -778,7 +958,7 @@ async function searchVideos(params) {
 async function loadAdvancedGenre(params) {
     const page = parseInt(params.page) || 1;
     const jumped = await handleJumpUrl(params, page);
-    if (jumped) return jumped;
+    if (jumped !== null) return jumped;
 
     const genre = mapGenreToApi(params.genre);
     const sort = mapSortToApi(params.sort_by || "all");
@@ -805,7 +985,7 @@ async function loadAdvancedGenre(params) {
 async function loadHotRankings(params) {
     const page = parseInt(params.page) || 1;
     const jumped = await handleJumpUrl(params, page);
-    if (jumped) return jumped;
+    if (jumped !== null) return jumped;
     const sortVal = mapSortToApi(params.sort || params.sort_by || "watching") || "他們在看";
     const queryParts = [];
 
@@ -816,7 +996,11 @@ async function loadHotRankings(params) {
     const referer = page > 1
         ? buildSiteUrl('/search', queryParts.map(p => p.startsWith('page=') ? `page=${page - 1}` : p))
         : BASE_URL + '/';
-    return fetchAndParse(url, referer);
+    let items = await fetchAndParse(url, referer);
+    if (!items.length) {
+        items = await fetchAndParse(BASE_URL + '/', BASE_URL + '/');
+    }
+    return items;
 }
 
 function buildTagModuleUrl(params) {
@@ -836,13 +1020,13 @@ function buildTagModuleUrl(params) {
     return { url, referer };
 }
 
-async function loadByTagAttr(params) { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
-async function loadByTagRel(params)  { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
-async function loadByTagRole(params) { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
-async function loadByTagBody(params) { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
-async function loadByTagLoc(params)  { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
-async function loadByTagPlot(params) { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
-async function loadByTagPos(params)  { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
+async function loadByTagAttr(params) { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j !== null) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
+async function loadByTagRel(params)  { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j !== null) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
+async function loadByTagRole(params) { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j !== null) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
+async function loadByTagBody(params) { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j !== null) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
+async function loadByTagLoc(params)  { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j !== null) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
+async function loadByTagPlot(params) { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j !== null) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
+async function loadByTagPos(params)  { const page = parseInt(params.page)||1; const j = await handleJumpUrl(params,page); if(j !== null) return j; const { url, referer } = buildTagModuleUrl(params); return fetchAndParse(url, referer); }
 
 async function loadDetail(link) {
     try {
