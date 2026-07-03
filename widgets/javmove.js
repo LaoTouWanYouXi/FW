@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.3.8",
+  version: "1.3.11",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -2445,7 +2445,7 @@ function hashText(text) {
 
 const TRANSLATE_CACHE_TTL = 604800;
 
-const TRANSLATE_CACHE_PREFIX = "tr:zh:v4:";
+const TRANSLATE_CACHE_PREFIX = "tr:zh:v7:";
 
 const MYMEMORY_DE = "laotou0786@gmail.com";
 
@@ -2502,6 +2502,43 @@ function stripMovieCodePrefix(text, movieCode) {
       ""
     )
     .trim();
+}
+
+function looksLikeGenreTagList(text) {
+  const tags = String(text || "")
+    .split(/\s*,\s*/)
+    .map(function (part) {
+      return part.trim();
+    })
+    .filter(Boolean);
+  if (tags.length < 2) return false;
+  for (let i = 0; i < tags.length; i++) {
+    const tag = tags[i];
+    if (!tag || tag.length > 48) return false;
+    if (/[!?~。．]/.test(tag)) return false;
+    if (tag.length > 24 && /\s/.test(tag) && /[.!?]/.test(tag)) return false;
+  }
+  return true;
+}
+
+function stripTrailingGenreTags(source) {
+  let text = sanitizeSourceText(source);
+  if (!text) return "";
+
+  let lastIndex = -1;
+  let lastLen = 0;
+  const regex = /,\s*,\s*/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    lastIndex = match.index;
+    lastLen = match[0].length;
+  }
+  if (lastIndex < 0) return text;
+
+  const tail = text.slice(lastIndex + lastLen).trim();
+  if (!looksLikeGenreTagList(tail)) return text;
+
+  return text.slice(0, lastIndex).trim();
 }
 
 function decodeUnicodeEscapes(text) {
@@ -2641,6 +2678,7 @@ async function resolveDetailTranslation(fields) {
       .trim();
   }
   source = stripMovieCodePrefix(source, movieCode);
+  source = stripTrailingGenreTags(source);
   if (!source) {
     return {
       movieCode: movieCode || "",
