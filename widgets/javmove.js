@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.3.3",
+  version: "1.3.4",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -552,11 +552,10 @@ function isValidDetailTitle(text, movieCode) {
   return !!rest && hasChineseText(rest);
 }
 
-function hasDetailChineseContent(fields, movieCode) {
+function hasDetailChineseContent(fields) {
   if (!fields) return false;
   const synopsis = sanitizeSourceText(fields.synopsisDisplay || fields.description || "");
-  if (synopsis && hasChineseText(synopsis)) return true;
-  return isValidDetailTitle(fields.detailTitle, movieCode);
+  return !!(synopsis && hasChineseText(synopsis));
 }
 
 function extractChineseSynopsisFromDetailTitle(detailTitle, movieCode) {
@@ -583,11 +582,11 @@ async function ensureDetailTitleFields(baseUrl, movieCode) {
   }
   if (!fields.detailInfo) fields.detailInfo = { movieId: movieCode || "" };
   if (movieCode && !fields.detailInfo.movieId) fields.detailInfo.movieId = movieCode;
-  if (hasDetailChineseContent(fields, movieCode)) {
+  if (hasDetailChineseContent(fields)) {
     return fields;
   }
   await applySynopsisTranslation(fields, fields.parts || []);
-  if (hasDetailChineseContent(fields, movieCode)) {
+  if (hasDetailChineseContent(fields)) {
     writeDetailMetaCache(baseUrl, fields);
   }
   return fields;
@@ -1634,7 +1633,7 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
 
 function readDetailMetaCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:meta:v8:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:meta:v9:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (
@@ -1653,7 +1652,7 @@ function writeDetailMetaCache(baseUrl, meta) {
   if (!meta) return;
   try {
     Widget.storage.set(
-      "detail:meta:v8:" + String(baseUrl),
+      "detail:meta:v9:" + String(baseUrl),
       JSON.stringify({ meta: meta, ts: Date.now() })
     );
   } catch (e) {}
@@ -1689,7 +1688,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v23:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v24:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1703,7 +1702,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v23:" + String(baseUrl),
+      "detail:v24:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -2431,7 +2430,7 @@ function hashText(text) {
 
 const TRANSLATE_CACHE_TTL = 604800;
 
-const TRANSLATE_CACHE_PREFIX = "tr:zh:v2:";
+const TRANSLATE_CACHE_PREFIX = "tr:zh:v3:";
 
 function readTranslateCache(key) {
   try {
@@ -2608,7 +2607,7 @@ async function resolveDetailTranslation(fields) {
   );
   let source = sanitizeSourceText(fields.synopsisRaw || "");
   if (!source) {
-    source = String(fields.displayTitle || "")
+    source = sanitizeSourceText(fields.displayTitle || "")
       .replace(/\|\s*JAVMove\s*$/i, "")
       .trim();
     if (movieCode) {
@@ -2678,56 +2677,46 @@ async function translateToChinese(text) {
 
   const truncated = source.slice(0, 500);
   const httpOpts = {
-    timeout: 8000,
     headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" },
   };
 
-  const googlePromise = Widget.http
-    .get(
-      "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" +
-        encodeURIComponent(sl) +
-        "&tl=zh-CN&dt=t&q=" +
-        encodeURIComponent(truncated),
-      httpOpts
-    )
-    .then(function (r) {
-      return parseTranslatePayload(r.data);
-    })
-    .catch(function () {
+  async function fetchMyMemory() {
+    const mmLang = sl === "ja" ? "ja" : sl === "en" ? "en" : "auto";
+    try {
+      const res = await Widget.http.get(
+        "https://api.mymemory.translated.net/get?q=" +
+          encodeURIComponent(truncated) +
+          "&langpair=" +
+          encodeURIComponent(mmLang + "|zh-CN"),
+        Object.assign({}, httpOpts, { timeout: 15000 })
+      );
+      return parseTranslatePayload(res.data);
+    } catch (e) {
       return "";
-    });
-
-  const mmLang = sl === "ja" ? "ja" : sl === "en" ? "en" : "auto";
-  const mmPromise = Widget.http
-    .get(
-      "https://api.mymemory.translated.net/get?q=" +
-        encodeURIComponent(truncated) +
-        "&langpair=" +
-        encodeURIComponent(mmLang + "|zh-CN"),
-      httpOpts
-    )
-    .then(function (r) {
-      return parseTranslatePayload(r.data);
-    })
-    .catch(function () {
-      return "";
-    });
-
-  const results = await Promise.allSettled([googlePromise, mmPromise]);
-
-  let part = "";
-  for (let i = 0; i < results.length; i++) {
-    if (
-      results[i].status === "fulfilled" &&
-      results[i].value &&
-      isValidChineseTranslation(results[i].value)
-    ) {
-      part = results[i].value;
-      break;
     }
   }
 
-  if (part) {
+  async function fetchGoogle() {
+    try {
+      const res = await Widget.http.get(
+        "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" +
+          encodeURIComponent(sl) +
+          "&tl=zh-CN&dt=t&q=" +
+          encodeURIComponent(truncated),
+        Object.assign({}, httpOpts, { timeout: 5000 })
+      );
+      return parseTranslatePayload(res.data);
+    } catch (e) {
+      return "";
+    }
+  }
+
+  let part = await fetchMyMemory();
+  if (!part || !isValidChineseTranslation(part)) {
+    part = await fetchGoogle();
+  }
+
+  if (part && isValidChineseTranslation(part)) {
     writeTranslateCache(cacheKey, part, source);
     return part;
   }
