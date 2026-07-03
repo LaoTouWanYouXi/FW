@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.8.3",
+  version: "1.8.4",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "老头",
@@ -302,6 +302,8 @@ const STREAM_SOURCES = ["123av", "javxx", "missav"];
 const SURRIT_BASES = ["https://surrit.store", "https://surrit.com"];
 const VIDEO_CACHE_TTL = 3600;
 const COOKIE_STORE_KEY = "http:cookies:123av";
+const HTTP_TIMEOUT_MS = 12000;
+const DETAIL_HTML_MIN_SCORE = 1500000;
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -395,15 +397,14 @@ function absorbResponseCookies(res) {
 
 function buildMobileHeaders(referer, extra) {
   const cookies = loadStoredCookies();
-  const headers = mergeHeaders({
+  const headers = mergeHeaders(Object.assign({
     Referer: referer || BASE_URL + LANG_PREFIX + "/",
     Origin: BASE_URL,
     "Sec-Fetch-Site": "same-origin",
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Dest": "document",
     "Cache-Control": "no-cache",
-    ...(extra || {}),
-  });
+  }, extra || {}));
   if (cookies) headers.Cookie = cookies;
   return headers;
 }
@@ -587,12 +588,26 @@ function isIcdnCoverUrl(url) {
   return /icdn[^/]*\/img2\/s\d+\/[^/?#]+\/cover(?:-n|-t)?\.(?:webp|jpg|jpeg)/i.test(String(url || ""));
 }
 
-function buildCoverFallbackUrl(href, variant) {
+function buildCoverFallbackCandidates(href, variant) {
   const slug = extractVideoSlug(resolveUrl(href));
-  if (!slug) return "";
+  if (!slug) return [];
   const code = extractVideoCode(slug) || slug;
   const suffix = variant === "t" ? "cover-t.jpg" : variant === "jpg" ? "cover.jpg" : "cover-n.jpg";
-  return `https://fourhoi.com/${code}/${suffix}?class=normal`;
+  const names = [];
+  const seen = {};
+  [code, slug, code.toLowerCase(), slug.toLowerCase()].forEach(function (name) {
+    if (!name || seen[name]) return;
+    seen[name] = 1;
+    names.push(name);
+  });
+  return names.map(function (name) {
+    return "https://fourhoi.com/" + name + "/" + suffix + "?class=normal";
+  });
+}
+
+function buildCoverFallbackUrl(href, variant) {
+  const list = buildCoverFallbackCandidates(href, variant);
+  return list.length ? list[0] : "";
 }
 
 function isPortraitCoverUrl(url) {
@@ -620,8 +635,11 @@ function extractPreviewFromScope(scopeHtml) {
   const text = String(scopeHtml || "");
   const patterns = [
     /data-preview=["'](https?:\/\/icdn[^"']+\/preview\/[^"']+\/preview\.(?:png|webp|jpg)(?:\?[^"']*)?)["']/i,
+    /data-preview=["'](\/\/icdn[^"']+\/preview\/[^"']+\/preview\.(?:png|webp|jpg)(?:\?[^"']*)?)["']/i,
     /background-image:\s*url\(["']?(https?:\/\/icdn[^"')]+\/preview\/[^"')]+\/preview\.(?:png|webp|jpg)(?:\?[^"')]*)?)["']?\)/i,
+    /background-image:\s*url\(["']?(\/\/icdn[^"')]+\/preview\/[^"')]+\/preview\.(?:png|webp|jpg)(?:\?[^"')]*)?)["']?\)/i,
     /https?:\/\/icdn[^"'\s<>]*\/preview\/[^"'\s<>]+\/preview\.(?:png|webp|jpg)(?:\?[^"'\s<>]*)?/i,
+    /\/\/icdn[^"'\s<>]*\/preview\/[^"'\s<>]+\/preview\.(?:png|webp|jpg)(?:\?[^"'\s<>]*)?/i,
   ];
   for (let i = 0; i < patterns.length; i++) {
     const m = text.match(patterns[i]);
@@ -682,6 +700,8 @@ function buildListCoverCandidates(href, coverUrl, scopeHtml) {
 
   add(buildCoverFallbackUrl(href, "n"));
   add(buildCoverFallbackUrl(href, "jpg"));
+  buildCoverFallbackCandidates(href, "n").forEach(add);
+  buildCoverFallbackCandidates(href, "jpg").forEach(add);
   return out;
 }
 
@@ -862,7 +882,56 @@ function isValidImageUrl(url) {
   if (!url || !url.startsWith("http")) return false;
   if (isLogoImage(url)) return false;
   if (/placeholder|loading|blank|data:image|spacer/i.test(url)) return false;
-  return /\.(webp|jpg|jpeg|png|gif)(\?|$)/i.test(url) || url.includes("icdn.") || url.includes("fourhoi.com");
+  return /\.(webp|jpg|jpeg|png|gif)(\?|$)/i.test(url) ||
+    /icdn[^/]*\//i.test(url) ||
+    /fourhoi\.com\//i.test(url);
+}
+
+function pickBestFromSrcset(srcset) {
+  const text = String(srcset || "").trim();
+  if (!text) return "";
+  if (text.indexOf(",") < 0) return text.split(/\s+/)[0];
+  const parts = text.split(",");
+  let best = "";
+  let bestW = -1;
+  for (let i = 0; i < parts.length; i++) {
+    const piece = String(parts[i] || "").trim();
+    if (!piece) continue;
+    const chunks = piece.split(/\s+/);
+    const url = chunks[0];
+    let w = 0;
+    if (chunks[1]) {
+      const wm = chunks[1].match(/(\d+)w/i);
+      if (wm) w = parseInt(wm[1], 10);
+    }
+    if (!best || w > bestW) {
+      best = url;
+      bestW = w;
+    }
+  }
+  return best;
+}
+
+function pickImageAttrs($img, forList) {
+  if (!$img || !$img.length) return "";
+  const attrs = forList
+    ? ["data-srcset", "data-src", "data-original", "data-lazy-src", "srcset", "src"]
+    : ["data-src", "data-original", "data-lazy-src", "data-srcset", "srcset", "src"];
+  for (let i = 0; i < attrs.length; i++) {
+    let val = $img.attr(attrs[i]) || "";
+    if (!val) continue;
+    if (val.indexOf(",") >= 0 && /https?:\/\//.test(val)) val = pickBestFromSrcset(val);
+    else if (val.includes(",")) val = val.split(",")[0].trim().split(/\s+/)[0];
+    val = normalizeImageUrl(val);
+    if (!val || val.indexOf("data:image") === 0) continue;
+    if (!isValidImageUrl(val)) continue;
+    return forList ? normalizeListCoverSize(val) : upgradeCoverUrl(val);
+  }
+  return "";
+}
+
+function pickListImageUrl($img) {
+  return pickImageAttrs($img, true);
 }
 
 function upgradeCoverUrl(url) {
@@ -874,15 +943,7 @@ function upgradeCoverUrl(url) {
 }
 
 function pickImageUrl($img) {
-  if (!$img || !$img.length) return "";
-  const attrs = ["data-src", "data-original", "data-lazy-src", "srcset", "src"];
-  for (let i = 0; i < attrs.length; i++) {
-    let val = $img.attr(attrs[i]) || "";
-    if (val.includes(",")) val = val.split(",")[0].trim().split(/\s+/)[0];
-    val = normalizeImageUrl(val);
-    if (isValidImageUrl(val)) return upgradeCoverUrl(val);
-  }
-  return "";
+  return pickImageAttrs($img, false);
 }
 
 function extractPosterFromHtml(html, detailUrl, $) {
@@ -1099,13 +1160,22 @@ function parseVideoListRegex(html) {
     if (!title) continue;
     seen.add(detailLink);
     const coverM =
+      window.match(/data-srcset="([^"]+)"/i) ||
+      window.match(/data-preview=["']([^"']+)["']/i) ||
       window.match(/https?:\/\/icdn[^"'\s<>]+\/preview\/[^"'\s<>]+\/preview\.(?:png|webp|jpg)/i) ||
       window.match(/https?:\/\/icdn[^"'\s<>]+\/img2\/s\d+\/[^"'\s<>]+\/cover(?:\.webp|-n\.(?:webp|jpg|jpeg)|\.jpg|\.jpeg)/i);
+    let coverRaw = coverM ? (coverM[1] || coverM[0]) : "";
+    if (coverRaw && coverRaw.indexOf("http") !== 0 && coverRaw.indexOf("//") === 0) {
+      coverRaw = "https:" + coverRaw;
+    }
+    if (coverRaw && coverRaw.indexOf("http") !== 0 && coverRaw.indexOf(",") >= 0) {
+      coverRaw = pickBestFromSrcset(coverRaw);
+    }
     const durationM = window.match(/\b(\d{1,2}:\d{2}:\d{2})\b/);
     const item = makeListVideoItem(
       href,
       title,
-      coverM ? coverM[0] : undefined,
+      coverM ? coverRaw : undefined,
       durationM ? durationM[1] : undefined,
       window
     );
@@ -1189,10 +1259,13 @@ async function optimizeM3u8Url(url, headers, depth) {
   }
 }
 
-async function finalizeVideoUrl(url, headers) {
+async function finalizeVideoUrl(url, headers, fastMode) {
   if (!url) return "";
   if (/\.mp4(\?|$)/i.test(url)) return url;
-  if (/\.m3u8(\?|$)/i.test(url)) return await optimizeM3u8Url(url, headers, 0);
+  if (/\.m3u8(\?|$)/i.test(url)) {
+    if (fastMode) return url;
+    return await optimizeM3u8Url(url, headers, 0);
+  }
   return url;
 }
 
@@ -1462,97 +1535,95 @@ function detectSurritBases(html) {
 }
 
 async function resolveSurritStreamNew(videoId, surritBase, pageReferer, poster) {
-  let apiUrl = `${surritBase}/stream?id=${encodeURIComponent(videoId)}`;
-  if (poster) apiUrl += `&poster=${encodeURIComponent(poster)}`;
-  const embedRef =
-    `${surritBase}/e/${videoId}` + (poster ? `?poster=${encodeURIComponent(poster)}` : "");
-  const ref = pageReferer || BASE_URL + LANG_PREFIX + "/";
-  const headerSets = [
-    {
-      "User-Agent": HEADERS["User-Agent"],
-      Accept: "application/json, text/plain, */*",
-      Referer: embedRef,
-      Origin: surritBase,
-    },
-    {
-      "User-Agent": HEADERS["User-Agent"],
-      Accept: "application/json, text/plain, */*",
-      Referer: ref,
-      Origin: BASE_URL,
-    },
-    {
-      "User-Agent": HEADERS["User-Agent"],
-      Accept: "*/*",
-      Referer: "https://surrit.store/",
-      Origin: "https://surrit.store",
-    },
-  ];
-  for (let h = 0; h < headerSets.length; h++) {
-    try {
-      const streamRes = await Widget.http.get(apiUrl, { headers: headerSets[h] });
-      const streamJson = parseHttpJson(streamRes.data);
-      if (!streamJson) continue;
-      const url =
-        (streamJson.media && (streamJson.media.stream || streamJson.media.mp4)) ||
-        (streamJson.result && streamJson.result.media && streamJson.result.stream) ||
-        streamJson.stream ||
-        streamJson.url ||
-        "";
-      if (url) return url;
-    } catch (e) {}
+  let apiUrl = surritBase + "/stream?id=" + encodeURIComponent(videoId);
+  if (poster) apiUrl += "&poster=" + encodeURIComponent(poster);
+  const embedRef = surritBase + "/e/" + videoId + (poster ? "?poster=" + encodeURIComponent(poster) : "");
+  try {
+    const streamRes = await Widget.http.get(apiUrl, {
+      timeout: HTTP_TIMEOUT_MS,
+      headers: {
+        "User-Agent": HEADERS["User-Agent"],
+        Accept: "application/json, text/plain, */*",
+        Referer: embedRef,
+        Origin: surritBase,
+      },
+    });
+    const streamJson = parseHttpJson(streamRes.data);
+    if (!streamJson) return "";
+    return (
+      (streamJson.media && (streamJson.media.stream || streamJson.media.mp4)) ||
+      (streamJson.result && streamJson.result.media && streamJson.result.stream) ||
+      streamJson.stream ||
+      streamJson.url ||
+      ""
+    );
+  } catch (e) {
+    return "";
   }
-  return "";
 }
 
 async function resolveSurritStreamLegacy(videoId, surritBase, srcName, pageReferer) {
   const token = encodeURIComponent(xorEncrypt(videoId, AES_KEY));
-  const embedRef = `${surritBase}/e/${videoId}`;
-  const ref = pageReferer || BASE_URL + LANG_PREFIX + "/";
-  const headerSets = [
-    {
-      "User-Agent": HEADERS["User-Agent"],
-      Accept: "application/json, text/plain, */*",
-      Referer: embedRef,
-      Origin: surritBase,
-      "X-Requested-With": "XMLHttpRequest",
-    },
-    {
-      "User-Agent": HEADERS["User-Agent"],
-      Accept: "application/json, text/plain, */*",
-      Referer: ref,
-      Origin: BASE_URL,
-      "X-Requested-With": "XMLHttpRequest",
-    },
-  ];
-  for (let h = 0; h < headerSets.length; h++) {
-    try {
-      const streamRes = await Widget.http.get(`${surritBase}/stream?src=${srcName}&token=${token}`, {
-        headers: headerSets[h],
-      });
-      const streamJson = parseHttpJson(streamRes.data);
-      const media = streamJson && streamJson.result && streamJson.result.media;
-      if (!media) continue;
-      const parsed = JSON.parse(xorDecode(media, AES_KEY));
-      const url = parsed.stream || parsed.mp4 || "";
-      if (url) return url;
-    } catch (e) {}
+  const embedRef = surritBase + "/e/" + videoId;
+  try {
+    const streamRes = await Widget.http.get(surritBase + "/stream?src=" + srcName + "&token=" + token, {
+      timeout: HTTP_TIMEOUT_MS,
+      headers: {
+        "User-Agent": HEADERS["User-Agent"],
+        Accept: "application/json, text/plain, */*",
+        Referer: embedRef,
+        Origin: surritBase,
+        "X-Requested-With": "XMLHttpRequest",
+      },
+    });
+    const streamJson = parseHttpJson(streamRes.data);
+    const media = streamJson && streamJson.result && streamJson.result.media;
+    if (!media) return "";
+    const parsed = JSON.parse(xorDecode(media, AES_KEY));
+    return parsed.stream || parsed.mp4 || "";
+  } catch (e) {
+    return "";
   }
-  return "";
+}
+
+async function raceFirstNonEmpty(tasks) {
+  if (!tasks || !tasks.length) return "";
+  return new Promise(function (resolve) {
+    let settled = false;
+    let remaining = tasks.length;
+    function finish(value) {
+      if (settled) return;
+      if (value) {
+        settled = true;
+        resolve(value);
+        return;
+      }
+      remaining--;
+      if (remaining <= 0) resolve("");
+    }
+    for (let i = 0; i < tasks.length; i++) {
+      tasks[i]().then(finish).catch(function () { finish(""); });
+    }
+  });
 }
 
 async function resolveSurritStreamAny(videoId, html, pageReferer, embedUrl) {
   const poster = extractPosterParam(embedUrl, html);
-  const bases = detectSurritBases(html);
+  const bases = detectSurritBases(html).slice(0, 2);
+  const tasks = [];
   for (let b = 0; b < bases.length; b++) {
-    try {
-      const url = await resolveSurritStreamNew(videoId, bases[b], pageReferer, poster);
-      if (url) return url;
-    } catch (e) {}
+    (function (base) {
+      tasks.push(function () { return resolveSurritStreamNew(videoId, base, pageReferer, poster); });
+      tasks.push(function () { return resolveSurritStreamLegacy(videoId, base, "123av", pageReferer); });
+    })(bases[b]);
+  }
+  const raced = await raceFirstNonEmpty(tasks);
+  if (raced) return raced;
+  for (let b = 0; b < bases.length; b++) {
     for (let i = 0; i < STREAM_SOURCES.length; i++) {
-      try {
-        const url = await resolveSurritStreamLegacy(videoId, bases[b], STREAM_SOURCES[i], pageReferer);
-        if (url) return url;
-      } catch (e) {}
+      if (STREAM_SOURCES[i] === "123av") continue;
+      const url = await resolveSurritStreamLegacy(videoId, bases[b], STREAM_SOURCES[i], pageReferer);
+      if (url) return url;
     }
   }
   return "";
@@ -1561,11 +1632,13 @@ async function resolveSurritStreamAny(videoId, html, pageReferer, embedUrl) {
 function pickItemCover(scopeHtml, href, $img) {
   const fromScope = extractLandscapeCoverFromScope(scopeHtml, href);
   if (fromScope) return fromScope;
-  const fromImg = pickImageUrl($img);
-  if (fromImg && !isLogoImage(fromImg) && !isPortraitCoverUrl(fromImg)) {
-    return normalizeListCoverSize(fromImg);
+  const fromImg = pickListImageUrl($img);
+  if (fromImg && !isLogoImage(fromImg) && !isPortraitCoverUrl(fromImg)) return fromImg;
+  const fallbacks = buildCoverFallbackCandidates(href, "n");
+  for (let i = 0; i < fallbacks.length; i++) {
+    if (isValidImageUrl(fallbacks[i])) return fallbacks[i];
   }
-  return buildCoverFallbackUrl(href, "n");
+  return buildSlugLandscapeBackdrop(href);
 }
 
 function countVideoCards($, selector) {
@@ -1655,25 +1728,31 @@ function parseVideoList(html) {
   return items;
 }
 
-async function fetchHtmlText(url, referer) {
+async function fetchHtmlText(url, referer, options) {
+  options = options || {};
   const ref = referer || BASE_URL + LANG_PREFIX + "/";
+  const isDetail = isVideoDetailUrl(url);
+  const maxAttempts = options.maxAttempts != null ? options.maxAttempts : (isDetail ? 2 : 1);
   const attempts = [
     buildMobileHeaders(ref),
     buildMobileHeaders(ref, { "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7" }),
-    buildMobileHeaders(BASE_URL + LANG_PREFIX + "/hot", { Referer: BASE_URL + "/" }),
   ];
   let best = { html: "", score: -1 };
   let fallback = "";
-  for (let i = 0; i < attempts.length; i++) {
+  for (let i = 0; i < attempts.length && i < maxAttempts; i++) {
     try {
-      const res = await Widget.http.get(url, { headers: attempts[i] });
+      const res = await Widget.http.get(url, { headers: attempts[i], timeout: HTTP_TIMEOUT_MS });
       absorbResponseCookies(res);
       const html = typeof res.data === "string" ? res.data : String(res.data || "");
       if (!html || html.length < 200 || isMigrationPage(html) || isErrorPage(html)) continue;
-      if (isVideoDetailUrl(url) && hasPlaybackMarkers(html) && !isChallengePage(html)) return html;
+      if (isDetail && hasPlaybackMarkers(html) && extractSurritEmbedIds(html).length > 0 && !isChallengePage(html)) {
+        return html;
+      }
       const score = scoreFetchedHtml(html, url);
       if (score > best.score) best = { html: html, score: score };
       if (!fallback) fallback = html;
+      if (isDetail && score >= DETAIL_HTML_MIN_SCORE) return html;
+      if (!isDetail && score > 0) return html;
     } catch (e) {}
   }
   if (best.html) return best.html;
@@ -1692,11 +1771,11 @@ async function ensureSiteSession() {
 
 async function fetchDetailHtml(url) {
   await ensureSiteSession();
-  let html = await fetchHtmlText(url, BASE_URL + LANG_PREFIX + "/");
+  let html = await fetchHtmlText(url, BASE_URL + LANG_PREFIX + "/", { maxAttempts: 2 });
   if (!html || !isVideoDetailUrl(url)) return html;
   if (hasPlaybackMarkers(html) && extractSurritEmbedIds(html).length > 0) return html;
-
-  const retry = await fetchHtmlText(url, url);
+  if (isChallengePage(html)) return html;
+  const retry = await fetchHtmlText(url, url, { maxAttempts: 1 });
   if (!retry) return html;
   if (scoreFetchedHtml(retry, url) > scoreFetchedHtml(html, url)) return retry;
   return html;
@@ -1787,8 +1866,8 @@ async function resolveVideoUrl(html, detailUrl) {
     if (videoUrl) break;
   }
 
-  for (let ei = 0; !videoUrl && ei < embedUrls.length; ei++) {
-    const embedHtml = await fetchHtmlText(embedUrls[ei], detailUrl);
+  for (let ei = 0; !videoUrl && ei < embedUrls.length && ei < 1; ei++) {
+    const embedHtml = await fetchHtmlText(embedUrls[ei], detailUrl, { maxAttempts: 1 });
     if (!embedHtml) continue;
     const embedIds = extractSurritEmbedIds(embedHtml);
     for (let i = 0; i < embedIds.length; i++) {
@@ -1804,8 +1883,8 @@ async function resolveVideoUrl(html, detailUrl) {
     }
   }
 
-  if (!videoUrl && embedUrl && embedUrls.indexOf(embedUrl) < 0) {
-    const embedHtml = await fetchHtmlText(embedUrl, detailUrl);
+  if (!videoUrl && embedUrl && embedUrls.indexOf(embedUrl) < 0 && !embedUrls.length) {
+    const embedHtml = await fetchHtmlText(embedUrl, detailUrl, { maxAttempts: 1 });
     if (embedHtml) {
       const embedIds = extractSurritEmbedIds(embedHtml);
       for (let i = 0; i < embedIds.length; i++) {
@@ -1883,9 +1962,25 @@ async function loadDetail(link) {
     const html = await fetchDetailHtml(detailUrl);
     if (!html || isMigrationPage(html)) return null;
 
-    const $ = Widget.html.load(html);
+    let $;
+    try {
+      $ = Widget.html.load(html);
+    } catch (e) {
+      $ = null;
+    }
     const title = extractDetailTitle(html, $);
     let description = extractDetailDescription(html, $) || undefined;
+
+    if (isChallengePage(html)) {
+      return {
+        id: detailUrl,
+        type: "url",
+        title: title || detailUrl,
+        link: detailUrl,
+        description: "【提示】123AV 返回了人机验证页，Forward 请求被拦截。请清除模块缓存后重试，或稍后再试。",
+        mediaType: "movie",
+      };
+    }
 
     if (isDirectoryListingUrl(detailUrl)) {
       const videos = parseVideoList(html);
@@ -1918,8 +2013,10 @@ async function loadDetail(link) {
     }
 
     let cover = extractPosterFromHtml(html, detailUrl, $)
-      || pickImageUrl($(".video-cover img, .movie-cover img, .image img, img[data-src*='icdn'], img[src*='icdn']").first())
-      || pickImageUrl($("video").first());
+      || pickImageUrl($ && $.fn ? $(".video-cover img, .movie-cover img, .image img, img[data-src*='icdn'], img[src*='icdn']").first() : null)
+      || pickImageUrl($ && $.fn ? $("video").first() : null)
+      || buildCoverFallbackUrl(detailUrl, "t")
+      || buildCoverFallbackUrl(detailUrl, "jpg");
 
     const embedUrl = extractSurritEmbedUrl(html);
     let videoUrl = cached ? cached.videoUrl : "";
@@ -1929,7 +2026,7 @@ async function loadDetail(link) {
       videoUrl = await resolveVideoUrl(html, detailUrl);
       if (videoUrl) {
         playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
-        videoUrl = await finalizeVideoUrl(videoUrl, playHeaders);
+        videoUrl = await finalizeVideoUrl(videoUrl, playHeaders, true);
         if (videoUrl) writeVideoCache(detailUrl, videoUrl, playHeaders);
       }
     }
@@ -1945,41 +2042,47 @@ async function loadDetail(link) {
     }
 
     const genreItems = [];
-    const $genreLinks = $("a[href*='/genres/'], a[href*='/tags/'], a[href*='/tag/'], a[href*='/makers/'], a[href*='/series/']");
-    for (let gi = 0; gi < $genreLinks.length; gi++) {
-      const $a = $genreLinks.eq(gi);
-      const href = resolveUrl($a.attr("href") || "");
-      const text = $a.text().trim();
-      if (text && href && /\/(genres|tags|tag|makers|series)\//.test(href)) {
-        genreItems.push({ id: normalizeBrowseId(href) || href, title: text });
+    if ($ && $.fn) {
+      const $genreLinks = $("a[href*='/genres/'], a[href*='/tags/'], a[href*='/tag/'], a[href*='/makers/'], a[href*='/series/']");
+      for (let gi = 0; gi < $genreLinks.length; gi++) {
+        const $a = $genreLinks.eq(gi);
+        const href = resolveUrl($a.attr("href") || "");
+        const text = $a.text().trim();
+        if (text && href && /\/(genres|tags|tag|makers|series)\//.test(href)) {
+          genreItems.push({ id: normalizeBrowseId(href) || href, title: text });
+        }
       }
     }
 
     const peoples = [];
-    const $peopleLinks = $("a[href*='/actresses/']");
-    for (let pi = 0; pi < $peopleLinks.length; pi++) {
-      const $a = $peopleLinks.eq(pi);
-      const href = resolveUrl($a.attr("href") || "");
-      const text = $a.text().trim();
-      if (text && href && /\/actresses\//.test(href)) {
-        peoples.push({ id: normalizeBrowseId(href) || href, title: text, role: "actress" });
+    if ($ && $.fn) {
+      const $peopleLinks = $("a[href*='/actresses/']");
+      for (let pi = 0; pi < $peopleLinks.length; pi++) {
+        const $a = $peopleLinks.eq(pi);
+        const href = resolveUrl($a.attr("href") || "");
+        const text = $a.text().trim();
+        if (text && href && /\/actresses\//.test(href)) {
+          peoples.push({ id: normalizeBrowseId(href) || href, title: text, role: "actress" });
+        }
       }
     }
 
     const relatedItems = [];
     const seenRelated = new Set([detailUrl]);
-    const $relatedCards = $(".grid .group, .vid-items > div.item, div.thumbnail, .related-videos article");
-    for (let ri = 0; ri < $relatedCards.length && relatedItems.length < 8; ri++) {
-      const $el = $relatedCards.eq(ri);
-      const $rLink = $el.find(".title, a[href*='/v/']").first();
-      const rHref = $rLink.attr("href") || "";
-      const rDetailLink = resolveUrl(rHref);
-      if (!rDetailLink || seenRelated.has(rDetailLink)) continue;
-      seenRelated.add(rDetailLink);
-      const rTitle = $rLink.text().trim() || $el.find("img").attr("alt") || "\u76f8\u5173\u5f71\u7247";
-      const rCover = pickItemCover($el.html(), rHref, $el.find("img").first());
-      const relatedItem = makeListVideoItem(rHref, rTitle, rCover, extractListDuration($el), $el.html());
-      if (relatedItem) relatedItems.push(relatedItem);
+    if ($ && $.fn) {
+      const $relatedCards = $(".grid .group, .vid-items > div.item, div.thumbnail, .related-videos article");
+      for (let ri = 0; ri < $relatedCards.length && relatedItems.length < 8; ri++) {
+        const $el = $relatedCards.eq(ri);
+        const $rLink = $el.find(".title, a[href*='/v/']").first();
+        const rHref = $rLink.attr("href") || "";
+        const rDetailLink = resolveUrl(rHref);
+        if (!rDetailLink || seenRelated.has(rDetailLink)) continue;
+        seenRelated.add(rDetailLink);
+        const rTitle = $rLink.text().trim() || $el.find("img").attr("alt") || "\u76f8\u5173\u5f71\u7247";
+        const rCover = pickItemCover($el.html(), rHref, $el.find("img").first());
+        const relatedItem = makeListVideoItem(rHref, rTitle, rCover, extractListDuration($el), $el.html());
+        if (relatedItem) relatedItems.push(relatedItem);
+      }
     }
 
     const backdropPaths = collectBackdropPaths(html, detailUrl, cover, $);
@@ -2005,7 +2108,14 @@ async function loadDetail(link) {
     }
     return result;
   } catch (e) {
-    return null;
+    return {
+      id: normalizeDetailLink(link) || String(link || ""),
+      type: "url",
+      title: String(link || ""),
+      link: normalizeDetailLink(link) || String(link || ""),
+      description: "【提示】详情解析异常：" + (e && e.message ? e.message : "unknown"),
+      mediaType: "movie",
+    };
   }
 }
 
