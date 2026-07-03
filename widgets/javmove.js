@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.3.1",
+  version: "1.3.2",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -517,43 +517,85 @@ function hasChineseText(text) {
   return /[\u4e00-\u9fff]/.test(String(text || ""));
 }
 
-function hasChineseDisplayTitle(item) {
-  if (!item) return false;
-  const fields = [item.detailTitle, item.title, item.originalTitle];
-  for (let i = 0; i < fields.length; i++) {
-    if (hasChineseText(fields[i])) return true;
-  }
-  return false;
+function resolveItemMovieCode(item, baseUrl, meta) {
+  const fromMeta =
+    meta && meta.detailInfo && meta.detailInfo.movieId
+      ? formatMovieCode(meta.detailInfo.movieId, "")
+      : "";
+  const fromItem = item ? item.matchCode || item.code || "" : "";
+  const fromUrl = extractJavCode(String(baseUrl || "").split("/").pop() || "");
+  const fromFields =
+    meta && meta.displayTitle
+      ? resolveMovieCode(
+          meta.detailInfo && meta.detailInfo.movieId,
+          meta.displayTitle,
+          meta.synopsisRaw || ""
+        )
+      : "";
+  const fromItemText = item
+    ? resolveMovieCode("", item.detailTitle || item.title || "", item.originalTitle || "")
+    : "";
+  return fromMeta || fromItem || fromFields || fromItemText || fromUrl || "";
 }
 
-function sanitizeDisplayNameForForward(displayName, movieCode) {
+function isValidDetailTitle(text, movieCode) {
+  const value = sanitizeSourceText(text);
+  if (!value) return false;
+  if (hasChineseText(value)) return true;
+  const code = sanitizeSourceText(movieCode);
+  if (!code) return false;
+  if (value.toUpperCase() === code.toUpperCase()) return true;
+  const prefix = code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const rest = value
+    .replace(new RegExp("^" + prefix + "\\s*", "i"), "")
+    .trim();
+  return !!rest && hasChineseText(rest);
+}
+
+function resolveForwardDisplayName(displayName, movieCode) {
   const name = sanitizeSourceText(displayName);
-  if (name && hasChineseText(name)) return name;
+  if (isValidDetailTitle(name, movieCode)) return name;
   return sanitizeSourceText(movieCode) || "";
 }
 
-async function refreshDetailDisplayFields(item, baseUrl) {
-  if (!item) return item;
-  const movieCode =
-    item.matchCode ||
-    item.code ||
-    resolveMovieCode("", item.title || "", "");
-  if (hasChineseDisplayTitle(item) && sanitizeSourceText(item.detailTitle)) {
-    return applyForwardDisplayFields(item, item.detailTitle, movieCode);
-  }
+async function ensureDetailTitleFields(baseUrl, movieCode) {
   let fields = readDetailMetaCache(baseUrl);
   if (!fields) {
     fields = {
-      displayTitle: item.originalTitle || item.title || "",
+      displayTitle: "",
       synopsisRaw: "",
-      detailInfo: { movieId: movieCode },
+      detailInfo: { movieId: movieCode || "" },
+      parts: [],
     };
   }
+  if (!fields.detailInfo) fields.detailInfo = { movieId: movieCode || "" };
+  if (movieCode && !fields.detailInfo.movieId) fields.detailInfo.movieId = movieCode;
+  if (fields.detailTitle && isValidDetailTitle(fields.detailTitle, movieCode)) {
+    return fields;
+  }
   await applySynopsisTranslation(fields, fields.parts || []);
-  if (fields.detailTitle && hasChineseText(fields.detailTitle)) {
+  if (fields.detailTitle && isValidDetailTitle(fields.detailTitle, movieCode)) {
     writeDetailMetaCache(baseUrl, fields);
   }
-  const updated = applyForwardDisplayFields(item, fields.detailTitle, movieCode);
+  return fields;
+}
+
+async function postProcessDetailForForward(item, baseUrl) {
+  if (!item) return null;
+  const meta = readDetailMetaCache(baseUrl);
+  const movieCode = resolveItemMovieCode(item, baseUrl, meta);
+  let fields = meta;
+  let displayName = sanitizeSourceText(item.detailTitle || (fields && fields.detailTitle) || "");
+  if (!isValidDetailTitle(displayName, movieCode)) {
+    fields = await ensureDetailTitleFields(baseUrl, movieCode);
+    displayName = sanitizeSourceText(fields.detailTitle || "");
+  }
+  displayName = resolveForwardDisplayName(displayName, movieCode);
+  return applyForwardDisplayFields(item, displayName, movieCode);
+}
+
+async function refreshDetailDisplayFields(item, baseUrl) {
+  const updated = await postProcessDetailForForward(item, baseUrl);
   writeDetailItemCache(baseUrl, updated);
   return updated;
 }
@@ -1552,7 +1594,7 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
     {
       id: movieCode || baseUrl,
       type: "url",
-      title: fields.detailTitle || fields.displayTitle,
+      title: fields.detailTitle || movieCode || "",
       backdropPath: coverBundle.backdropPath || undefined,
       posterPath: coverBundle.posterPath || undefined,
       detailPoster: coverBundle.detailPoster || undefined,
@@ -1568,14 +1610,14 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
       playerType: isMultiPartMovie(parts) ? "system" : undefined,
     },
     movieCode,
-    fields.detailTitle || fields.displayTitle,
+    fields.detailTitle,
     fields.rating
   );
 }
 
 function readDetailMetaCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:meta:v6:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:meta:v7:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (
@@ -1594,7 +1636,7 @@ function writeDetailMetaCache(baseUrl, meta) {
   if (!meta) return;
   try {
     Widget.storage.set(
-      "detail:meta:v6:" + String(baseUrl),
+      "detail:meta:v7:" + String(baseUrl),
       JSON.stringify({ meta: meta, ts: Date.now() })
     );
   } catch (e) {}
@@ -1630,7 +1672,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v21:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v22:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1644,7 +1686,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v21:" + String(baseUrl),
+      "detail:v22:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1959,22 +2001,24 @@ function applyForwardDisplayFields(item, displayName, movieCode) {
   if (!item) return item;
   const code =
     movieCode ||
+    resolveItemMovieCode(item, item.link || item.webUrl || "", null) ||
     item.matchCode ||
     item.code ||
-    resolveMovieCode("", item.title || "", "");
-  const name = sanitizeDisplayNameForForward(
-    displayName || item.detailTitle || item.title,
-    code
-  );
-  if (!name) return item;
-  return stripUndefined(
-    Object.assign({}, item, {
-      title: name,
-      originalTitle: name,
-      detailTitle: name,
-      description: "",
-    })
-  );
+    "";
+  const name =
+    resolveForwardDisplayName(displayName || item.detailTitle, code) ||
+    code ||
+    "\u672a\u77e5";
+  const out = Object.assign({}, item, buildDetailMatchFields(code, "", "", item.rating), {
+    title: name,
+    originalTitle: name,
+    detailTitle: name,
+    description: " ",
+  });
+  delete out.episodeItems;
+  delete out.childItems;
+  delete out.episode;
+  return stripUndefined(out);
 }
 
 function finalizeDetailItem(baseItem, movieCode, displayName, rating) {
@@ -1984,12 +2028,14 @@ function finalizeDetailItem(baseItem, movieCode, displayName, rating) {
 
 function enrichListItemMatchFields(item, rawTitle) {
   if (!item) return item;
-  const movieCode = resolveMovieCode("", item.title || rawTitle || "", rawTitle || "");
+  const fullTitle = normalizeListRawTitle(rawTitle || item.title || "");
+  const movieCode = resolveMovieCode("", fullTitle, fullTitle);
   const listDescription = movieCode ? "\u756a\u53f7: " + movieCode : "";
   const match = buildGuangyaMatchFields(movieCode, "", listDescription);
   delete match.originalTitle;
   return stripUndefined(
     Object.assign({}, item, match, {
+      title: movieCode || item.title || fullTitle,
       rating: 0,
     })
   );
@@ -2848,9 +2894,14 @@ function normalizeListRawTitle(rawTitle) {
   );
 }
 
+function buildListItemTitle(rawTitle) {
+  const full = normalizeListRawTitle(rawTitle);
+  const code = resolveMovieCode("", full, full);
+  return code || full || "\u76f8\u5173\u5f71\u7247";
+}
+
 function parseListTitle(rawTitle) {
-  const title = normalizeListRawTitle(rawTitle);
-  return title || "\u76f8\u5173\u5f71\u7247";
+  return buildListItemTitle(rawTitle);
 }
 
 function parseVideoListRegex(html) {
@@ -3085,7 +3136,7 @@ function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
     {
       id: movieCode || baseUrl,
       type: "url",
-      title: fields.detailTitle || fields.displayTitle,
+      title: fields.detailTitle || movieCode || "",
       backdropPath: coverBundle.backdropPath,
       posterPath: coverBundle.posterPath,
       detailPoster: coverBundle.detailPoster,
@@ -3101,7 +3152,7 @@ function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
       playerType: "system",
     },
     movieCode,
-    fields.detailTitle || fields.displayTitle,
+    fields.detailTitle,
     fields.rating
   );
 
@@ -3132,21 +3183,13 @@ async function loadDetailInternal(baseUrl, params) {
 
     const cachedItem = readDetailItemCache(baseUrl);
     if (cachedItem && hasCompleteMeta(cachedItem)) {
-      const movieCode =
-        cachedItem.matchCode ||
-        cachedItem.code ||
-        resolveMovieCode("", cachedItem.title || "", "");
+      const movieCode = resolveItemMovieCode(cachedItem, baseUrl, readDetailMetaCache(baseUrl));
       const meta = readDetailMetaCache(baseUrl);
       const parts = (meta && meta.parts) || [];
       const multiEpisode = isMultiPartMovie(parts);
       const effectiveParams = syncGlobalParams(params || {});
 
       let item = cachedItem;
-      if (hasChineseDisplayTitle(item)) {
-        item = applyForwardDisplayFields(item, item.detailTitle || item.title, movieCode);
-      } else {
-        item = await refreshDetailDisplayFields(item, baseUrl);
-      }
 
       if (String(effectiveParams.coverMode) === "hd") {
         item = await refreshDetailItemCover(
@@ -3157,18 +3200,12 @@ async function loadDetailInternal(baseUrl, params) {
         );
       }
 
-      if (multiEpisode) {
-        writeDetailItemCache(baseUrl, item);
-        return item;
+      if (!multiEpisode && !item.videoUrl) {
+        const freshParts = await resolveFreshPlayableParts(baseUrl);
+        item = mergeFreshPlayback(item, freshParts);
       }
 
-      if (item.videoUrl) {
-        writeDetailItemCache(baseUrl, item);
-        return item;
-      }
-
-      const freshParts = await resolveFreshPlayableParts(baseUrl);
-      item = mergeFreshPlayback(item, freshParts);
+      item = await postProcessDetailForForward(item, baseUrl);
       writeDetailItemCache(baseUrl, item);
       return item;
     }
@@ -3228,9 +3265,13 @@ async function loadDetailInternal(baseUrl, params) {
     ]);
     const coverBundle = parallel[0];
     const resolvedParts = parallel[1];
+    writeDetailMetaCache(baseUrl, fields);
 
     if (!resolvedParts.length) {
-      const metaOnly = composeDetailMetaOnly(baseUrl, fields, parts, coverBundle);
+      const metaOnly = await postProcessDetailForForward(
+        composeDetailMetaOnly(baseUrl, fields, parts, coverBundle),
+        baseUrl
+      );
       writeDetailItemCache(baseUrl, metaOnly);
       return metaOnly;
     }
@@ -3251,12 +3292,9 @@ async function loadDetailInternal(baseUrl, params) {
       }
     }
 
-    const detailItem = composeDetailItem(
-      baseUrl,
-      fields,
-      parts,
-      resolvedParts,
-      coverBundle
+    const detailItem = await postProcessDetailForForward(
+      composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle),
+      baseUrl
     );
     if (!detailItem) return null;
     writeDetailItemCache(baseUrl, detailItem);
