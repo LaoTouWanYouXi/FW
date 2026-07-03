@@ -138,15 +138,6 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/hanime1.js"
     },
     {
-      "id": "jable_stream",
-      "title": "Jable Stream",
-      "description": "通过番号匹配 Jable 播放源，并聚合到当前视频详情页",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.0",
-      "author": "Eric",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/Jable Stream.js"
-    },
-    {
       "id": "jable_int",
       "title": "Jable",
       "description": "修复声音&恢复大量分类",
