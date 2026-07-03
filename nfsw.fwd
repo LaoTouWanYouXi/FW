@@ -129,15 +129,6 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/NSFW-LIVE.js"
     },
     {
-      "id": "hanimel_me_style",
-      "title": "Hanime1",
-      "description": "Tips：需要纯净度较高ip，获取 Hanime1 动画，原作者 skywazzle，更新 @ios151",
-      "requiredVersion": "0.0.2",
-      "version": "2.5.0",
-      "author": "ios151",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/Hanime1.js"
-    },
-    {
       "id": "hanime1Tao",
       "title": "hanime1",
       "description": "搜索·标签·分类·推荐·预告·作者",
