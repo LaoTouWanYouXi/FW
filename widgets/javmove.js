@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.3.11",
+  version: "1.3.12",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -1429,37 +1429,6 @@ function buildSynopsisDescription(synopsisText) {
   return sanitizeSourceText(synopsisText) || "";
 }
 
-function normalizeSynopsisCompareText(text) {
-  return String(text || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function isSynopsisSameAsTitle(synopsis, title, movieCode) {
-  let syn = normalizeSynopsisCompareText(synopsis);
-  let ttl = normalizeSynopsisCompareText(title);
-  if (!syn || !ttl) return false;
-  if (syn === ttl) return true;
-  if (movieCode) {
-    const code = normalizeSynopsisCompareText(movieCode);
-    if (code) {
-      syn = syn.replace(new RegExp("^" + code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*"), "").trim();
-      ttl = ttl.replace(new RegExp("^" + code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*"), "").trim();
-      if (syn && ttl && syn === ttl) return true;
-    }
-  }
-  if (syn.indexOf(ttl) === 0 && syn.length - ttl.length < 48) {
-    const rest = syn.slice(ttl.length).replace(/^[\s,，]+/, "").trim();
-    if (!rest || (rest.split(/[\s,，]+/).filter(Boolean).length <= 2 && rest.length < 40)) {
-      return true;
-    }
-  }
-  if (ttl.indexOf(syn) === 0 && ttl.length - syn.length < 48) return true;
-  return false;
-}
-
 function keepOnlyChineseSynopsis(text) {
   let value = sanitizeSourceText(text);
   if (!value) return "";
@@ -2414,23 +2383,10 @@ async function resolveDetailCoverBundle(pageCover, code, params) {
 }
 
 function extractSynopsisRaw(html, rawTitle) {
-  const titlePart = decodeHtml(String(rawTitle || ""))
-    .replace(/\|\s*JAVMove\s*$/i, "")
-    .trim();
-  const movieCode = resolveMovieCode("", titlePart, "");
-
-  const metaMatch = String(html || "").match(/name="description"\s+content="([^"]+)"/i);
-  if (metaMatch) {
-    let meta = decodeHtml(metaMatch[1]).replace(/^Watch online\s+/i, "").trim();
-    if (meta.length >= 16) {
-      meta = sanitizeSourceText(meta);
-      if (!isSynopsisSameAsTitle(meta, titlePart, movieCode)) {
-        return meta;
-      }
-    }
-  }
-
-  return "";
+  const titlePart = sanitizeSourceText(
+    decodeHtml(String(rawTitle || "")).replace(/\|\s*JAVMove\s*$/i, "").trim()
+  );
+  return titlePart.length >= 16 ? titlePart : "";
 }
 
 function hashText(text) {
@@ -2445,7 +2401,7 @@ function hashText(text) {
 
 const TRANSLATE_CACHE_TTL = 604800;
 
-const TRANSLATE_CACHE_PREFIX = "tr:zh:v7:";
+const TRANSLATE_CACHE_PREFIX = "tr:zh:v8:";
 
 const MYMEMORY_DE = "laotou0786@gmail.com";
 
@@ -2502,43 +2458,6 @@ function stripMovieCodePrefix(text, movieCode) {
       ""
     )
     .trim();
-}
-
-function looksLikeGenreTagList(text) {
-  const tags = String(text || "")
-    .split(/\s*,\s*/)
-    .map(function (part) {
-      return part.trim();
-    })
-    .filter(Boolean);
-  if (tags.length < 2) return false;
-  for (let i = 0; i < tags.length; i++) {
-    const tag = tags[i];
-    if (!tag || tag.length > 48) return false;
-    if (/[!?~。．]/.test(tag)) return false;
-    if (tag.length > 24 && /\s/.test(tag) && /[.!?]/.test(tag)) return false;
-  }
-  return true;
-}
-
-function stripTrailingGenreTags(source) {
-  let text = sanitizeSourceText(source);
-  if (!text) return "";
-
-  let lastIndex = -1;
-  let lastLen = 0;
-  const regex = /,\s*,\s*/g;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    lastIndex = match.index;
-    lastLen = match[0].length;
-  }
-  if (lastIndex < 0) return text;
-
-  const tail = text.slice(lastIndex + lastLen).trim();
-  if (!looksLikeGenreTagList(tail)) return text;
-
-  return text.slice(0, lastIndex).trim();
 }
 
 function decodeUnicodeEscapes(text) {
@@ -2678,7 +2597,6 @@ async function resolveDetailTranslation(fields) {
       .trim();
   }
   source = stripMovieCodePrefix(source, movieCode);
-  source = stripTrailingGenreTags(source);
   if (!source) {
     return {
       movieCode: movieCode || "",
