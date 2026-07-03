@@ -1,13 +1,21 @@
 WidgetMetadata = {
   id: "forward.javxx",
   title: "JavXX",
-  version: "1.8.4",
+  version: "1.8.5",
   requiredVersion: "0.0.1",
   description: "JavXX \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u70ed\u95e8\u3001\u65b0\u53d1\u5e03\u3001\u89c2\u770b\u699c\u3001\u6709/\u65e0\u7801\u3001FC2/SIRO\u3001\u7c7b\u522b/\u5973\u6f14\u5458/\u5236\u4f5c\u5546/\u7cfb\u5217\u5206\u7ea7\u4e0e\u641c\u7d22",
   author: "老头",
   site: "https://123av.com",
   detailCacheDuration: 300,
   modules: [
+    {
+      id: "loadResource",
+      title: "\u52a0\u8f7d\u8d44\u6e90",
+      functionName: "loadResource",
+      type: "stream",
+      cacheDuration: 0,
+      params: []
+    },
     {
       id: "hot",
       title: "\u70ed\u95e8\u5f71\u7247",
@@ -585,7 +593,36 @@ function derivePreviewUrl(coverUrl) {
 }
 
 function isIcdnCoverUrl(url) {
-  return /icdn[^/]*\/img2\/s\d+\/[^/?#]+\/cover(?:-n|-t)?\.(?:webp|jpg|jpeg)/i.test(String(url || ""));
+  return /icdn[^/]*\/(?:img2\/|preview\/)/i.test(String(url || ""));
+}
+
+function buildDmmContentId(raw) {
+  const text = String(raw || "")
+    .toLowerCase()
+    .replace(/-(?:uncensored-leaked|chinese-subtitle|english-subtitle|censored|leaked|subtitle)$/gi, "");
+  const codeMatch = text.match(/([a-z0-9]+)[-_]?0*(\d{2,5})/i);
+  if (!codeMatch) return "";
+  let number5 = String(parseInt(codeMatch[2], 10));
+  while (number5.length < 5) number5 = "0" + number5;
+  return codeMatch[1].toLowerCase() + number5;
+}
+
+function buildDmmBackdropCandidates(href) {
+  const slug = extractVideoSlug(resolveUrl(href));
+  const code = extractVideoCode(slug) || slug || "";
+  const contentId = buildDmmContentId(code);
+  if (!contentId) return [];
+  const aws = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
+  const pics = "https://pics.dmm.co.jp/digital/video/" + contentId;
+  return [
+    aws + "/" + contentId + "pl.jpg",
+    pics + "/" + contentId + "pl.jpg",
+  ];
+}
+
+function buildDmmBackdropUrl(href) {
+  const list = buildDmmBackdropCandidates(href);
+  return list.length ? list[0] : "";
 }
 
 function buildCoverFallbackCandidates(href, variant) {
@@ -621,6 +658,7 @@ function isLandscapeListCoverUrl(url) {
   if (/\/cover-n[\.\?]/i.test(u)) return true;
   if (/\/img2\/[^"'\s<>]+\/cover\.(?:webp|jpg|jpeg)/i.test(u)) return true;
   if (/fourhoi\.com\/[^"'\s<>]+\/cover\.jpg/i.test(u)) return true;
+  if (/dmm\.co\.jp\/[^"'\s<>]+pl\.jpg/i.test(u)) return true;
   return false;
 }
 
@@ -667,7 +705,31 @@ function extractBackgroundCoverFromScope(scopeHtml) {
   return "";
 }
 
+function extractAnyIcdnUrls(scopeHtml) {
+  const text = String(scopeHtml || "");
+  const out = [];
+  const seen = {};
+  const re = /(?:https?:)?\/\/icdn[^"'\s<>]+(?:\/preview\/[^"'\s<>]+|\/img2\/[^"'\s<>]+)/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    const u = normalizeListCoverSize(normalizeImageUrl(m[0]));
+    if (!u || seen[u] || !isValidImageUrl(u) || isLogoImage(u) || isPortraitCoverUrl(u)) continue;
+    seen[u] = 1;
+    out.push(u);
+  }
+  return out;
+}
+
 function extractLandscapeCoverFromScope(scopeHtml, href) {
+  const icdnUrls = extractAnyIcdnUrls(scopeHtml);
+  for (let i = 0; i < icdnUrls.length; i++) {
+    if (/\/preview\//i.test(icdnUrls[i])) return icdnUrls[i];
+  }
+  for (let i = 0; i < icdnUrls.length; i++) {
+    if (/\/cover(?:-n)?[\.\?]/i.test(icdnUrls[i])) return icdnUrls[i];
+  }
+  if (icdnUrls.length) return icdnUrls[0];
+
   const preview = extractPreviewFromScope(scopeHtml);
   if (preview) return normalizeListCoverSize(preview);
   const bgCover = extractBackgroundCoverFromScope(scopeHtml);
@@ -702,6 +764,7 @@ function buildListCoverCandidates(href, coverUrl, scopeHtml) {
   add(buildCoverFallbackUrl(href, "jpg"));
   buildCoverFallbackCandidates(href, "n").forEach(add);
   buildCoverFallbackCandidates(href, "jpg").forEach(add);
+  buildDmmBackdropCandidates(href).forEach(add);
   return out;
 }
 
@@ -717,6 +780,7 @@ function resolveListCover(href, coverUrl, scopeHtml) {
 
   const picked =
     pick(/icdn[^"']*\/preview\//i) ||
+    pick(/dmm\.co\.jp\/[^"']+pl\.jpg/i) ||
     pick(/icdn[^"']*\/img2\/[^"']+\/cover\.(?:webp|jpg|jpeg)/i) ||
     pick(/icdn[^"']*\/img2\/[^"']+\/cover-n\.(?:webp|jpg|jpeg)/i) ||
     pick(/fourhoi\.com\/[^"']+\/cover-n\.jpg/i) ||
@@ -727,16 +791,14 @@ function resolveListCover(href, coverUrl, scopeHtml) {
     candidates[0];
 
   if (picked && !isPortraitCoverUrl(picked)) return picked;
-  return buildSlugLandscapeBackdrop(href);
+  const dmm = buildDmmBackdropUrl(href);
+  if (dmm) return dmm;
+  return buildSlugLandscapeBackdrop(href) || candidates[0] || "";
 }
 
 function normalizeListCoverSize(url) {
   if (!url) return "";
-  return normalizeImageUrl(url)
-    .replace(/\/s1080\//i, "/s360/")
-    .replace(/\/s720\//i, "/s360/")
-    .replace(/\/s480\//i, "/s360/")
-    .replace(/\/s500\//i, "/s360/");
+  return normalizeImageUrl(url).replace(/\/s1080\//i, "/s720/");
 }
 
 function toListCoverUrl(coverUrl, scopeHtml, href) {
@@ -747,7 +809,7 @@ function toListCoverUrl(coverUrl, scopeHtml, href) {
     if (!url) return "";
     const u = normalizeListCoverSize(url);
     if (!isValidImageUrl(u) || isLogoImage(u) || isPortraitCoverUrl(u)) return "";
-    if (!scoped && slug && !belongsToVideo(u, slug) && !isIcdnCoverUrl(u)) return "";
+    if (!scoped && slug && !belongsToVideo(u, slug) && !isIcdnCoverUrl(u) && !/dmm\.co\.jp/i.test(u)) return "";
     return u;
   }
 
@@ -884,7 +946,8 @@ function isValidImageUrl(url) {
   if (/placeholder|loading|blank|data:image|spacer/i.test(url)) return false;
   return /\.(webp|jpg|jpeg|png|gif)(\?|$)/i.test(url) ||
     /icdn[^/]*\//i.test(url) ||
-    /fourhoi\.com\//i.test(url);
+    /fourhoi\.com\//i.test(url) ||
+    /dmm\.co\.jp\//i.test(url);
 }
 
 function pickBestFromSrcset(srcset) {
@@ -1634,11 +1697,13 @@ function pickItemCover(scopeHtml, href, $img) {
   if (fromScope) return fromScope;
   const fromImg = pickListImageUrl($img);
   if (fromImg && !isLogoImage(fromImg) && !isPortraitCoverUrl(fromImg)) return fromImg;
+  const dmm = buildDmmBackdropUrl(href);
+  if (dmm) return dmm;
   const fallbacks = buildCoverFallbackCandidates(href, "n");
   for (let i = 0; i < fallbacks.length; i++) {
     if (isValidImageUrl(fallbacks[i])) return fallbacks[i];
   }
-  return buildSlugLandscapeBackdrop(href);
+  return buildSlugLandscapeBackdrop(href) || undefined;
 }
 
 function countVideoCards($, selector) {
@@ -1692,7 +1757,13 @@ function parseVideoList(html) {
     const title = extractListTitle($scope, href);
     const duration = extractListDuration($scope);
     const $img = $scope.find("img").first();
-    pushItem(href, title, pickItemCover($scope.html(), href, $img), duration, $scope.html(), $img);
+    let scopeHtml = $scope.html() || "";
+    const previewAttr =
+      $scope.find("[data-preview]").first().attr("data-preview") ||
+      $scope.attr("data-preview") ||
+      "";
+    if (previewAttr) scopeHtml += ' data-preview="' + previewAttr + '"';
+    pushItem(href, title, pickItemCover(scopeHtml, href, $img), duration, scopeHtml, $img);
   }
 
   const cardSelectors = [".vid-items > div.item", ".grid .group", "div.thumbnail", "article"];
@@ -1764,20 +1835,18 @@ let siteSessionReady = false;
 async function ensureSiteSession() {
   if (siteSessionReady) return;
   siteSessionReady = true;
+  if (loadStoredCookies()) return;
   try {
-    await fetchHtmlText(BASE_URL + LANG_PREFIX + "/hot", BASE_URL + "/");
+    await fetchHtmlText(BASE_URL + LANG_PREFIX + "/hot", BASE_URL + "/", { maxAttempts: 1 });
   } catch (e) {}
 }
 
 async function fetchDetailHtml(url) {
   await ensureSiteSession();
-  let html = await fetchHtmlText(url, BASE_URL + LANG_PREFIX + "/", { maxAttempts: 2 });
+  const html = await fetchHtmlText(url, BASE_URL + LANG_PREFIX + "/", { maxAttempts: 2 });
   if (!html || !isVideoDetailUrl(url)) return html;
   if (hasPlaybackMarkers(html) && extractSurritEmbedIds(html).length > 0) return html;
   if (isChallengePage(html)) return html;
-  const retry = await fetchHtmlText(url, url, { maxAttempts: 1 });
-  if (!retry) return html;
-  if (scoreFetchedHtml(retry, url) > scoreFetchedHtml(html, url)) return retry;
   return html;
 }
 
@@ -2015,6 +2084,7 @@ async function loadDetail(link) {
     let cover = extractPosterFromHtml(html, detailUrl, $)
       || pickImageUrl($ && $.fn ? $(".video-cover img, .movie-cover img, .image img, img[data-src*='icdn'], img[src*='icdn']").first() : null)
       || pickImageUrl($ && $.fn ? $("video").first() : null)
+      || buildDmmBackdropUrl(detailUrl)
       || buildCoverFallbackUrl(detailUrl, "t")
       || buildCoverFallbackUrl(detailUrl, "jpg");
 
@@ -2022,23 +2092,8 @@ async function loadDetail(link) {
     let videoUrl = cached ? cached.videoUrl : "";
     let playHeaders = cached ? cached.customHeaders : null;
 
-    if (!videoUrl) {
-      videoUrl = await resolveVideoUrl(html, detailUrl);
-      if (videoUrl) {
-        playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
-        videoUrl = await finalizeVideoUrl(videoUrl, playHeaders, true);
-        if (videoUrl) writeVideoCache(detailUrl, videoUrl, playHeaders);
-      }
-    }
-    if (!playHeaders && videoUrl) playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
-
-    if (!videoUrl && !hasPlaybackMarkers(html)) {
-      const hint =
-        "【提示】已读取标题/简介，但未拿到播放器数据。手机浏览器能正常打开，但 Forward 模块的请求可能返回了不完整的页面。请清除本模块缓存后重试；若仍失败，把详情页链接反馈给模块作者。";
-      description = description ? description + "\n\n" + hint : hint;
-    } else if (!videoUrl && hasPlaybackMarkers(html)) {
-      const hint = "【提示】已检测到播放器信息但拉流失败，请清除模块缓存后重试。";
-      description = description ? description + "\n\n" + hint : hint;
+    if (videoUrl) {
+      if (!playHeaders) playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
     }
 
     const genreItems = [];
@@ -2116,6 +2171,53 @@ async function loadDetail(link) {
       description: "【提示】详情解析异常：" + (e && e.message ? e.message : "unknown"),
       mediaType: "movie",
     };
+  }
+}
+
+function extractResourceLink(params) {
+  if (!params) return "";
+  return normalizeDetailLink(
+    params.link || params.url || params.id || params.href || ""
+  );
+}
+
+async function loadResource(params) {
+  const detailUrl = extractResourceLink(params || {});
+  if (!detailUrl || !isVideoDetailUrl(detailUrl)) return [];
+
+  const cached = readVideoCache(detailUrl);
+  if (cached && cached.videoUrl) {
+    const headers = cached.customHeaders || buildPlayHeaders(cached.videoUrl, detailUrl);
+    return [{
+      name: "播放",
+      description: "123AV",
+      url: cached.videoUrl,
+      headers: headers,
+      customHeaders: headers,
+      playerType: "system",
+    }];
+  }
+
+  try {
+    const html = await fetchDetailHtml(detailUrl);
+    if (!html || isMigrationPage(html) || isChallengePage(html)) return [];
+    const embedUrl = extractSurritEmbedUrl(html);
+    let videoUrl = await resolveVideoUrl(html, detailUrl);
+    if (!videoUrl) return [];
+    const playHeaders = buildPlayHeaders(videoUrl, embedUrl || detailUrl);
+    videoUrl = await finalizeVideoUrl(videoUrl, playHeaders, true);
+    if (!videoUrl) return [];
+    writeVideoCache(detailUrl, videoUrl, playHeaders);
+    return [{
+      name: "播放",
+      description: "123AV",
+      url: videoUrl,
+      headers: playHeaders,
+      customHeaders: playHeaders,
+      playerType: "system",
+    }];
+  } catch (e) {
+    return [];
   }
 }
 

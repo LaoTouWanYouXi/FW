@@ -2,10 +2,10 @@ WidgetMetadata = {
     id: "hanime1Tao",
     title: "hanime1",
     description: "搜索·标签·分类·推荐·预告·作者",
-    author: "廿二日",
+    author: "老头",
     site: "https://hanime1.me",
-    version: "2.2.1",
-    requiredVersion: "0.0.2",
+    version: "1.0.0",
+    requiredVersion: "0.0.1",
     detailCacheDuration: 300,
     search: {
         title: "快捷搜索",
@@ -473,22 +473,45 @@ function assignImagePaths(imgUrl) {
     return { posterPath: normUrl, backdropPath: normUrl };
 }
 
+function findWatchHref($card) {
+    return $card.attr('href')
+        || $card.find('a.overlay').attr('href')
+        || $card.find('a.video-link').attr('href')
+        || $card.find('a[href*="/watch?v="]').first().attr('href')
+        || '';
+}
+
+function findCardPoster($card) {
+    const $mainThumb = $card.find('img.main-thumb');
+    if ($mainThumb.length) {
+        const $img = $mainThumb.last();
+        return $img.attr('data-src') || $img.attr('data-original') || $img.attr('src') || '';
+    }
+    const $panelImgs = $card.find('.card-mobile-panel img');
+    if ($panelImgs.length) {
+        const $img = $panelImgs.last();
+        return $img.attr('data-src') || $img.attr('data-original') || $img.attr('src') || '';
+    }
+    const $imgs = $card.find('img');
+    if ($card.hasClass('related-watch-wrap') && $imgs.length >= 2) {
+        const $img = $imgs.eq(1);
+        return $img.attr('data-src') || $img.attr('data-original') || $img.attr('src') || '';
+    }
+    const $img = $imgs.first();
+    return $img.attr('data-src') || $img.attr('data-original') || $img.attr('src') || '';
+}
+
 function extractCardData($card, seen) {
-    const href = $card.attr('href') || $card.find('a.overlay').attr('href') || $card.find('a.video-link').attr('href') || '';
+    const href = findWatchHref($card);
     const link = normalizeWatchUrl(href);
     if (!link || seen.has(link) || !/\/watch\?v=\d+/.test(link)) return null;
 
-    const title = safeText($card.find('.home-rows-videos-title, .card-mobile-title, div.title').first().text());
+    const title = safeText(
+        $card.find('.title, .home-rows-videos-title, .card-mobile-title, .card-mobile-panel .card-mobile-title, div.title').first().text()
+    );
     if (!title) return null;
 
-    const $imgs = $card.find('img');
-    let $posterImg;
-    if ($card.hasClass('related-watch-wrap') && $imgs.length >= 2) {
-        $posterImg = $imgs.eq(1);
-    } else {
-        $posterImg = $imgs.first();
-    }
-    const poster = $posterImg.attr('data-src') || $posterImg.attr('data-original') || $posterImg.attr('src') || '';
+    const poster = findCardPoster($card);
 
     const durationText = safeText($card.find('div.duration, .card-mobile-duration').first().text()) || undefined;
     const cardText = $card.find('.stat-item, .subtitle').text() || '';
@@ -503,35 +526,38 @@ function buildCards($) {
     const cards = [];
     const seen = new Set();
 
-    $('a[href*="/watch?v="]').each((_, el) => {
-        const $a = $(el);
-        if (!$a.find('.home-rows-videos-div').length &&
-            !$a.find('.home-rows-videos-title').length &&
-            !$a.find('.card-mobile-title').length &&
-            !$a.hasClass('overlay') &&
-            !$a.find('img').length) return;
-        const href = $a.attr('href') || '';
-        if (seen.has(href)) return;
+    function pushCard($el, href) {
+        if (!href || seen.has(href)) return;
         seen.add(href);
-        cards.push($a);
+        cards.push($el);
+    }
+
+    $('#home-rows-wrapper .video-item-container, .video-item-container').each((_, el) => {
+        const $el = $(el);
+        pushCard($el, findWatchHref($el));
+    });
+
+    $('.home-rows-videos-div').each((_, el) => {
+        const $el = $(el);
+        const $parent = $el.parent('a[href*="/watch?v="]');
+        if (!$parent.length) return;
+        pushCard($parent, $parent.attr('href') || '');
     });
 
     $('.related-watch-wrap').each((_, el) => {
         const $el = $(el);
         if ($el.closest('#playlist-scroll').length) return;
-        const href = $el.find('a.overlay').attr('href') || '';
-        if (seen.has(href)) return;
-        seen.add(href);
-        cards.push($el);
+        pushCard($el, findWatchHref($el));
     });
 
-    $('div.video-item-container').each((_, el) => {
-        const $el = $(el);
-        const href = $el.find('a.video-link').attr('href') || '';
-        if (seen.has(href)) return;
-        seen.add(href);
-        cards.push($el);
-    });
+    if (cards.length === 0) {
+        $('a[href*="/watch?v="]').each((_, el) => {
+            const $a = $(el);
+            if (!$a.find('.home-rows-videos-div, .home-rows-videos-title, .card-mobile-title, .title, img').length &&
+                !$a.hasClass('overlay')) return;
+            pushCard($a, $a.attr('href') || '');
+        });
+    }
 
     return cards;
 }
@@ -780,7 +806,7 @@ async function loadHotRankings(params) {
     const page = parseInt(params.page) || 1;
     const jumped = await handleJumpUrl(params, page);
     if (jumped) return jumped;
-    const sortVal = mapSortToApi(params.sort_by || "watching") || "他們在看";
+    const sortVal = mapSortToApi(params.sort || params.sort_by || "watching") || "他們在看";
     const queryParts = [];
 
     if (sortVal) queryParts.push(`sort=${encodeURIComponent(sortVal)}`);
