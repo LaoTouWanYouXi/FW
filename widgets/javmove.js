@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.3.7",
+  version: "1.3.8",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -2493,6 +2493,17 @@ function sanitizeSourceText(text) {
   return value.replace(/\uFFFD/g, "").replace(/\s+/g, " ").trim();
 }
 
+function stripMovieCodePrefix(text, movieCode) {
+  let source = sanitizeSourceText(text);
+  if (!source || !movieCode) return source;
+  return source
+    .replace(
+      new RegExp("^" + movieCode.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*", "i"),
+      ""
+    )
+    .trim();
+}
+
 function decodeUnicodeEscapes(text) {
   return String(text || "").replace(/\\u([0-9a-fA-F]{4})/g, function (_, hex) {
     return String.fromCharCode(parseInt(hex, 16));
@@ -2628,15 +2639,8 @@ async function resolveDetailTranslation(fields) {
     source = sanitizeSourceText(fields.displayTitle || "")
       .replace(/\|\s*JAVMove\s*$/i, "")
       .trim();
-    if (movieCode) {
-      source = source
-        .replace(
-          new RegExp("^" + movieCode.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*", "i"),
-          ""
-        )
-        .trim();
-    }
   }
+  source = stripMovieCodePrefix(source, movieCode);
   if (!source) {
     return {
       movieCode: movieCode || "",
