@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.3.5",
+  version: "1.3.7",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -2445,7 +2445,9 @@ function hashText(text) {
 
 const TRANSLATE_CACHE_TTL = 604800;
 
-const TRANSLATE_CACHE_PREFIX = "tr:zh:v3:";
+const TRANSLATE_CACHE_PREFIX = "tr:zh:v4:";
+
+const MYMEMORY_DE = "laotou0786@gmail.com";
 
 function readTranslateCache(key) {
   try {
@@ -2541,39 +2543,40 @@ function looksLikeGarbledTranslation(translated) {
   return false;
 }
 
-function parseTranslatePayload(raw) {
-  if (raw == null) return "";
+function parseMyMemoryResponse(raw) {
   let data = raw;
-  if (Array.isArray(raw)) {
-    data = raw;
-  } else if (typeof raw === "object") {
-    data = raw;
-  } else {
-    const body = stringifyHttpBody(raw);
-    if (!body) return "";
-    const trimmed = String(body).trim();
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
     if (!trimmed) return "";
-    if (trimmed.charAt(0) === "[" || trimmed.charAt(0) === "{") {
-      try {
-        data = JSON.parse(trimmed);
-      } catch (e) {
-        return "";
-      }
-    } else {
+    try {
+      data = JSON.parse(trimmed);
+    } catch (e) {
       return "";
     }
   }
-  if (Array.isArray(data) && Array.isArray(data[0])) {
-    let out = "";
-    for (let i = 0; i < data[0].length; i++) {
-      if (data[0][i] && data[0][i][0]) out += data[0][i][0];
-    }
-    out = normalizeTranslateOutput(out.trim());
-    return isValidChineseTranslation(out) ? out : "";
+  if (!data || typeof data !== "object" || Array.isArray(data)) return "";
+  const status = Number(data.responseStatus || 0);
+  if (status && status !== 200) return "";
+  const text =
+    data.responseData && data.responseData.translatedText
+      ? String(data.responseData.translatedText).trim()
+      : "";
+  if (!text || /MYMEMORY WARNING/i.test(text)) return "";
+  const out = normalizeTranslateOutput(text);
+  return isValidChineseTranslation(out) ? out : "";
+}
+
+function parseTranslatePayload(raw) {
+  if (raw == null) return "";
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    return parseMyMemoryResponse(raw);
   }
-  if (data && data.responseData && data.responseData.translatedText) {
-    const out = normalizeTranslateOutput(String(data.responseData.translatedText).trim());
-    return isValidChineseTranslation(out) ? out : "";
+  const body = stringifyHttpBody(raw);
+  if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+    return parseMyMemoryResponse(body);
+  }
+  if (typeof body === "string") {
+    return parseMyMemoryResponse(body);
   }
   return "";
 }
@@ -2682,6 +2685,26 @@ async function translateSynopsisText(source) {
   return "";
 }
 
+async function requestMyMemoryTranslation(text, mmLang) {
+  try {
+    const res = await Widget.http.get(
+      "https://api.mymemory.translated.net/get?q=" +
+        encodeURIComponent(text) +
+        "&langpair=" +
+        encodeURIComponent(mmLang + "|zh-CN") +
+        "&de=" +
+        encodeURIComponent(MYMEMORY_DE),
+      {
+        timeout: 8000,
+        headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" },
+      }
+    );
+    return parseMyMemoryResponse(res.data);
+  } catch (e) {
+    return "";
+  }
+}
+
 async function translateToChinese(text) {
   const source = sanitizeSourceText(text);
   if (!source) return "";
@@ -2690,55 +2713,14 @@ async function translateToChinese(text) {
   const cached = readTranslateCache(cacheKey);
   if (cached) return cached;
 
-  const truncated = source.slice(0, 500);
-  const httpOpts = {
-    timeout: 8000,
-    headers: { "User-Agent": HEADERS["User-Agent"], Accept: "application/json" },
-  };
-
-  const googlePromise = Widget.http
-    .get(
-      "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" +
-        encodeURIComponent(sl) +
-        "&tl=zh-CN&dt=t&q=" +
-        encodeURIComponent(truncated),
-      httpOpts
-    )
-    .then(function (r) {
-      return parseTranslatePayload(r.data);
-    })
-    .catch(function () {
-      return "";
-    });
-
   const mmLang = sl === "ja" ? "ja" : sl === "en" ? "en" : "auto";
-  const mmPromise = Widget.http
-    .get(
-      "https://api.mymemory.translated.net/get?q=" +
-        encodeURIComponent(truncated) +
-        "&langpair=" +
-        encodeURIComponent(mmLang + "|zh-CN"),
-      httpOpts
-    )
-    .then(function (r) {
-      return parseTranslatePayload(r.data);
-    })
-    .catch(function () {
-      return "";
-    });
-
-  const results = await Promise.allSettled([googlePromise, mmPromise]);
-
+  const limits = [500, 280];
   let part = "";
-  for (let i = 0; i < results.length; i++) {
-    if (
-      results[i].status === "fulfilled" &&
-      results[i].value &&
-      isValidChineseTranslation(results[i].value)
-    ) {
-      part = results[i].value;
-      break;
-    }
+  for (let i = 0; i < limits.length; i++) {
+    const truncated = source.slice(0, limits[i]);
+    if (!truncated) continue;
+    part = await requestMyMemoryTranslation(truncated, mmLang);
+    if (part) break;
   }
 
   if (part) {
