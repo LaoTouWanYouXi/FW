@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.3.0",
+  version: "1.3.1",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -513,18 +513,49 @@ function applyCoverBundleToItem(item, coverBundle) {
   );
 }
 
+function hasChineseText(text) {
+  return /[\u4e00-\u9fff]/.test(String(text || ""));
+}
+
+function hasChineseDisplayTitle(item) {
+  if (!item) return false;
+  const fields = [item.detailTitle, item.title, item.originalTitle];
+  for (let i = 0; i < fields.length; i++) {
+    if (hasChineseText(fields[i])) return true;
+  }
+  return false;
+}
+
+function sanitizeDisplayNameForForward(displayName, movieCode) {
+  const name = sanitizeSourceText(displayName);
+  if (name && hasChineseText(name)) return name;
+  return sanitizeSourceText(movieCode) || "";
+}
+
 async function refreshDetailDisplayFields(item, baseUrl) {
   if (!item) return item;
+  const movieCode =
+    item.matchCode ||
+    item.code ||
+    resolveMovieCode("", item.title || "", "");
+  if (hasChineseDisplayTitle(item) && sanitizeSourceText(item.detailTitle)) {
+    return applyForwardDisplayFields(item, item.detailTitle, movieCode);
+  }
   let fields = readDetailMetaCache(baseUrl);
   if (!fields) {
     fields = {
       displayTitle: item.originalTitle || item.title || "",
       synopsisRaw: "",
-      detailInfo: { movieId: item.matchCode || item.code || "" },
+      detailInfo: { movieId: movieCode },
     };
   }
   await applySynopsisTranslation(fields, fields.parts || []);
-  return applyForwardDisplayFields(item, fields.detailTitle || fields.displayTitle);
+  if (fields.detailTitle && hasChineseText(fields.detailTitle)) {
+    writeDetailMetaCache(baseUrl, fields);
+  }
+  const updated = applyForwardDisplayFields(item, fields.detailTitle, movieCode);
+  writeDetailItemCache(baseUrl, updated);
+  return updated;
 }
 
 async function refreshDetailItemCover(item, pageCover, movieCode, params) {
@@ -735,17 +766,41 @@ function extractResourceLink(params) {
   return "";
 }
 
+function countDistinctEpisodeLabels(parts) {
+  const labels = {};
+  for (let i = 0; i < (parts || []).length; i++) {
+    const part = parts[i];
+    if (!part) continue;
+    const label = String(part.label || "").trim() || String(i + 1);
+    labels[label] = true;
+  }
+  return Object.keys(labels).length;
+}
+
 function isMultiPartMovie(parts) {
-  return !!(parts && parts.length > 1);
+  return countDistinctEpisodeLabels(parts) > 1;
 }
 
 async function resolveFreshPlayableParts(baseUrl) {
   const key = normalizeMoviePageUrl(baseUrl);
   if (!key) return [];
 
+  const cached = readPartsBundle(key);
+  if (
+    cached &&
+    cached.resolvedParts &&
+    cached.resolvedParts.length &&
+    cached.ts &&
+    Date.now() - cached.ts < PARTS_BUNDLE_TTL * 1000
+  ) {
+    const playable = cached.resolvedParts.filter(function (part) {
+      return part && part.videoUrl;
+    });
+    if (playable.length) return playable;
+  }
+
   let html = "";
   let parts = [];
-  const cached = readPartsBundle(key);
   if (cached && cached.html && cached.parts && cached.parts.length) {
     html = cached.html;
     parts = cached.parts;
@@ -1520,7 +1575,7 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
 
 function readDetailMetaCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:meta:v5:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:meta:v6:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (
@@ -1539,7 +1594,7 @@ function writeDetailMetaCache(baseUrl, meta) {
   if (!meta) return;
   try {
     Widget.storage.set(
-      "detail:meta:v5:" + String(baseUrl),
+      "detail:meta:v6:" + String(baseUrl),
       JSON.stringify({ meta: meta, ts: Date.now() })
     );
   } catch (e) {}
@@ -1575,7 +1630,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v20:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v21:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1589,7 +1644,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v20:" + String(baseUrl),
+      "detail:v21:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1900,14 +1955,23 @@ function buildDetailMatchFields(movieCode, displayTitle, synopsisText, rating) {
   };
 }
 
-function applyForwardDisplayFields(item, displayName) {
+function applyForwardDisplayFields(item, displayName, movieCode) {
   if (!item) return item;
-  const name = sanitizeSourceText(displayName) || sanitizeSourceText(item.title);
+  const code =
+    movieCode ||
+    item.matchCode ||
+    item.code ||
+    resolveMovieCode("", item.title || "", "");
+  const name = sanitizeDisplayNameForForward(
+    displayName || item.detailTitle || item.title,
+    code
+  );
   if (!name) return item;
   return stripUndefined(
     Object.assign({}, item, {
       title: name,
       originalTitle: name,
+      detailTitle: name,
       description: "",
     })
   );
@@ -1915,15 +1979,17 @@ function applyForwardDisplayFields(item, displayName) {
 
 function finalizeDetailItem(baseItem, movieCode, displayName, rating) {
   const item = Object.assign({}, baseItem, buildDetailMatchFields(movieCode, "", "", rating));
-  return applyForwardDisplayFields(item, displayName || item.title);
+  return applyForwardDisplayFields(item, displayName, movieCode);
 }
 
 function enrichListItemMatchFields(item, rawTitle) {
   if (!item) return item;
   const movieCode = resolveMovieCode("", item.title || rawTitle || "", rawTitle || "");
   const listDescription = movieCode ? "\u756a\u53f7: " + movieCode : "";
+  const match = buildGuangyaMatchFields(movieCode, "", listDescription);
+  delete match.originalTitle;
   return stripUndefined(
-    Object.assign({}, item, buildGuangyaMatchFields(movieCode, rawTitle || item.title || "", listDescription), {
+    Object.assign({}, item, match, {
       rating: 0,
     })
   );
@@ -2484,7 +2550,7 @@ async function resolveDetailChineseTitle(fields) {
         .trim();
     }
   }
-  if (!source) return movieCode || fields.displayTitle || "";
+  if (!source) return movieCode || "";
 
   const translated = await translateSynopsisText(source);
   let zh = keepOnlyChineseSynopsis(extractChineseOnlyText(translated, source));
@@ -2492,7 +2558,7 @@ async function resolveDetailChineseTitle(fields) {
   if (zh && isValidChineseTranslation(zh)) {
     return movieCode ? movieCode + " " + zh : zh;
   }
-  return movieCode || fields.displayTitle || "";
+  return movieCode || "";
 }
 
 async function applySynopsisTranslation(fields, parts) {
@@ -3070,15 +3136,41 @@ async function loadDetailInternal(baseUrl, params) {
         cachedItem.matchCode ||
         cachedItem.code ||
         resolveMovieCode("", cachedItem.title || "", "");
-      const refreshedCover = await refreshDetailItemCover(
-        cachedItem,
-        cachedItem.detailPoster || cachedItem.backdropPath,
-        movieCode,
-        params
-      );
-      const refreshedDisplay = await refreshDetailDisplayFields(refreshedCover, baseUrl);
+      const meta = readDetailMetaCache(baseUrl);
+      const parts = (meta && meta.parts) || [];
+      const multiEpisode = isMultiPartMovie(parts);
+      const effectiveParams = syncGlobalParams(params || {});
+
+      let item = cachedItem;
+      if (hasChineseDisplayTitle(item)) {
+        item = applyForwardDisplayFields(item, item.detailTitle || item.title, movieCode);
+      } else {
+        item = await refreshDetailDisplayFields(item, baseUrl);
+      }
+
+      if (String(effectiveParams.coverMode) === "hd") {
+        item = await refreshDetailItemCover(
+          item,
+          item.detailPoster || item.backdropPath,
+          movieCode,
+          effectiveParams
+        );
+      }
+
+      if (multiEpisode) {
+        writeDetailItemCache(baseUrl, item);
+        return item;
+      }
+
+      if (item.videoUrl) {
+        writeDetailItemCache(baseUrl, item);
+        return item;
+      }
+
       const freshParts = await resolveFreshPlayableParts(baseUrl);
-      return mergeFreshPlayback(refreshedDisplay, freshParts);
+      item = mergeFreshPlayback(item, freshParts);
+      writeDetailItemCache(baseUrl, item);
+      return item;
     }
 
     let parts = [];
@@ -3112,7 +3204,7 @@ async function loadDetailInternal(baseUrl, params) {
       effectiveParams
     );
     let resolvedPartsPromise;
-    if (parts.length > 1) {
+    if (isMultiPartMovie(parts)) {
       resolvedPartsPromise = resolveFreshPlayableParts(baseUrl);
     } else {
       resolvedPartsPromise = resolveVideoUrlForPage(parts[0].pageUrl, baseUrl).then(function (playback) {
