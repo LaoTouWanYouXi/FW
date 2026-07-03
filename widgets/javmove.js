@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.3.2",
+  version: "1.3.3",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -552,10 +552,23 @@ function isValidDetailTitle(text, movieCode) {
   return !!rest && hasChineseText(rest);
 }
 
-function resolveForwardDisplayName(displayName, movieCode) {
-  const name = sanitizeSourceText(displayName);
-  if (isValidDetailTitle(name, movieCode)) return name;
-  return sanitizeSourceText(movieCode) || "";
+function hasDetailChineseContent(fields, movieCode) {
+  if (!fields) return false;
+  const synopsis = sanitizeSourceText(fields.synopsisDisplay || fields.description || "");
+  if (synopsis && hasChineseText(synopsis)) return true;
+  return isValidDetailTitle(fields.detailTitle, movieCode);
+}
+
+function extractChineseSynopsisFromDetailTitle(detailTitle, movieCode) {
+  const value = sanitizeSourceText(detailTitle);
+  if (!value || !hasChineseText(value)) return "";
+  const code = sanitizeSourceText(movieCode);
+  if (!code) return keepOnlyChineseSynopsis(value);
+  const prefix = code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const rest = value.replace(new RegExp("^" + prefix + "\\s*", "i"), "").trim();
+  if (rest && hasChineseText(rest)) return keepOnlyChineseSynopsis(rest);
+  if (value.toUpperCase() === code.toUpperCase()) return "";
+  return keepOnlyChineseSynopsis(value);
 }
 
 async function ensureDetailTitleFields(baseUrl, movieCode) {
@@ -570,11 +583,11 @@ async function ensureDetailTitleFields(baseUrl, movieCode) {
   }
   if (!fields.detailInfo) fields.detailInfo = { movieId: movieCode || "" };
   if (movieCode && !fields.detailInfo.movieId) fields.detailInfo.movieId = movieCode;
-  if (fields.detailTitle && isValidDetailTitle(fields.detailTitle, movieCode)) {
+  if (hasDetailChineseContent(fields, movieCode)) {
     return fields;
   }
   await applySynopsisTranslation(fields, fields.parts || []);
-  if (fields.detailTitle && isValidDetailTitle(fields.detailTitle, movieCode)) {
+  if (hasDetailChineseContent(fields, movieCode)) {
     writeDetailMetaCache(baseUrl, fields);
   }
   return fields;
@@ -585,13 +598,17 @@ async function postProcessDetailForForward(item, baseUrl) {
   const meta = readDetailMetaCache(baseUrl);
   const movieCode = resolveItemMovieCode(item, baseUrl, meta);
   let fields = meta;
-  let displayName = sanitizeSourceText(item.detailTitle || (fields && fields.detailTitle) || "");
-  if (!isValidDetailTitle(displayName, movieCode)) {
+  let chineseSynopsis = sanitizeSourceText(
+    (fields && (fields.synopsisDisplay || fields.description)) ||
+      item.detailSynopsis ||
+      extractChineseSynopsisFromDetailTitle(item.detailTitle, movieCode) ||
+      ""
+  );
+  if (!chineseSynopsis || !hasChineseText(chineseSynopsis)) {
     fields = await ensureDetailTitleFields(baseUrl, movieCode);
-    displayName = sanitizeSourceText(fields.detailTitle || "");
+    chineseSynopsis = sanitizeSourceText(fields.synopsisDisplay || fields.description || "");
   }
-  displayName = resolveForwardDisplayName(displayName, movieCode);
-  return applyForwardDisplayFields(item, displayName, movieCode);
+  return applyForwardDisplayFields(item, movieCode, chineseSynopsis);
 }
 
 async function refreshDetailDisplayFields(item, baseUrl) {
@@ -1594,7 +1611,7 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
     {
       id: movieCode || baseUrl,
       type: "url",
-      title: fields.detailTitle || movieCode || "",
+      title: movieCode || "",
       backdropPath: coverBundle.backdropPath || undefined,
       posterPath: coverBundle.posterPath || undefined,
       detailPoster: coverBundle.detailPoster || undefined,
@@ -1610,14 +1627,14 @@ function composeDetailMetaOnly(baseUrl, fields, parts, coverBundle) {
       playerType: isMultiPartMovie(parts) ? "system" : undefined,
     },
     movieCode,
-    fields.detailTitle,
+    fields.synopsisDisplay || fields.description,
     fields.rating
   );
 }
 
 function readDetailMetaCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:meta:v7:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:meta:v8:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (
@@ -1636,7 +1653,7 @@ function writeDetailMetaCache(baseUrl, meta) {
   if (!meta) return;
   try {
     Widget.storage.set(
-      "detail:meta:v7:" + String(baseUrl),
+      "detail:meta:v8:" + String(baseUrl),
       JSON.stringify({ meta: meta, ts: Date.now() })
     );
   } catch (e) {}
@@ -1672,7 +1689,7 @@ function mergeFreshPlayback(item, resolvedParts) {
 
 function readDetailItemCache(baseUrl) {
   try {
-    const raw = Widget.storage.get("detail:v22:" + String(baseUrl));
+    const raw = Widget.storage.get("detail:v23:" + String(baseUrl));
     if (!raw) return null;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (data && data.item && data.ts && Date.now() - data.ts < DETAIL_ITEM_CACHE_TTL * 1000) {
@@ -1686,7 +1703,7 @@ function writeDetailItemCache(baseUrl, item) {
   if (!item) return;
   try {
     Widget.storage.set(
-      "detail:v22:" + String(baseUrl),
+      "detail:v23:" + String(baseUrl),
       JSON.stringify({ item: item, ts: Date.now() })
     );
   } catch (e) {}
@@ -1997,7 +2014,7 @@ function buildDetailMatchFields(movieCode, displayTitle, synopsisText, rating) {
   };
 }
 
-function applyForwardDisplayFields(item, displayName, movieCode) {
+function applyForwardDisplayFields(item, movieCode, chineseSynopsis) {
   if (!item) return item;
   const code =
     movieCode ||
@@ -2005,15 +2022,17 @@ function applyForwardDisplayFields(item, displayName, movieCode) {
     item.matchCode ||
     item.code ||
     "";
-  const name =
-    resolveForwardDisplayName(displayName || item.detailTitle, code) ||
-    code ||
-    "\u672a\u77e5";
+  const titleName = sanitizeSourceText(code) || "\u672a\u77e5";
+  let description = keepOnlyChineseSynopsis(sanitizeSourceText(chineseSynopsis || ""));
+  if (!description || !hasChineseText(description)) {
+    description = " ";
+  }
   const out = Object.assign({}, item, buildDetailMatchFields(code, "", "", item.rating), {
-    title: name,
-    originalTitle: name,
-    detailTitle: name,
-    description: " ",
+    title: titleName,
+    originalTitle: titleName,
+    detailTitle: titleName,
+    detailSynopsis: description.trim() || undefined,
+    description: description,
   });
   delete out.episodeItems;
   delete out.childItems;
@@ -2021,9 +2040,9 @@ function applyForwardDisplayFields(item, displayName, movieCode) {
   return stripUndefined(out);
 }
 
-function finalizeDetailItem(baseItem, movieCode, displayName, rating) {
+function finalizeDetailItem(baseItem, movieCode, chineseSynopsis, rating) {
   const item = Object.assign({}, baseItem, buildDetailMatchFields(movieCode, "", "", rating));
-  return applyForwardDisplayFields(item, displayName, movieCode);
+  return applyForwardDisplayFields(item, movieCode, chineseSynopsis);
 }
 
 function enrichListItemMatchFields(item, rawTitle) {
@@ -2577,6 +2596,11 @@ function resolveDisplaySynopsis(source, translated) {
 }
 
 async function resolveDetailChineseTitle(fields) {
+  const bundle = await resolveDetailTranslation(fields);
+  return bundle.detailTitle;
+}
+
+async function resolveDetailTranslation(fields) {
   const movieCode = resolveMovieCode(
     fields.detailInfo && fields.detailInfo.movieId,
     fields.displayTitle,
@@ -2596,23 +2620,32 @@ async function resolveDetailChineseTitle(fields) {
         .trim();
     }
   }
-  if (!source) return movieCode || "";
+  if (!source) {
+    return {
+      movieCode: movieCode || "",
+      synopsis: "",
+      detailTitle: movieCode || "",
+    };
+  }
 
   const translated = await translateSynopsisText(source);
   let zh = keepOnlyChineseSynopsis(extractChineseOnlyText(translated, source));
   zh = stripDuplicateTitleFromSynopsis(zh, fields.displayTitle, movieCode);
-  if (zh && isValidChineseTranslation(zh)) {
-    return movieCode ? movieCode + " " + zh : zh;
-  }
-  return movieCode || "";
+  const synopsis = zh && isValidChineseTranslation(zh) ? zh : "";
+  return {
+    movieCode: movieCode || "",
+    synopsis: synopsis,
+    detailTitle: movieCode || "",
+  };
 }
 
 async function applySynopsisTranslation(fields, parts) {
   if (!fields) return fields;
   fields.synopsisRaw = sanitizeSourceText(fields.synopsisRaw || "");
-  fields.detailTitle = await resolveDetailChineseTitle(fields);
-  fields.synopsisDisplay = "";
-  fields.description = "";
+  const bundle = await resolveDetailTranslation(fields);
+  fields.detailTitle = bundle.detailTitle || bundle.movieCode || "";
+  fields.synopsisDisplay = bundle.synopsis || "";
+  fields.description = bundle.synopsis || "";
   return fields;
 }
 
@@ -3136,7 +3169,7 @@ function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
     {
       id: movieCode || baseUrl,
       type: "url",
-      title: fields.detailTitle || movieCode || "",
+      title: movieCode || "",
       backdropPath: coverBundle.backdropPath,
       posterPath: coverBundle.posterPath,
       detailPoster: coverBundle.detailPoster,
@@ -3152,7 +3185,7 @@ function composeDetailItem(baseUrl, fields, parts, resolvedParts, coverBundle) {
       playerType: "system",
     },
     movieCode,
-    fields.detailTitle,
+    fields.synopsisDisplay || fields.description,
     fields.rating
   );
 
