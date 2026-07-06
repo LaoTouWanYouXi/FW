@@ -963,7 +963,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.0.0",
+  version: "2.0.1",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -1476,7 +1476,7 @@ function extractMatchCode(text) {
     /\b1PONDO[- ]?(\d{6,8})\b/,
     /\bHEYZO[- ]?(\d{3,6})\b/,
     /\bT28[- ]?(\d{6,8})\b/,
-    /\b([A-Z]{2,15})[- ]?(\d{2,10})\b/,
+    /\b([A-Z]{2,15})[- ]?(\d{1,10})\b/,
     /\b(\d{6}[-_]\d{2,3})\b/,
   ];
   for (var i = 0; i < patterns.length; i++) {
@@ -1488,12 +1488,40 @@ function extractMatchCode(text) {
   return "";
 }
 
-function extractJavCode(text) {
+function normalizeMatchCode(text) {
   var code = extractMatchCode(text);
-  if (!code) return "";
+  if (!code) {
+    var raw = String(text || "").trim();
+    if (!raw) return "";
+    var direct = raw.toUpperCase().match(/^([A-Z0-9]+)-(\d+)$/);
+    if (direct) code = direct[1] + "-" + direct[2];
+    else return raw;
+  }
   var parts = code.match(/^([A-Z0-9]+)-(\d+)$/i);
-  if (parts) return parts[1] + "-" + String(parseInt(parts[2], 10));
-  return code;
+  if (!parts) return code;
+  var num = parts[2];
+  while (num.length < 3) num = "0" + num;
+  return parts[1] + "-" + num;
+}
+
+function resolveMatchCode() {
+  var best = "";
+  for (var i = 0; i < arguments.length; i++) {
+    var normalized = normalizeMatchCode(arguments[i]);
+    if (!normalized) continue;
+    if (!best) {
+      best = normalized;
+      continue;
+    }
+    var numBest = (best.match(/-(\d+)$/i) || [])[1] || "";
+    var numNew = (normalized.match(/-(\d+)$/i) || [])[1] || "";
+    if (numNew.length > numBest.length) best = normalized;
+  }
+  return best;
+}
+
+function extractJavCode(text) {
+  return normalizeMatchCode(text);
 }
 
 function normalizeSearchKeyword(keyword) {
@@ -1503,22 +1531,22 @@ function normalizeSearchKeyword(keyword) {
 }
 
 function buildGuangyaMatchFields(rawCode, rawTitle, description) {
-  rawCode = String(rawCode || "").trim();
+  var matchCode = resolveMatchCode(rawCode, rawTitle, description);
   rawTitle = String(rawTitle || "").replace(/\s+/g, " ").trim();
   description = String(description || "").replace(/\s+/g, " ").trim();
   var fields = {};
-  if (rawCode) {
-    fields.name = rawCode;
-    fields.seriesName = rawCode;
-    fields.episodeName = rawCode;
+  if (matchCode) {
+    fields.name = matchCode;
+    fields.seriesName = matchCode;
+    fields.episodeName = matchCode;
   }
   if (rawTitle) fields.originalTitle = rawTitle;
-  if (rawCode && description && description.toUpperCase().indexOf(rawCode.toUpperCase()) < 0) {
-    fields.description = rawCode + " " + description;
+  if (matchCode && description && description.toUpperCase().indexOf(matchCode.toUpperCase()) < 0) {
+    fields.description = matchCode + " " + description;
   } else if (description) {
     fields.description = description;
-  } else if (rawCode) {
-    fields.description = rawCode;
+  } else if (matchCode) {
+    fields.description = matchCode;
   }
   return fields;
 }
@@ -2288,7 +2316,7 @@ function parseListItems(html, params) {
     var titleText = textOf($, titleNode);
     var subTitle = textOf($, box.find(".video-title").first());
     var rawTitle = box.attr("title") || subTitle || titleText;
-    var matchCode = titleText || extractMatchCode(rawTitle);
+    var matchCode = resolveMatchCode(titleText, rawTitle);
     var fallbackCover = extractListCardCover($, box, base);
     if (!fallbackCover) fallbackCover = buildJavdbCoverFromVideoId(videoId);
     rawItems.push({
@@ -2850,10 +2878,7 @@ async function parseDetailPage(html, link, params) {
   var genreItems = detailMeta.genreItems;
   var peoples = detailMeta.peoples;
 
-  var displayCode = code || extractMatchCode(title);
-  if (!displayCode && description) {
-    displayCode = extractMatchCode(description);
-  }
+  var displayCode = resolveMatchCode(code, title, description);
   var displayTitle = formatDisplayTitle(displayCode, title);
   var matchFields = buildGuangyaMatchFields(displayCode, title || displayTitle, description);
   var fallbackCover = cover || resolveJavdbCoverUrl("", videoId);
