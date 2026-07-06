@@ -963,7 +963,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.0.2",
+  version: "2.0.1",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -1536,9 +1536,6 @@ function buildGuangyaMatchFields(rawCode, rawTitle, description) {
   description = String(description || "").replace(/\s+/g, " ").trim();
   var fields = {};
   if (matchCode) {
-    // Forward library aggregation matches on title/name first.
-    // Keep these as the bare 番号 so they align with server filenames/metadata.
-    fields.title = matchCode;
     fields.name = matchCode;
     fields.seriesName = matchCode;
     fields.episodeName = matchCode;
