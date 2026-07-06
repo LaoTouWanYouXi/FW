@@ -4,7 +4,7 @@
  */
 
 var JAVDB_SORT_FILTER = ["published", "score", "fav"];
-var GLOBAL_PARAM_KEYS = ["baseUrl", "locale", "coverMode"];
+var GLOBAL_PARAM_KEYS = ["baseUrl", "locale", "coverMode", "dmmPosterSize"];
 
 function syncGlobalParams(params) {
   params = params || {};
@@ -34,6 +34,7 @@ function getEffectiveParams(params) {
   if (!out.baseUrl) out.baseUrl = JAVDB_DEFAULT_BASE;
   if (!out.locale) out.locale = "zh";
   if (!out.coverMode) out.coverMode = "fast";
+  if (!out.dmmPosterSize) out.dmmPosterSize = "large";
   return out;
 }
 
@@ -962,7 +963,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "1.8.7",
+  version: "2.0.1",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -991,10 +992,20 @@ WidgetMetadata = {
       title: "\u5c01\u9762\u6a21\u5f0f",
       type: "enumeration",
       enumOptions: [
-        { title: "\u5feb\u901f\uff08\u63a8\u8350\uff09", value: "fast" },
-        { title: "\u8be6\u60c5\u9ad8\u6e05", value: "hd" },
+        { title: "\u5feb\u901f\uff08JavDB \u9875\u9762\u5c01\u9762\uff09", value: "fast" },
+        { title: "\u9ad8\u6e05\uff08DMM \u76f4\u94fe\u6821\u9a8c\uff0c\u5931\u8d25\u7528 JavDB\uff09", value: "hd" },
       ],
       value: "fast",
+    },
+    {
+      name: "dmmPosterSize",
+      title: "DMM \u5c01\u9762\u89c4\u683c",
+      type: "enumeration",
+      enumOptions: [
+        { title: "\u5927\u56fe (pl)", value: "large" },
+        { title: "\u5c0f\u5c01\u9762 (ps)", value: "small" },
+      ],
+      value: "large",
     },
   ],
   modules: [
@@ -1161,9 +1172,27 @@ function decodeLink(link) {
   return raw;
 }
 
+function normalizeVideoDetailPath(link) {
+  var raw = String(link || "").trim();
+  if (!raw) return "";
+  var decoded = decodeLink(raw);
+  if (!decoded) return "";
+  if (decoded.indexOf("http://") === 0 || decoded.indexOf("https://") === 0) {
+    decoded = extractPath(decoded, JAVDB_DEFAULT_BASE);
+  }
+  if (decoded.indexOf("/v/") === 0) return decoded.split("#")[0];
+  var embedded = decoded.match(/\/v\/[A-Za-z0-9]+/);
+  if (embedded) return embedded[0].split("#")[0];
+  if (/^[a-z0-9]{3,20}$/i.test(decoded)) return "/v/" + decoded;
+  return "";
+}
+
 function resolveDetailPath(link, params) {
   var raw = String(link || "").trim();
   if (!raw) return "";
+  var videoPath = normalizeVideoDetailPath(raw);
+  if (videoPath) return videoPath;
+
   var decoded = decodeLink(raw);
   if (!decoded) return "";
   if (decoded.indexOf("http://") === 0 || decoded.indexOf("https://") === 0) {
@@ -1202,16 +1231,12 @@ function appendPageUrlToDescription(description, pageUrl) {
   return base ? base + "\n\n" + footer : footer;
 }
 
-function buildOpenJavdbItem(pageUrl, title, cover) {
-  return {
-    id: pageUrl,
-    type: "url",
-    mediaType: "movie",
-    title: title || "打开 JavDB 官网",
-    description: pageUrl,
-    link: pageUrl,
-    backdropPath: cover || undefined,
-  };
+function sanitizeDetailOutput(item) {
+  if (!item || typeof item !== "object") return item;
+  if ("relatedItems" in item) delete item.relatedItems;
+  if ("recommendations" in item) delete item.recommendations;
+  if ("childItems" in item) delete item.childItems;
+  return item;
 }
 
 function normalizePath(href, base) {
@@ -1241,6 +1266,8 @@ function stripCountSuffix(title) {
 function resolveGenreReferencePath(raw) {
   var genreId = String(raw || "").trim();
   if (!genreId) return "";
+  genreId = parseCategoryParamRef(genreId).id;
+  if (genreId.indexOf(DETAIL_SEARCH_PREFIX) === 0) return "";
   if (genreId.indexOf("series:") === 0) {
     return normalizeCategoryPath("/series/" + genreId.slice(7));
   }
@@ -1288,11 +1315,23 @@ function syncCategoryParams(params) {
   params = syncGlobalParams(params || {});
   var item = String(params.item || "").trim();
   if (item && !params.genreId && !params.peopleId) {
-    if (item.indexOf("/actors/") === 0) {
-      params.peopleId = item.split("/").pop();
+    var itemRef = parseCategoryParamRef(item);
+    if (item.indexOf("/actors/") === 0 || itemRef.id.indexOf("/actors/") === 0) {
+      params.peopleId = itemRef.id.split("/").pop();
     } else {
-      params.genreId = item;
+      params.genreId = itemRef.id;
     }
+    if (itemRef.title) params.categoryTitle = itemRef.title;
+  }
+  if (params.genreId) {
+    var genreRef = parseCategoryParamRef(params.genreId);
+    params.genreId = genreRef.id;
+    if (genreRef.title) params.categoryTitle = genreRef.title;
+  }
+  if (params.peopleId) {
+    var peopleRef = parseCategoryParamRef(params.peopleId);
+    params.peopleId = peopleRef.id;
+    if (peopleRef.title) params.categoryTitle = peopleRef.title;
   }
   if (params.peopleId && String(params.peopleId).indexOf("/actors/") === 0) {
     params.peopleId = String(params.peopleId).split("/").pop();
@@ -1301,10 +1340,18 @@ function syncCategoryParams(params) {
     params.peopleId = String(params.genreId).split("/").pop();
     params.genreId = "";
   }
+  if (
+    params.peopleId &&
+    String(params.peopleId).indexOf(DETAIL_SEARCH_PREFIX) !== 0 &&
+    String(params.genreId || "").indexOf(DETAIL_SEARCH_PREFIX) === 0
+  ) {
+    params.genreId = "";
+  }
   return params;
 }
 
 var DETAIL_SEARCH_PREFIX = "search:";
+var CATEGORY_ID_TITLE_SEP = "~";
 
 function buildDetailSearchId(title) {
   var text = String(title || "").replace(/\s+/g, " ").trim();
@@ -1312,15 +1359,84 @@ function buildDetailSearchId(title) {
   return DETAIL_SEARCH_PREFIX + text;
 }
 
+function parseCategoryParamRef(raw) {
+  raw = String(raw || "");
+  var sep = raw.indexOf(CATEGORY_ID_TITLE_SEP);
+  if (sep < 0) return { id: raw, title: "" };
+  var title = raw.slice(sep + 1);
+  try {
+    title = decodeURIComponent(title);
+  } catch (err) {
+    title = raw.slice(sep + 1);
+  }
+  return { id: raw.slice(0, sep), title: title };
+}
+
+function isValidCategoryBrowsePath(path) {
+  path = normalizeCategoryPath(String(path || "").split("#")[0]);
+  if (!path) return false;
+  var match;
+  if ((match = path.match(/^\/actors\/([^/?#]+)/))) {
+    return !/^(censored|uncensored|western)$/i.test(match[1]);
+  }
+  if ((match = path.match(/^\/tags\/([^/?#]+)/))) return !!match[1];
+  if (path.indexOf("/tags?") === 0 || path === "/tags") return false;
+  if ((match = path.match(/^\/series\/([^/?#]+)/))) return !!match[1];
+  if (/^\/series\/?(\?|$)/.test(path)) return false;
+  if ((match = path.match(/^\/makers\/([^/?#]+)/))) return !!match[1];
+  return false;
+}
+
+function resolveCategorySearchFallback(params, categoryPath) {
+  params = params || {};
+  if (params.categoryTitle) {
+    var labeled = normalizeSearchKeyword(params.categoryTitle) || String(params.categoryTitle).trim();
+    if (labeled) return labeled;
+  }
+
+  var fields = [params.genreTitle, params.peopleTitle, params.filterTitle, params.item, params.title, params.name];
+  for (var i = 0; i < fields.length; i++) {
+    var text = getText(fields[i]);
+    if (!text) continue;
+    if (text.indexOf("/") === 0 || text.indexOf(DETAIL_SEARCH_PREFIX) === 0) continue;
+    if (text.indexOf(CATEGORY_ID_TITLE_SEP) >= 0) continue;
+    if (/^(actors|tags|makers|series):/i.test(text)) continue;
+    var normalized = normalizeSearchKeyword(text);
+    if (normalized) return normalized;
+    if (text.length >= 2) return text;
+  }
+
+  var lookup = lookupCategoryOptionTitle(categoryPath);
+  if (lookup) return lookup;
+
+  if (params.peopleId) {
+    lookup = lookupCategoryOptionTitle("/actors/" + String(params.peopleId).replace(/^\/actors\//, ""));
+    if (lookup) return lookup;
+  }
+  if (params.genreId) {
+    lookup = lookupCategoryOptionTitle(String(params.genreId));
+    if (lookup) return lookup;
+  }
+
+  var cleanPath = normalizeCategoryPath(categoryPath).split("?")[0];
+  var slug = cleanPath.split("/").pop() || "";
+  if (slug && !/^(censored|uncensored|western|tags|series|makers|actors)$/i.test(slug)) {
+    var makerGuess = legacyMakerSlugToSearchKeyword(slug);
+    if (makerGuess) return makerGuess;
+    if (/^[a-z0-9-]+$/i.test(slug)) return slug.replace(/-/g, " ");
+  }
+  return "";
+}
+
 function resolveDetailJumpKeyword(params) {
   params = params || {};
   var genreId = String(params.genreId || "").trim();
   var peopleId = String(params.peopleId || "").trim();
-  if (genreId.indexOf(DETAIL_SEARCH_PREFIX) === 0) {
-    return genreId.slice(DETAIL_SEARCH_PREFIX.length);
-  }
   if (peopleId.indexOf(DETAIL_SEARCH_PREFIX) === 0) {
     return peopleId.slice(DETAIL_SEARCH_PREFIX.length);
+  }
+  if (genreId.indexOf(DETAIL_SEARCH_PREFIX) === 0) {
+    return genreId.slice(DETAIL_SEARCH_PREFIX.length);
   }
   return "";
 }
@@ -1360,7 +1476,7 @@ function extractMatchCode(text) {
     /\b1PONDO[- ]?(\d{6,8})\b/,
     /\bHEYZO[- ]?(\d{3,6})\b/,
     /\bT28[- ]?(\d{6,8})\b/,
-    /\b([A-Z]{2,15})[- ]?(\d{2,10})\b/,
+    /\b([A-Z]{2,15})[- ]?(\d{1,10})\b/,
     /\b(\d{6}[-_]\d{2,3})\b/,
   ];
   for (var i = 0; i < patterns.length; i++) {
@@ -1372,12 +1488,40 @@ function extractMatchCode(text) {
   return "";
 }
 
-function extractJavCode(text) {
+function normalizeMatchCode(text) {
   var code = extractMatchCode(text);
-  if (!code) return "";
+  if (!code) {
+    var raw = String(text || "").trim();
+    if (!raw) return "";
+    var direct = raw.toUpperCase().match(/^([A-Z0-9]+)-(\d+)$/);
+    if (direct) code = direct[1] + "-" + direct[2];
+    else return raw;
+  }
   var parts = code.match(/^([A-Z0-9]+)-(\d+)$/i);
-  if (parts) return parts[1] + "-" + String(parseInt(parts[2], 10));
-  return code;
+  if (!parts) return code;
+  var num = parts[2];
+  while (num.length < 3) num = "0" + num;
+  return parts[1] + "-" + num;
+}
+
+function resolveMatchCode() {
+  var best = "";
+  for (var i = 0; i < arguments.length; i++) {
+    var normalized = normalizeMatchCode(arguments[i]);
+    if (!normalized) continue;
+    if (!best) {
+      best = normalized;
+      continue;
+    }
+    var numBest = (best.match(/-(\d+)$/i) || [])[1] || "";
+    var numNew = (normalized.match(/-(\d+)$/i) || [])[1] || "";
+    if (numNew.length > numBest.length) best = normalized;
+  }
+  return best;
+}
+
+function extractJavCode(text) {
+  return normalizeMatchCode(text);
 }
 
 function normalizeSearchKeyword(keyword) {
@@ -1387,22 +1531,22 @@ function normalizeSearchKeyword(keyword) {
 }
 
 function buildGuangyaMatchFields(rawCode, rawTitle, description) {
-  rawCode = String(rawCode || "").trim();
+  var matchCode = resolveMatchCode(rawCode, rawTitle, description);
   rawTitle = String(rawTitle || "").replace(/\s+/g, " ").trim();
   description = String(description || "").replace(/\s+/g, " ").trim();
   var fields = {};
-  if (rawCode) {
-    fields.name = rawCode;
-    fields.seriesName = rawCode;
-    fields.episodeName = rawCode;
+  if (matchCode) {
+    fields.name = matchCode;
+    fields.seriesName = matchCode;
+    fields.episodeName = matchCode;
   }
   if (rawTitle) fields.originalTitle = rawTitle;
-  if (rawCode && description && description.toUpperCase().indexOf(rawCode.toUpperCase()) < 0) {
-    fields.description = rawCode + " " + description;
+  if (matchCode && description && description.toUpperCase().indexOf(matchCode.toUpperCase()) < 0) {
+    fields.description = matchCode + " " + description;
   } else if (description) {
     fields.description = description;
-  } else if (rawCode) {
-    fields.description = rawCode;
+  } else if (matchCode) {
+    fields.description = matchCode;
   }
   return fields;
 }
@@ -1526,7 +1670,20 @@ function buildCoverUrlsFromVideoId(videoIdOrTitle) {
   return {
     posterUrl: candidates.posterCandidates[0] || "",
     backdropUrl: candidates.backdropCandidates[0] || "",
+    posterCandidates: candidates.posterCandidates || [],
+    backdropCandidates: candidates.backdropCandidates || [],
   };
+}
+
+function pickSyncHdCoverUrls(code, posterSize) {
+  posterSize = String(posterSize || "large").toLowerCase();
+  var candidates = buildCoverCandidatesFromVideoId(code);
+  if (posterSize === "small") {
+    return compactUniqueUrls(candidates.posterCandidates || []).slice(0, 2);
+  }
+  return compactUniqueUrls(
+    (candidates.backdropCandidates || []).concat(candidates.posterCandidates || [])
+  ).slice(0, 2);
 }
 
 function cleanDvdId(raw) {
@@ -1627,18 +1784,135 @@ function isLowResGalleryUrl(url) {
 }
 
 var DETAIL_GALLERY_LIMIT = 12;
-var DETAIL_RELATED_LIMIT = 10;
-var FORWARD_POSTER_CROP_SUFFIX = "@50%_0_50%_100%";
+var COVER_VERIFY_MIN_BYTES = 15360;
+var COVER_VERIFY_TIMEOUT_MS = 3000;
+
+function normalizePosterUrl(url) {
+  var cover = String(url || "").trim();
+  if (!cover) return "";
+  var at = cover.indexOf("@");
+  if (at >= 0) cover = cover.slice(0, at);
+  return cover;
+}
+
+function buildDetailPosterUrlFromJavdb(coverUrl) {
+  return normalizePosterUrl(coverUrl);
+}
+
+function isNowPrintingPosterTarget(url) {
+  return String(url || "").toLowerCase().indexOf("now_printing") >= 0;
+}
+
+function posterResponseSize(data) {
+  if (!data) return 0;
+  if (typeof data === "string") return data.length;
+  if (typeof data.length === "number") return data.length;
+  if (typeof data.byteLength === "number") return data.byteLength;
+  return 0;
+}
+
+function posterRequestHeaders(params) {
+  return {
+    "User-Agent": JAVDB_UA,
+    Referer: javdbBase(params) + "/",
+    Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+  };
+}
+
+function extractPosterFinalUrl(resp, url) {
+  var respObj = resp && resp.request && resp.request.res;
+  if (respObj && respObj.responseUrl) return String(respObj.responseUrl);
+  if (resp && resp.responseURL) return String(resp.responseURL);
+  if (resp && resp.request && resp.request.uri && resp.request.uri.href) {
+    return String(resp.request.uri.href);
+  }
+  if (resp && resp.config && resp.config.url) return String(resp.config.url);
+  return String(url || "");
+}
+
+async function verifyCoverUrl(url, params) {
+  if (!url || isNowPrintingPosterTarget(url)) return "";
+  try {
+    var resp = await Widget.http.get(url, {
+      timeout: COVER_VERIFY_TIMEOUT_MS,
+      headers: posterRequestHeaders(params),
+      allow_redirects: true,
+    });
+    var finalUrl = extractPosterFinalUrl(resp, url);
+    if (isNowPrintingPosterTarget(finalUrl)) return "";
+    var size = posterResponseSize(resp && resp.data);
+    if (size < COVER_VERIFY_MIN_BYTES) return "";
+    return url;
+  } catch (err) {
+    return "";
+  }
+}
+
+async function resolveFirstVerifiedCoverUrl(urls, params) {
+  urls = compactUniqueUrls(urls || []).slice(0, 2);
+  if (!urls.length) return "";
+  if (urls.length === 1) return verifyCoverUrl(urls[0], params);
+
+  return new Promise(function (resolve) {
+    var settled = false;
+    var remaining = urls.length;
+    function finish(result) {
+      if (settled) return;
+      if (result) {
+        settled = true;
+        resolve(result);
+        return;
+      }
+      remaining--;
+      if (remaining <= 0) resolve("");
+    }
+    for (var i = 0; i < urls.length; i++) {
+      verifyCoverUrl(urls[i], params).then(finish);
+    }
+  });
+}
+
+function resolveJavdbDetailPosterFallback(javdbCover, pageCover, galleryUrls) {
+  var fromPage = buildDetailPosterUrlFromJavdb(pageCover);
+  var fromFallback = buildDetailPosterUrlFromJavdb(javdbCover);
+  if (fromPage) return fromPage;
+  if (fromFallback) return fromFallback;
+  return pickBestGalleryPosterUrl(galleryUrls || []);
+}
+
+function pickBestGalleryPosterUrl(galleryUrls) {
+  var urls = galleryUrls || [];
+  for (var i = 0; i < urls.length; i++) {
+    var upgraded = upgradeJavdbSampleUrl(String(urls[i] || "").trim());
+    if (upgraded && !isLowResGalleryUrl(upgraded)) return upgraded;
+  }
+  return "";
+}
 
 function buildDetailPosterUrl(coverUrl, code) {
-  var candidates = code ? buildCoverCandidatesFromVideoId(code) : { posterCandidates: [] };
-  if (candidates.posterCandidates && candidates.posterCandidates[0]) {
-    return candidates.posterCandidates[0];
+  var fromJavdb = buildDetailPosterUrlFromJavdb(coverUrl);
+  if (fromJavdb) return fromJavdb;
+  return "";
+}
+
+function buildFastDetailPoster(pageCover, fallbackCover) {
+  var source = String(pageCover || "").trim() || String(fallbackCover || "").trim();
+  return buildDetailPosterUrlFromJavdb(source);
+}
+
+async function resolveDetailPosterUrl(javdbCover, code, params, options) {
+  options = options || {};
+  params = getEffectiveParams(params || {});
+  var posterSize = String(params.dmmPosterSize || "large");
+  var syncUrls = code ? pickSyncHdCoverUrls(code, posterSize) : [];
+  var primary = syncUrls[0] || "";
+
+  if (primary) {
+    var verified = await resolveFirstVerifiedCoverUrl(syncUrls, params);
+    if (verified) return verified;
   }
-  var cover = String(coverUrl || "").trim();
-  if (!cover) return "";
-  if (cover.indexOf("@") >= 0) return cover;
-  return cover + FORWARD_POSTER_CROP_SUFFIX;
+
+  return resolveJavdbDetailPosterFallback(javdbCover, options.pageCover, options.galleryUrls);
 }
 
 function collectPageGalleryUrls($, base) {
@@ -1720,300 +1994,6 @@ function parseTrailersFromHtml($, base, displayCode, coverUrl) {
   return [];
 }
 
-var RELATED_SECTION_RULES = [
-  {
-    bucket: "sameActor",
-    keywords: [
-      "他们还出演",
-      "他们还参演",
-      "还出演",
-      "同演员",
-      "同演員",
-      "same actor",
-      "also appeared",
-      "also starred",
-      "同参演",
-      "同參演",
-    ],
-  },
-  {
-    bucket: "recommend",
-    keywords: [
-      "你可能也喜欢",
-      "你可能也喜歡",
-      "猜你喜欢",
-      "猜你喜歡",
-      "you may also",
-      "recommended for you",
-      "may also like",
-      "also like",
-    ],
-  },
-];
-
-var RELATED_SKIP_ANCESTORS = ".video-detail, .movie-panel-info, .tile-images, #introduction, #magnets, #reviews, #lists";
-
-function normalizeDetailComparePath(linkOrPath, params) {
-  var raw = String(linkOrPath || "").trim();
-  if (!raw) return "";
-  if (raw.indexOf("javdb:") === 0) raw = decodeLink(raw);
-  if (raw.indexOf("http://") === 0 || raw.indexOf("https://") === 0) {
-    return extractPath(raw, javdbBase(params)).split("#")[0];
-  }
-  if (raw.charAt(0) !== "/") raw = "/" + raw;
-  return raw.split("#")[0];
-}
-
-function filterSelfFromRelatedItems(relatedItems, currentPath, currentVideoId, currentCode, params) {
-  var selfPath = normalizeDetailComparePath(currentPath, params);
-  var selfVideoId = String(currentVideoId || "").toLowerCase();
-  var selfCode = String(currentCode || "").toLowerCase();
-  return (relatedItems || []).filter(function (rel) {
-    if (!rel) return false;
-    var relPath = normalizeDetailComparePath(rel.link || rel.id, params);
-    if (selfPath && relPath && relPath === selfPath) return false;
-    if (selfVideoId && rel.videoId && String(rel.videoId).toLowerCase() === selfVideoId) return false;
-    if (selfVideoId && rel.id && String(rel.id).toLowerCase() === selfVideoId && relPath.indexOf("/v/") === 0) {
-      return false;
-    }
-    if (selfCode && rel.id && String(rel.id).toLowerCase() === selfCode) return false;
-    if (selfCode && rel.code && String(rel.code).toLowerCase() === selfCode) return false;
-    return true;
-  });
-}
-
-function matchRelatedSectionBucket(title) {
-  var text = String(title || "").replace(/\s+/g, " ").trim().toLowerCase();
-  if (!text) return "";
-  for (var i = 0; i < RELATED_SECTION_RULES.length; i++) {
-    var rule = RELATED_SECTION_RULES[i];
-    for (var j = 0; j < rule.keywords.length; j++) {
-      if (text.indexOf(rule.keywords[j].toLowerCase()) >= 0) return rule.bucket;
-    }
-  }
-  return "";
-}
-
-function parseRelatedMovieBox($, box, base) {
-  if (box.closest(RELATED_SKIP_ANCESTORS).length) return null;
-  var href = attrOf($, box, "href");
-  if (!href) return null;
-  var relPath = href.indexOf("http") === 0 ? href.replace(base, "") : href;
-  relPath = String(relPath || "").split("#")[0];
-  if (!relPath || relPath.indexOf("/v/") !== 0) return null;
-
-  var relTitle = attrOf($, box, "title") || textOf($, box.find(".video-title").first()) || textOf($, box);
-  var relCode = textOf($, box.find(".video-title strong").first()) || extractMatchCode(relTitle);
-  return {
-    id: relCode || relPath.split("/").pop(),
-    type: "url",
-    mediaType: "movie",
-    title: formatDisplayTitle(relCode, relTitle),
-    fallbackCover: absUrl(attrOf($, box.find("img").first(), "src"), base),
-    matchCode: relCode,
-    originalTitle: relTitle,
-    code: relCode,
-    link: encodeLink(relPath),
-    videoId: relPath.split("/").pop(),
-  };
-}
-
-function extractRelatedSectionHeading($, section) {
-  var selectors = [".panel-heading", ".message-header p", ".message-header", "h2.title", "h3.title", "h2", "h3", "h4", ".title"];
-  for (var i = 0; i < selectors.length; i++) {
-    var node = section.find(selectors[i]).first();
-    var text = textOf($, node);
-    if (text) return text;
-  }
-  return "";
-}
-
-function findRelatedListRoot($, section) {
-  var candidates = [
-    section.find(".panel-body").first(),
-    section.find(".message-body").first(),
-    section.find(".movie-list").first(),
-    section.find("#videos").first(),
-    section,
-  ];
-  for (var i = 0; i < candidates.length; i++) {
-    var node = candidates[i];
-    if (!node.length) continue;
-    if (node.find("a.box[href*='/v/']").length) return node;
-  }
-  return null;
-}
-
-function isRelatedSectionContainer($, section) {
-  if (!section || !section.length) return false;
-  if (section.hasClass("movie-panel-info")) return false;
-  if (section.closest(".video-detail").length) return false;
-  if (section.find(".video-detail").length) return false;
-  return true;
-}
-
-function collectRelatedSectionItems($, section, base) {
-  if (!isRelatedSectionContainer($, section)) return [];
-  var root = findRelatedListRoot($, section);
-  if (!root || !root.length) return [];
-  return parseRelatedBoxesInContainer($, root, base);
-}
-
-function parseRelatedBoxesInContainer($, container, base) {
-  var items = [];
-  var seen = {};
-  container.find("a.box[href*='/v/'], .item a.box[href*='/v/'], .video-item a[href*='/v/']").each(function () {
-    var parsed = parseRelatedMovieBox($, $(this), base);
-    if (!parsed || seen[parsed.link]) return;
-    seen[parsed.link] = true;
-    items.push(parsed);
-  });
-  return items;
-}
-
-function mergeRelatedRawLists() {
-  var merged = [];
-  var seen = {};
-  for (var i = 0; i < arguments.length; i++) {
-    var list = arguments[i] || [];
-    for (var j = 0; j < list.length; j++) {
-      var item = list[j];
-      var key = item && (item.link || item.id);
-      if (!key || seen[key]) continue;
-      seen[key] = true;
-      merged.push(item);
-    }
-  }
-  return merged;
-}
-
-function parseRelatedBucketsFromHtml(html, params, options) {
-  options = options || {};
-  var base = javdbBase(params);
-  var $ = Widget.html.load(html);
-  var buckets = { sameActor: [], recommend: [], other: [] };
-  var currentPath = options.currentPath || "";
-  var currentVideoId = options.currentVideoId || "";
-  var currentCode = options.currentCode || "";
-
-  function pushBucket(bucket, items) {
-    var filtered = filterSelfFromRelatedItems(items, currentPath, currentVideoId, currentCode, params);
-    if (!filtered.length) return;
-    buckets[bucket] = mergeRelatedRawLists(buckets[bucket], filtered);
-  }
-
-  var sectionSelectors = [
-    ".panel-block",
-    "article.message",
-    ".message.video-panel",
-    ".video-panel",
-    ".panel:not(.movie-panel-info)",
-    "#recommend-videos",
-    ".video-recommend",
-    "section.recommend",
-  ].join(", ");
-
-  $(sectionSelectors).each(function () {
-    var section = $(this);
-    var heading = extractRelatedSectionHeading($, section);
-    var bucket = matchRelatedSectionBucket(heading);
-    if (!bucket) return;
-    pushBucket(bucket, collectRelatedSectionItems($, section, base));
-  });
-
-  if (!buckets.recommend.length) {
-    $(".panel-heading, .message-header, .message-header p, .title, h2, h3, h4").each(function () {
-      var heading = textOf($, $(this));
-      if (matchRelatedSectionBucket(heading) !== "recommend") return;
-      var section = $(this).closest(".panel-block, article.message, .message, .panel, section, .video-recommend, #recommend-videos");
-      if (!section.length) section = $(this).parent();
-      pushBucket("recommend", collectRelatedSectionItems($, section, base));
-    });
-  }
-
-  if (!buckets.sameActor.length && !buckets.recommend.length) {
-    buckets.other = parseRelatedFromHtml(html, params, options);
-  }
-
-  return buckets;
-}
-
-function parseRecommendItemsFromHtml(html, params, options) {
-  var buckets = parseRelatedBucketsFromHtml(html, params, options);
-  return (buckets.recommend || []).slice(0, DETAIL_RELATED_LIMIT);
-}
-
-function pickLeadActressSearchKeyword(peoples, displayCode) {
-  var list = peoples || [];
-  for (var i = 0; i < list.length; i++) {
-    var person = list[i];
-    if (!person || !person.title) continue;
-    var role = String(person.role || "");
-    if (role.indexOf("演") >= 0 || role === "演员" || role === "女优" || !role) {
-      return String(person.title).replace(/\s+/g, " ").trim();
-    }
-  }
-  if (list[0] && list[0].title) return String(list[0].title).replace(/\s+/g, " ").trim();
-  return String(displayCode || "").replace(/\s+/g, " ").trim();
-}
-
-async function searchDetailRelatedItems(params, keyword, options, displayCode) {
-  keyword = normalizeSearchKeyword(keyword);
-  if (!keyword) return [];
-  try {
-    var items = await fetchSearchMovieList(params, keyword);
-    items = filterSelfFromRelatedItems(
-      items,
-      options.currentPath || "",
-      options.currentVideoId || "",
-      displayCode,
-      params
-    );
-    return items.slice(0, DETAIL_RELATED_LIMIT);
-  } catch (err) {
-    console.error("[javdb] 相似影片搜索回退失败:", err.message || err);
-    return [];
-  }
-}
-
-async function resolveDetailRelatedItems(html, params, options, displayCode, peoples) {
-  options = options || {};
-  var parsed = parseRecommendItemsFromHtml(html, params, options);
-  var relatedParams = Object.assign({}, params, { coverMode: "fast" });
-  if (parsed.length) {
-    return enrichMovieItems(parsed, relatedParams);
-  }
-
-  var actressKeyword = pickLeadActressSearchKeyword(peoples, "");
-  if (actressKeyword) {
-    var byActress = await searchDetailRelatedItems(params, actressKeyword, options, displayCode);
-    if (byActress.length) return byActress;
-  }
-
-  if (displayCode) {
-    var byCode = await searchDetailRelatedItems(params, displayCode, options, displayCode);
-    if (byCode.length) return byCode;
-  }
-
-  return [];
-}
-
-function parseRelatedSectionsFromHtml(html, params, options) {
-  var buckets = parseRelatedBucketsFromHtml(html, params, options);
-  if (!buckets.sameActor.length && !buckets.recommend.length) {
-    return (buckets.other || []).slice(0, 24);
-  }
-  var generic = buckets.other || [];
-  buckets.other = generic.filter(function (item) {
-    var key = item.link || item.id;
-    return !buckets.sameActor.some(function (x) {
-      return (x.link || x.id) === key;
-    }) && !buckets.recommend.some(function (y) {
-      return (y.link || y.id) === key;
-    });
-  });
-  return mergeRelatedRawLists(buckets.sameActor, buckets.recommend, buckets.other).slice(0, 24);
-}
 
 function normalizeBackdropPaths(urls, options) {
   options = options || {};
@@ -2057,38 +2037,56 @@ function isLandscapeListCoverUrl(url) {
 }
 
 function resolvePortraitFallbackForList(portraitUrl) {
-  var url = upgradeJavdbCoverUrl(portraitUrl);
-  if (!url || !isPortraitListCoverUrl(url)) return url;
-  if (url.indexOf("@") >= 0) return url;
-  return url + FORWARD_POSTER_CROP_SUFFIX;
+  return upgradeJavdbCoverUrl(portraitUrl);
+}
+
+function extractBackgroundImageUrl(style) {
+  var match = String(style || "").match(/url\(['"]?([^'")]+)/i);
+  return match ? match[1] : "";
+}
+
+function isUselessListCoverUrl(url) {
+  var u = String(url || "").trim().toLowerCase();
+  if (!u || u.indexOf("data:") === 0) return true;
+  if (/placeholder|default_cover|loading|blank|spacer|1x1/.test(u)) return true;
+  return false;
 }
 
 function extractListCardCover($, box, base) {
   var candidates = [];
+  var scopes = [box];
+  var item = box.closest(".item");
+  if (item.length) scopes.push(item.first());
 
   function collect(raw) {
     var url = upgradeJavdbImageUrl(absUrl(String(raw || "").trim(), base));
-    if (!url) return;
+    if (!url || isUselessListCoverUrl(url)) return;
     for (var i = 0; i < candidates.length; i++) {
       if (candidates[i] === url) return;
     }
     candidates.push(url);
   }
 
-  collect(attrOf($, box, "data-preview"));
-  box.find("img").each(function () {
-    var img = $(this);
-    collect(attrOf($, img, "data-src"));
-    collect(attrOf($, img, "data-original"));
-    collect(attrOf($, img, "src"));
-    var srcset = attrOf($, img, "srcset");
-    if (srcset) {
-      var parts = srcset.split(",");
-      for (var s = parts.length - 1; s >= 0; s--) {
-        collect(String(parts[s] || "").trim().split(/\s+/)[0]);
+  for (var si = 0; si < scopes.length; si++) {
+    var scope = scopes[si];
+    collect(attrOf($, scope, "data-preview"));
+    collect(attrOf($, scope, "data-src"));
+    collect(extractBackgroundImageUrl(attrOf($, scope, "style")));
+    collect(extractBackgroundImageUrl(attrOf($, scope.find(".item-image, .video-cover, .cover").first(), "style")));
+    scope.find(".item-image img, .video-cover img, img").each(function () {
+      var img = $(this);
+      collect(attrOf($, img, "data-src"));
+      collect(attrOf($, img, "data-original"));
+      collect(attrOf($, img, "src"));
+      var srcset = attrOf($, img, "srcset");
+      if (srcset) {
+        var parts = srcset.split(",");
+        for (var s = parts.length - 1; s >= 0; s--) {
+          collect(String(parts[s] || "").trim().split(/\s+/)[0]);
+        }
       }
-    }
-  });
+    });
+  }
 
   for (var i = 0; i < candidates.length; i++) {
     if (isLandscapeListCoverUrl(candidates[i])) return candidates[i];
@@ -2100,23 +2098,15 @@ function resolveListBackdropPath(code, fallbackCover, videoId, params) {
   params = params || {};
   var pageUrl = upgradeJavdbImageUrl(fallbackCover);
   var idCover = buildJavdbCoverFromVideoId(videoId);
-  var coverMode = String(params.coverMode || "fast");
 
   if (pageUrl && isLandscapeListCoverUrl(pageUrl)) return pageUrl;
 
-  if (coverMode === "hd") {
-    var hdCandidates = code ? buildCoverCandidatesFromVideoId(code) : { backdropCandidates: [] };
-    var hdBackdrop = hdCandidates.backdropCandidates && hdCandidates.backdropCandidates[0];
-    if (hdBackdrop) return hdBackdrop;
-  }
-
-  return idCover || pageUrl || "";
+  return pageUrl || idCover || "";
 }
 
 function resolveDetailBackdropPath(code, fallbackCover, videoId) {
   var javdbCover = resolveJavdbCoverUrl(fallbackCover, videoId);
-  var candidates = buildCoverCandidatesFromVideoId(code);
-  return candidates.backdropCandidates[0] || javdbCover || fallbackCover || "";
+  return javdbCover || fallbackCover || "";
 }
 
 function buildJavdbCoverFromVideoId(videoId) {
@@ -2127,9 +2117,9 @@ function buildJavdbCoverFromVideoId(videoId) {
 }
 
 function resolveJavdbCoverUrl(fallbackCover, videoId) {
-  var fromId = buildJavdbCoverFromVideoId(videoId);
   var upgraded = upgradeJavdbImageUrl(fallbackCover);
-  return fromId || upgraded || fallbackCover || "";
+  var fromId = buildJavdbCoverFromVideoId(videoId);
+  return upgraded || fromId || fallbackCover || "";
 }
 
 function extractBestImageUrl($, node, base) {
@@ -2156,36 +2146,31 @@ function extractBestImageUrl($, node, base) {
 function buildCoverBundle(code, fallbackCover, options, params) {
   options = options || {};
   var videoId = options.videoId;
+  var forList = !!options.forList;
   var javdbCover = resolveJavdbCoverUrl(fallbackCover, videoId);
-  var candidates = buildCoverCandidatesFromVideoId(code);
   var listBackdrop = resolveListBackdropPath(code, fallbackCover, videoId, params);
   var detailBackdrop = resolveDetailBackdropPath(code, fallbackCover, videoId);
-  var detailPosterPath = candidates.posterCandidates[0] || javdbCover || buildDetailPosterUrl(javdbCover, code);
+  var javdbPoster = buildDetailPosterUrl(javdbCover, code) || javdbCover || "";
+  if (forList) {
+    return {
+      listBackdrop: listBackdrop,
+      backdropPath: listBackdrop,
+      posterPath: "",
+      detailPoster: "",
+    };
+  }
   return {
     listBackdrop: listBackdrop,
     backdropPath: detailBackdrop,
-    posterPath: detailPosterPath,
+    posterPath: javdbPoster,
     detailPoster: buildDetailPosterUrl(javdbCover, code),
   };
 }
 
 function enrichDetailLinks(item, pageUrl, displayCode, cover, currentPath, params) {
-  var openItem = buildOpenJavdbItem(pageUrl, "打开 JavDB 官网 · " + (displayCode || "详情"), cover);
   item.webUrl = pageUrl;
-  item.childItems = [openItem];
   item.description = appendPageUrlToDescription(item.description, pageUrl);
-  if (Array.isArray(item.relatedItems) && item.relatedItems.length) {
-    item.relatedItems = filterSelfFromRelatedItems(
-      item.relatedItems,
-      currentPath || pageUrl,
-      currentPath ? currentPath.split("/").pop() : "",
-      displayCode,
-      params || {}
-    );
-  } else {
-    item.relatedItems = [];
-  }
-  return item;
+  return sanitizeDetailOutput(item);
 }
 
 function parseRatingText(text) {
@@ -2319,30 +2304,34 @@ function parseListItems(html, params) {
   var rawItems = [];
   var seen = {};
 
-  $(".movie-list .item a.box, #videos .grid-item a.box, #videos a.box, .grid-item.column a.box, .grid.columns .grid-item a.box").each(function () {
+  $(".movie-list .item a.box, #videos .grid-item a.box, #videos a.box, .grid-item.column a.box, .grid.columns .grid-item a.box, .items .item a.box").each(function () {
     var box = $(this);
     var href = attrOf($, box, "href");
     var path = href.indexOf("http") === 0 ? href.replace(base, "") : href;
+    path = String(path || "").split("#")[0];
     if (!path || path.indexOf("/v/") !== 0 || seen[path]) return;
     seen[path] = true;
+    var videoId = path.split("/").pop() || path;
     var titleNode = box.find(".video-title strong").first();
     var titleText = textOf($, titleNode);
     var subTitle = textOf($, box.find(".video-title").first());
     var rawTitle = box.attr("title") || subTitle || titleText;
-    var matchCode = titleText || extractMatchCode(rawTitle);
+    var matchCode = resolveMatchCode(titleText, rawTitle);
+    var fallbackCover = extractListCardCover($, box, base);
+    if (!fallbackCover) fallbackCover = buildJavdbCoverFromVideoId(videoId);
     rawItems.push({
-      id: matchCode || path.split("/").pop() || path,
+      id: videoId,
       type: "url",
       mediaType: "movie",
-      title: formatDisplayTitle(matchCode, rawTitle) || String(rawTitle || path.split("/").pop()).replace(/\s+/g, " ").trim(),
-      fallbackCover: extractListCardCover($, box, base),
+      title: formatDisplayTitle(matchCode, rawTitle) || String(rawTitle || videoId).replace(/\s+/g, " ").trim(),
+      fallbackCover: fallbackCover,
       rating: parseRatingText(textOf($, box.find(".score").first())),
       releaseDate: textOf($, box.find(".meta").first()) || "",
       link: encodeLink(path),
       matchCode: matchCode,
       originalTitle: rawTitle,
       code: matchCode,
-      videoId: path.split("/").pop() || path,
+      videoId: videoId,
       description: matchCode ? "番号: " + matchCode : "",
     });
   });
@@ -2355,8 +2344,9 @@ function enrichMovieItems(rawItems, params) {
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId || raw.id }, params);
-    var backdropPath = covers.listBackdrop || "";
+    var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId, forList: true }, params);
+    var backdropPath =
+      covers.listBackdrop || buildJavdbCoverFromVideoId(raw.videoId) || raw.fallbackCover || "";
     items.push(Object.assign(
       {
         id: raw.id,
@@ -2364,7 +2354,6 @@ function enrichMovieItems(rawItems, params) {
         mediaType: raw.mediaType,
         title: raw.title,
         backdropPath: backdropPath,
-        detailPoster: covers.detailPoster,
         rating: raw.rating,
         releaseDate: raw.releaseDate,
         link: raw.link,
@@ -2523,7 +2512,6 @@ async function loadPage(params) {
     }
 
     var movies = await fetchMovieList(path, params);
-    if (!movies.length) throw new Error("未解析到影片列表");
     return movies;
   } catch (error) {
     console.error("[javdb] 分类加载失败:", error.message || error);
@@ -2551,55 +2539,6 @@ function parseTagBrowseItems(html, params) {
   return items;
 }
 
-function parseRelatedFromHtml(html, params, options) {
-  options = options || {};
-  var base = javdbBase(params);
-  var $ = Widget.html.load(html);
-  var rawRelated = [];
-  var seen = {};
-  var selectors = [
-    ".movie-list .item a.box",
-    "#videos .grid-item a.box",
-    ".grid-item.column a.box",
-    ".columns .item a.box",
-    ".recommendations .item a.box",
-    ".video-recommend .item a.box",
-    "#recommend .item a.box",
-    "section.recommend .item a.box",
-  ].join(", ");
-
-  $(selectors).each(function () {
-    var box = $(this);
-    if (box.closest(RELATED_SKIP_ANCESTORS).length) return;
-    var href = attrOf($, box, "href");
-    var relPath = href.indexOf("http") === 0 ? href.replace(base, "") : href;
-    relPath = String(relPath || "").split("#")[0];
-    if (!relPath || relPath.indexOf("/v/") !== 0 || seen[relPath]) return;
-    seen[relPath] = true;
-    var relTitle = attrOf($, box, "title") || textOf($, box.find(".video-title").first());
-    var relCode = textOf($, box.find(".video-title strong").first()) || extractMatchCode(relTitle);
-    rawRelated.push({
-      id: relCode || relPath.split("/").pop(),
-      type: "url",
-      mediaType: "movie",
-      title: formatDisplayTitle(relCode, relTitle),
-      fallbackCover: absUrl(attrOf($, box.find("img").first(), "src"), base),
-      matchCode: relCode,
-      originalTitle: relTitle,
-      code: relCode,
-      link: encodeLink(relPath),
-      videoId: relPath.split("/").pop(),
-    });
-  });
-
-  return filterSelfFromRelatedItems(
-    rawRelated,
-    options.currentPath || "",
-    options.currentVideoId || "",
-    options.currentCode || "",
-    params
-  );
-}
 
 async function parseCategoryDetailPage(html, path, params) {
   var base = javdbBase(params);
@@ -2608,7 +2547,7 @@ async function parseCategoryDetailPage(html, path, params) {
   title = stripCountSuffix(title);
   var avatar = absUrl(attrOf($, $("img.avatar").first(), "src"), base);
   var movies = await fetchMovieList(path, params);
-  return {
+  return sanitizeDetailOutput({
     id: path.split("/").pop() || encodeLink(path),
     type: "url",
     title: title,
@@ -2616,8 +2555,7 @@ async function parseCategoryDetailPage(html, path, params) {
     detailPoster: avatar || "",
     description: "共收录 " + movies.length + " 部影片（当前页）",
     link: encodeLink(path),
-    relatedItems: movies,
-  };
+  });
 }
 
 function normalizePanelLabel(text) {
@@ -2660,17 +2598,40 @@ function resolveCategoryListPath(params) {
   return resolveFilteredPath(syncCategoryParams(params), "");
 }
 
-function buildDetailGenreItem(title) {
-  var name = String(title || "").replace(/\s+/g, " ").trim();
-  if (!name) return null;
-  return { id: buildDetailSearchId(name), title: name };
+function categoryItemIdFromPath(path, fallbackTitle) {
+  path = normalizeCategoryPath(path);
+  if (!isValidCategoryBrowsePath(path)) return buildDetailSearchId(fallbackTitle);
+  var categoryId = "";
+  if (path.indexOf("/actors/") === 0) {
+    categoryId = path.split("/").filter(Boolean).pop() || buildDetailSearchId(fallbackTitle);
+  } else if (path.indexOf("/series/") === 0) {
+    var seriesSlug = path.split("/").filter(Boolean).pop();
+    categoryId = seriesSlug ? "series:" + seriesSlug : buildDetailSearchId(fallbackTitle);
+  } else if (path.indexOf("/makers/") === 0) {
+    var makerSlug = path.split("/").filter(Boolean).pop();
+    categoryId = makerSlug ? "maker:" + makerSlug : buildDetailSearchId(fallbackTitle);
+  } else if (path.indexOf("/tags") === 0) {
+    categoryId = path.replace(/^\//, "");
+  } else {
+    categoryId = path.replace(/^\//, "") || buildDetailSearchId(fallbackTitle);
+  }
+  if (!categoryId || categoryId.indexOf(DETAIL_SEARCH_PREFIX) === 0) return categoryId;
+  var title = String(fallbackTitle || "").replace(/\s+/g, " ").trim();
+  if (!title) return categoryId;
+  return categoryId + CATEGORY_ID_TITLE_SEP + encodeURIComponent(title);
 }
 
-function buildDetailPeopleItem(title, role, avatar) {
+function buildDetailGenreItem(title, path) {
+  var name = String(title || "").replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  return { id: categoryItemIdFromPath(path, name), title: name };
+}
+
+function buildDetailPeopleItem(title, role, avatar, path) {
   var name = String(title || "").replace(/\s+/g, " ").trim();
   if (!name) return null;
   return {
-    id: buildDetailSearchId(name),
+    id: categoryItemIdFromPath(path, name),
     title: name,
     avatar: avatar || "",
     role: role || "演员",
@@ -2705,15 +2666,15 @@ function parseGenreItemFromPanelLink(kind, href, title, base) {
 
   if (kind === "tag") {
     if (path.indexOf("/tags") !== 0 && path.indexOf("tags") < 0) return null;
-    return buildDetailGenreItem(name);
+    return buildDetailGenreItem(name, path);
   }
   if (kind === "series") {
     if (path.indexOf("/series/") !== 0) return null;
-    return buildDetailGenreItem(name);
+    return buildDetailGenreItem(name, path);
   }
   if (kind === "maker") {
     if (path.indexOf("/makers/") !== 0) return null;
-    return buildDetailGenreItem(name);
+    return buildDetailGenreItem(name, path);
   }
   return null;
 }
@@ -2724,10 +2685,10 @@ function parsePeopleItemFromPanelLink(kind, href, title, base) {
   if (!path || !name) return null;
 
   if (path.indexOf("/actors/") === 0) {
-    return buildDetailPeopleItem(name, kind === "director" ? "导演" : "演员");
+    return buildDetailPeopleItem(name, kind === "director" ? "导演" : "演员", "", path);
   }
   if (path.indexOf("/directors/") === 0) {
-    return buildDetailPeopleItem(name, "导演");
+    return buildDetailPeopleItem(name, "导演", "", "");
   }
   return null;
 }
@@ -2756,7 +2717,11 @@ function parseDetailMetaFromPanels($, base) {
 
       if (kind === "actor" || kind === "director") {
         var person = parsePeopleItemFromPanelLink(kind, href, linkTitle, base);
-        if (person) pushUniquePeopleItem(peoples, peopleSeen, person);
+        if (person) {
+          person.avatar =
+            absUrl(attrOf($, node.find("img").first(), "src"), base) || person.avatar || "";
+          pushUniquePeopleItem(peoples, peopleSeen, person);
+        }
         return;
       }
 
@@ -2784,7 +2749,7 @@ function parseDetailMetaLegacy($, base) {
         var path = normalizePath(href, base);
         var tagId = path.charAt(0) === "/" ? path.slice(1) : path;
         if (!tagId || (path.indexOf("/tags") !== 0 && tagId.indexOf("tags") !== 0)) return;
-        var tagItem = buildDetailGenreItem(textOf($, tag));
+        var tagItem = buildDetailGenreItem(textOf($, tag), path);
         if (tagItem) pushUniqueGenreItem(genreItems, genreSeen, tagItem);
       });
   });
@@ -2798,7 +2763,7 @@ function parseDetailMetaLegacy($, base) {
         var path = normalizePath(attrOf($, node, "href"), base);
         var slug = path.split("/").pop();
         if (!slug) return;
-        var seriesItem = buildDetailGenreItem(textOf($, node));
+        var seriesItem = buildDetailGenreItem(textOf($, node), path);
         if (seriesItem) pushUniqueGenreItem(genreItems, genreSeen, seriesItem);
       });
   });
@@ -2812,7 +2777,7 @@ function parseDetailMetaLegacy($, base) {
         var path = normalizePath(attrOf($, node, "href"), base);
         var slug = path.split("/").pop();
         if (!slug) return;
-        var makerItem = buildDetailGenreItem(textOf($, node));
+        var makerItem = buildDetailGenreItem(textOf($, node), path);
         if (makerItem) pushUniqueGenreItem(genreItems, genreSeen, makerItem);
       });
   });
@@ -2826,7 +2791,7 @@ function parseDetailMetaLegacy($, base) {
         var path = normalizePath(attrOf($, actor, "href"), base);
         var id = path.split("/").pop() || textOf($, actor);
         if (!id) return;
-        var actorItem = buildDetailPeopleItem(textOf($, actor), "演员");
+        var actorItem = buildDetailPeopleItem(textOf($, actor), "演员", "", path);
         if (actorItem) pushUniquePeopleItem(peoples, peopleSeen, actorItem);
       });
   });
@@ -2913,35 +2878,28 @@ async function parseDetailPage(html, link, params) {
   var genreItems = detailMeta.genreItems;
   var peoples = detailMeta.peoples;
 
-  var displayCode = code || extractMatchCode(title);
-  if (!displayCode && description) {
-    displayCode = extractMatchCode(description);
-  }
+  var displayCode = resolveMatchCode(code, title, description);
   var displayTitle = formatDisplayTitle(displayCode, title);
   var matchFields = buildGuangyaMatchFields(displayCode, title || displayTitle, description);
   var fallbackCover = cover || resolveJavdbCoverUrl("", videoId);
   params = getEffectiveParams(params);
   var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
   var backdropPath = coverBundle.backdropPath || fallbackCover;
-  var detailPoster = coverBundle.detailPoster || buildDetailPosterUrl(fallbackCover, displayCode);
-  var posterPath = coverBundle.posterPath || detailPoster;
+  var coverMode = String(params.coverMode || "fast");
+  var detailPoster =
+    coverMode === "hd"
+      ? await resolveDetailPosterUrl(fallbackCover, displayCode, params, {
+          videoId: videoId,
+          pageCover: cover,
+          galleryUrls: backdropPaths,
+        })
+      : buildFastDetailPoster(cover, fallbackCover);
+  var posterPath = detailPoster || buildDetailPosterUrlFromJavdb(fallbackCover) || "";
 
   var allBackdropPaths = buildDetailBackdropPaths(backdropPaths, displayCode, params, {
     coverUrl: fallbackCover,
   });
   var trailers = parseTrailersFromHtml($, base, displayCode, backdropPath || fallbackCover);
-
-  var relatedItems = await resolveDetailRelatedItems(
-    html,
-    params,
-    {
-      currentPath: path,
-      currentVideoId: videoId,
-      currentCode: code,
-    },
-    displayCode,
-    peoples
-  );
 
   return enrichDetailLinks(
     Object.assign(
@@ -2961,7 +2919,6 @@ async function parseDetailPage(html, link, params) {
         rating: rating,
         genreItems: genreItems,
         peoples: peoples,
-        relatedItems: relatedItems,
         link: encodeLink(path),
       },
       matchFields
@@ -3006,13 +2963,19 @@ async function fetchMovieList(path, params) {
         lastError = new Error("分类页面不可用: " + candidates[i]);
         continue;
       }
-      return items;
+      lastError = new Error("分类页面无影片: " + candidates[i]);
     } catch (err) {
       lastError = err;
     }
   }
-  var fallbackTitle = lookupCategoryOptionTitle(basePath);
-  if (fallbackTitle) return fetchSearchMovieList(params, fallbackTitle);
+  var fallbackTitle = resolveCategorySearchFallback(params, basePath);
+  if (fallbackTitle) {
+    try {
+      return await fetchSearchMovieList(params, fallbackTitle);
+    } catch (searchErr) {
+      console.error("[javdb] 分类搜索回退失败:", searchErr.message || searchErr);
+    }
+  }
   throw lastError || new Error("未解析到影片列表");
 }
 
@@ -3036,9 +2999,7 @@ async function loadListByPath(path, params) {
       return fetchSearchMovieList(params, jumpKeyword);
     }
     var targetPath = resolveFilteredPath(params, path);
-    var items = await fetchMovieList(targetPath, params);
-    if (!items.length) throw new Error("未解析到影片列表");
-    return items;
+    return await fetchMovieList(targetPath, params);
   } catch (error) {
     console.error("[javdb] 列表加载失败:", error.message || error);
     throw error;
@@ -3079,16 +3040,17 @@ async function searchJavdb(params) {
 async function loadDetail(link) {
   try {
     var params = getEffectiveParams({});
+    var videoPath = normalizeVideoDetailPath(link);
+    if (videoPath && videoPath.indexOf("/v/") === 0) {
+      var pageUrl = detailPageUrl(videoPath, params);
+      var html = await fetchHtml(pageUrl, params);
+      var detail = await parseDetailPage(html, videoPath, params);
+      if (!detail || !detail.title) return null;
+      return sanitizeDetailOutput(detail);
+    }
+
     var path = resolveDetailPath(link, params);
     if (!path) return null;
-
-    if (path.indexOf("/v/") === 0) {
-      var pageUrl = detailPageUrl(path, params);
-      var html = await fetchHtml(pageUrl, params);
-      var detail = await parseDetailPage(html, path, params);
-      if (!detail || !detail.title) return null;
-      return detail;
-    }
 
     if (
       path.indexOf("/actors/") === 0 ||
@@ -3098,7 +3060,7 @@ async function loadDetail(link) {
     ) {
       var categoryUrl = detailPageUrl(path, params);
       var categoryHtml = await fetchHtml(categoryUrl, params);
-      return await parseCategoryDetailPage(categoryHtml, path, params);
+      return sanitizeDetailOutput(await parseCategoryDetailPage(categoryHtml, path, params));
     }
 
     return null;
