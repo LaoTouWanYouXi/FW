@@ -963,7 +963,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.0.4",
+  version: "2.0.3",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2167,51 +2167,10 @@ function buildCoverBundle(code, fallbackCover, options, params) {
   };
 }
 
-function buildForwardGlobalSearchUrl(keyword) {
-  var q = String(keyword || "").trim();
-  if (!q) return "";
-  return "forward://search?q=" + encodeURIComponent(q);
-}
-
-function buildLibrarySearchChildItem(matchCode) {
-  matchCode = String(matchCode || "").trim();
-  if (!matchCode) return null;
-  var searchUrl = buildForwardGlobalSearchUrl(matchCode);
-  if (!searchUrl) return null;
-  return {
-    id: "library-search:" + matchCode,
-    type: "url",
-    title: "搜索资料库: " + matchCode,
-    link: searchUrl,
-    description: "在 Emby / WebDAV / 网盘等资料库中搜索此番号",
-    mediaType: "movie",
-  };
-}
-
-function appendLibrarySearchHint(description, matchCode) {
-  matchCode = String(matchCode || "").trim();
-  if (!matchCode) return description;
-  var hint =
-    "资料库播放：点击「搜索资料库: " +
-    matchCode +
-    "」，或在 Forward 全局搜索输入 " +
-    matchCode;
-  description = String(description || "").trim();
-  return description ? description + "\n\n" + hint : hint;
-}
-
 function enrichDetailLinks(item, pageUrl, displayCode, cover, currentPath, params) {
   item.webUrl = pageUrl;
   item.description = appendPageUrlToDescription(item.description, pageUrl);
-  if (displayCode) {
-    item.description = appendLibrarySearchHint(item.description, displayCode);
-  }
-  item = sanitizeDetailOutput(item);
-  if (displayCode) {
-    var searchItem = buildLibrarySearchChildItem(displayCode);
-    if (searchItem) item.childItems = [searchItem];
-  }
-  return item;
+  return sanitizeDetailOutput(item);
 }
 
 function parseRatingText(text) {
