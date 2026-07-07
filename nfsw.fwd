@@ -4,6 +4,15 @@
   "icon": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/9331.jpeg",
   "widgets": [
     {
+      "id": "forward.123pan",
+      "title": "123云盘-番号",
+      "description": "123云盘-番号",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/pan123_jav.js"
+    },
+    {
       "id": "forward.guangyajav",
       "title": "光鸭-番号",
       "description": "光鸭-番号",
@@ -11,7 +20,8 @@
       "version": "1.0.0",
       "author": "老头",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/guangya_jav.js"
-    },{
+    },
+    {
       "id": "forward.javdb",
       "title": "javdb",
       "description": "javdb聚合模块",
