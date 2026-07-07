@@ -13,9 +13,9 @@ WidgetMetadata = {
   title: "123云盘-番号",
   description: "按番号搜索 123 云盘，详情页自动匹配播放源",
   author: "老头",
-  version: "1.1.0",
+  version: "1.1.1",
   requiredVersion: "0.0.1",
-  site: "https://www.123pan.com",
+  site: "https://yun.123pan.com",
   detailCacheDuration: 300,
 
   globalParams: [
@@ -38,7 +38,7 @@ WidgetMetadata = {
       title: "123 云盘 Author Token（可选）",
       type: "input",
       value: "",
-      placeholder: "手动填入 authorToken，不填则用账号密码自动登录"
+      placeholder: "手动填入 authorToken（yun.123pan.com → Local Storage）"
     }
   ],
 
@@ -77,12 +77,12 @@ WidgetMetadata = {
 console.log("[pan123-jav] version: " + WidgetMetadata.version);
 
 // ==================== 常量 ====================
-var PAN123_API = "https://www.123pan.com";
-var LOGIN_API = "https://login.123pan.com/api";
+var PAN123_API = "https://yun.123pan.com";
 var PAN123_SIGN_TABLE = "adeghlmyijnopkqrstubcvwssz";
 var TIMEOUT = 15000;
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+var LOGIN_PATH = "/b/api/user/sign_in";
 var FILE_LIST = "/b/api/file/list/new";
 var DOWNLOAD_INFO = "/b/api/file/download_info";
 
@@ -296,7 +296,8 @@ async function loginWithPassword(passport, password) {
     ? { mail: passport, password: password, type: 2 }
     : { passport: passport, password: password, remember: true, type: 1 };
 
-  var resp = await Widget.http.post(LOGIN_API + "/user/sign_in", body, {
+  var url = buildPan123ApiUrl(LOGIN_PATH);
+  var resp = await Widget.http.post(url, body, {
     headers: loginHeaders(loginUuid),
     timeout: TIMEOUT
   });
