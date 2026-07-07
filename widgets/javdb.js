@@ -963,7 +963,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.0.1",
+  version: "2.0.3",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2320,7 +2320,7 @@ function parseListItems(html, params) {
     var fallbackCover = extractListCardCover($, box, base);
     if (!fallbackCover) fallbackCover = buildJavdbCoverFromVideoId(videoId);
     rawItems.push({
-      id: videoId,
+      id: matchCode || videoId,
       type: "url",
       mediaType: "movie",
       title: formatDisplayTitle(matchCode, rawTitle) || String(rawTitle || videoId).replace(/\s+/g, " ").trim(),
