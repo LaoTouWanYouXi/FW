@@ -13,7 +13,7 @@ WidgetMetadata = {
   title: "123云盘-番号",
   description: "按番号搜索 123 云盘，详情页自动匹配播放源",
   author: "老头",
-  version: "1.1.1",
+  version: "1.1.2",
   requiredVersion: "0.0.1",
   site: "https://yun.123pan.com",
   detailCacheDuration: 300,
@@ -29,16 +29,16 @@ WidgetMetadata = {
     {
       name: "password",
       title: "123 云盘密码",
-      type: "password",
+      type: "input",
       value: "",
-      placeholder: "登录密码"
+      placeholder: "登录密码（支持自动登录）"
     },
     {
       name: "author_token",
       title: "123 云盘 Author Token（可选）",
       type: "input",
       value: "",
-      placeholder: "手动填入 authorToken（yun.123pan.com → Local Storage）"
+      placeholder: "手动填入 authorToken，不填则用账号密码自动登录"
     }
   ],
 
