@@ -4,41 +4,41 @@
 //   2. 作为 Stream Source，在番号详情页自动匹配网盘文件并直链播放
 //   3. pan123detail:// 按 fileId 直接播放，pan123folder:// 浏览文件夹
 //
-// 授权（二选一，推荐账号密码自动登录）：
-//   1. passport + password — 自动登录，Token 过期后自动重新获取（类似光鸭 refresh_token）
-//   2. author_token — 手动填入 Local Storage 的 authorToken（无自动刷新）
+// 授权（推荐 authorToken）：
+//   1. author_token — 浏览器登录 yun.123pan.com 后从 Local Storage 复制（推荐）
+//   2. passport + password — 尝试自动登录；若返回 11000 需验证码，请改用 authorToken
 
 WidgetMetadata = {
   id: "pan123.jav",
   title: "123云盘-番号",
   description: "按番号搜索 123 云盘，详情页自动匹配播放源",
   author: "老头",
-  version: "1.1.2",
+  version: "1.2.0",
   requiredVersion: "0.0.1",
   site: "https://yun.123pan.com",
   detailCacheDuration: 300,
 
   globalParams: [
     {
-      name: "passport",
-      title: "123 云盘账号",
+      name: "author_token",
+      title: "123 云盘 Author Token（推荐）",
       type: "input",
       value: "",
-      placeholder: "手机号或邮箱（推荐，支持自动登录）"
+      placeholder: "登录 yun.123pan.com 后从 Local Storage 复制 authorToken"
+    },
+    {
+      name: "passport",
+      title: "123 云盘账号（可选）",
+      type: "input",
+      value: "",
+      placeholder: "手机号或邮箱，可能需验证码请优先用 Token"
     },
     {
       name: "password",
-      title: "123 云盘密码",
+      title: "123 云盘密码（可选）",
       type: "input",
       value: "",
-      placeholder: "登录密码（支持自动登录）"
-    },
-    {
-      name: "author_token",
-      title: "123 云盘 Author Token（可选）",
-      type: "input",
-      value: "",
-      placeholder: "手动填入 authorToken，不填则用账号密码自动登录"
+      placeholder: "与账号配套，遇 11000 请改用 authorToken"
     }
   ],
 
@@ -83,6 +83,13 @@ var TIMEOUT = 15000;
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 var LOGIN_PATH = "/b/api/user/sign_in";
+var REFRESH_PATH = "/b/api/user/refresh_token";
+var LEGACY_LOGIN_URL = "https://login.123pan.com/api/user/sign_in";
+var ANDROID_APP_VERSION = "61";
+var ANDROID_X_APP_VERSION = "2.4.0";
+var ANDROID_OS_VERSION = "Android_13";
+var ANDROID_DEVICE_TYPE = "Mi 10";
+var ANDROID_DEVICE_BRAND = "Xiaomi";
 var FILE_LIST = "/b/api/file/list/new";
 var DOWNLOAD_INFO = "/b/api/file/download_info";
 
@@ -253,17 +260,55 @@ function parsePan123Data(resp) {
   return data;
 }
 
-function parseLoginData(resp) {
-  var data = resp && resp.data;
-  if (typeof data === "string") {
-    try { data = JSON.parse(data); } catch (e) { throw new Error("JSON 解析失败"); }
+function saveToken(token, passport, password) {
+  Widget.storage.set("pan123_access_token", token);
+  Widget.storage.set("pan123_author_token", token);
+  if (passport) Widget.storage.set("pan123_passport", passport);
+  if (password) Widget.storage.set("pan123_password", password);
+  var expMs = decodeJwtExp(token);
+  Widget.storage.set(
+    "pan123_token_expires",
+    String(expMs ? expMs - 300000 : Date.now() + 29 * 24 * 3600 * 1000)
+  );
+}
+
+function androidLoginHeaders(loginUuid) {
+  return {
+    accept: "application/json, text/plain, */*",
+    "content-type": "application/json;charset=UTF-8",
+    authorization: "",
+    platform: "android",
+    "app-version": ANDROID_APP_VERSION,
+    "x-app-version": ANDROID_X_APP_VERSION,
+    osversion: ANDROID_OS_VERSION,
+    devicetype: ANDROID_DEVICE_TYPE,
+    devicename: ANDROID_DEVICE_BRAND,
+    LoginUuid: loginUuid,
+    "user-agent": "123pan/v" + ANDROID_X_APP_VERSION + "(" + ANDROID_OS_VERSION + ";" + ANDROID_DEVICE_BRAND + ")"
+  };
+}
+
+function androidAuthHeaders(token, loginUuid) {
+  return {
+    accept: "application/json, text/plain, */*",
+    "content-type": "application/json;charset=UTF-8",
+    authorization: "Bearer " + token,
+    platform: "android",
+    "app-version": ANDROID_APP_VERSION,
+    "x-app-version": ANDROID_X_APP_VERSION,
+    osversion: ANDROID_OS_VERSION,
+    devicetype: ANDROID_DEVICE_TYPE,
+    devicename: ANDROID_DEVICE_BRAND,
+    LoginUuid: loginUuid,
+    "user-agent": "123pan/v" + ANDROID_X_APP_VERSION + "(" + ANDROID_OS_VERSION + ";" + ANDROID_DEVICE_BRAND + ")"
+  };
+}
+
+function loginErrorFromCode(code, message) {
+  if (code === 11000) {
+    return "账号密码登录需验证码(11000)，请在浏览器登录 yun.123pan.com 后复制 authorToken";
   }
-  if (!data) throw new Error("空响应");
-  var code = Number(data.code);
-  if (code !== 0 && code !== 200) {
-    throw new Error(data.message || data.msg || "登录失败 (" + code + ")");
-  }
-  return data;
+  return message || "登录失败 (" + code + ")";
 }
 
 function extractLoginToken(data) {
@@ -290,56 +335,133 @@ function loginHeaders(loginUuid) {
   };
 }
 
-async function loginWithPassword(passport, password) {
-  var loginUuid = getLoginUuid();
-  var body = isEmailFormat(passport)
-    ? { mail: passport, password: password, type: 2 }
-    : { passport: passport, password: password, remember: true, type: 1 };
+function parseLoginData(resp) {
+  var data = resp && resp.data;
+  if (typeof data === "string") {
+    try { data = JSON.parse(data); } catch (e) { throw new Error("JSON 解析失败"); }
+  }
+  if (!data) throw new Error("空响应");
+  var code = Number(data.code);
+  if (code !== 0 && code !== 200) {
+    throw new Error(loginErrorFromCode(code, data.message || data.msg));
+  }
+  return data;
+}
 
-  var url = buildPan123ApiUrl(LOGIN_PATH);
-  var resp = await Widget.http.post(url, body, {
-    headers: loginHeaders(loginUuid),
+async function postSignedLogin(path, body, headers) {
+  var url = buildPan123ApiUrl(path);
+  var resp = await Widget.http.post(url, body, { headers: headers, timeout: TIMEOUT });
+  return parseLoginData(resp);
+}
+
+async function refreshAccessToken(oldToken) {
+  if (!oldToken) throw new Error("无可用 token 刷新");
+  var loginUuid = getLoginUuid();
+  var url = buildPan123ApiUrl(REFRESH_PATH);
+  var resp = await Widget.http.post(url, {}, {
+    headers: androidAuthHeaders(oldToken, loginUuid),
     timeout: TIMEOUT
   });
   var data = parseLoginData(resp);
   var token = extractLoginToken(data);
-
-  Widget.storage.set("pan123_access_token", token);
-  Widget.storage.set("pan123_author_token", token);
-  Widget.storage.set("pan123_passport", passport);
-  Widget.storage.set("pan123_password", password);
-
-  var expMs = decodeJwtExp(token);
-  Widget.storage.set(
-    "pan123_token_expires",
-    String(expMs ? expMs - 60000 : Date.now() + 29 * 24 * 3600 * 1000)
-  );
+  saveToken(token);
   return token;
+}
+
+async function loginWithAndroid(passport, password) {
+  var loginUuid = getLoginUuid();
+  var body = isEmailFormat(passport)
+    ? { mail: passport, password: password, type: 2 }
+    : { passport: passport, password: password, type: 1 };
+  var data = await postSignedLogin(LOGIN_PATH, body, androidLoginHeaders(loginUuid));
+  var token = extractLoginToken(data);
+  saveToken(token, passport, password);
+  return token;
+}
+
+async function loginWithWeb(passport, password) {
+  var loginUuid = getLoginUuid();
+  var body = isEmailFormat(passport)
+    ? { mail: passport, password: password, type: 2 }
+    : { passport: passport, password: password, remember: true, type: 1 };
+  var data = await postSignedLogin(LOGIN_PATH, body, loginHeaders(loginUuid));
+  var token = extractLoginToken(data);
+  saveToken(token, passport, password);
+  return token;
+}
+
+async function loginWithLegacy(passport, password) {
+  var body = isEmailFormat(passport)
+    ? { mail: passport, password: password, type: 2 }
+    : { passport: passport, password: password, remember: true };
+  var resp = await Widget.http.post(LEGACY_LOGIN_URL, body, {
+    headers: {
+      accept: "application/json, text/plain, */*",
+      "content-type": "application/json;charset=UTF-8",
+      platform: "web",
+      "app-version": "3",
+      origin: PAN123_API,
+      referer: PAN123_API + "/",
+      "user-agent": UA
+    },
+    timeout: TIMEOUT
+  });
+  var data = parseLoginData(resp);
+  var token = extractLoginToken(data);
+  saveToken(token, passport, password);
+  return token;
+}
+
+async function loginWithPassword(passport, password) {
+  var errors = [];
+  var methods = [loginWithAndroid, loginWithWeb, loginWithLegacy];
+  for (var i = 0; i < methods.length; i++) {
+    try {
+      return await methods[i](passport, password);
+    } catch (err) {
+      var msg = String(err && err.message || err || "");
+      errors.push(msg);
+      if (msg.indexOf("11000") !== -1 || msg.indexOf("验证码") !== -1) {
+        throw new Error(loginErrorFromCode(11000, msg));
+      }
+    }
+  }
+  throw new Error(errors[errors.length - 1] || "账号密码登录失败");
 }
 
 async function ensureToken(params, forceRefresh) {
   var passport = resolvePassport(params);
   var password = resolvePassword(params);
   var authorToken = resolveAuthorToken(params);
+  var cached = Widget.storage.get("pan123_access_token") || authorToken;
+  var expires = Number(Widget.storage.get("pan123_token_expires") || 0);
+
+  if (authorToken) {
+    Widget.storage.set("pan123_author_token", authorToken);
+    Widget.storage.set("pan123_access_token", authorToken);
+    var manualExp = decodeJwtExp(authorToken);
+    if (manualExp) {
+      Widget.storage.set("pan123_token_expires", String(manualExp - 300000));
+    }
+    if (!forceRefresh && (!manualExp || Date.now() < manualExp - 300000)) {
+      return authorToken;
+    }
+    cached = authorToken;
+  }
 
   if (passport && password) {
     Widget.storage.set("pan123_passport", passport);
     Widget.storage.set("pan123_password", password);
   }
 
-  if (authorToken && !forceRefresh) {
-    Widget.storage.set("pan123_author_token", authorToken);
-    Widget.storage.set("pan123_access_token", authorToken);
-    var manualExp = decodeJwtExp(authorToken);
-    if (manualExp) {
-      Widget.storage.set("pan123_token_expires", String(manualExp - 60000));
-    }
-  }
-
-  var cached = Widget.storage.get("pan123_access_token");
-  var expires = Number(Widget.storage.get("pan123_token_expires") || 0);
   if (!forceRefresh && cached && expires && Date.now() < expires) {
     return cached;
+  }
+
+  if (cached) {
+    try {
+      return await refreshAccessToken(cached);
+    } catch (e) {}
   }
 
   if (passport && password) {
@@ -353,8 +475,7 @@ async function ensureToken(params, forceRefresh) {
   }
 
   if (cached) return cached;
-  if (authorToken) return authorToken;
-  throw new Error("未配置账号密码或 authorToken");
+  throw new Error("请配置 authorToken，或填写账号密码");
 }
 
 async function pan123Get(apiPath, params, query, forceRefresh) {
@@ -769,8 +890,8 @@ function needTokenItem() {
   return [{
     id: "no-token",
     type: "url",
-    title: "需要 123 云盘登录信息",
-    description: "请填写账号密码（自动登录）或 authorToken",
+    title: "需要 123 云盘 Author Token",
+    description: "浏览器登录 yun.123pan.com，复制 Local Storage 的 authorToken",
     mediaType: "movie",
     link: ""
   }];
@@ -779,6 +900,9 @@ function needTokenItem() {
 function isMissingAuthError(err) {
   var msg = String(err && err.message || err || "");
   return msg.indexOf("authorToken") !== -1 ||
+    msg.indexOf("Author Token") !== -1 ||
+    msg.indexOf("11000") !== -1 ||
+    msg.indexOf("验证码") !== -1 ||
     msg.indexOf("账号密码") !== -1 ||
     msg.indexOf("401") !== -1;
 }
