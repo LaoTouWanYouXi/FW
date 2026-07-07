@@ -5,7 +5,7 @@
 //   3. pan123detail:// 按 fileId 直接播放，pan123folder:// 浏览文件夹
 //
 // 授权（推荐账号密码）：
-//   1. passport + password — Android 协议登录 www.123pan.com（免验证码，自动 refresh）
+//   1. passport + password — 猫源 Web 协议登录（App-Version 43，优先）
 //   2. author_token — 备用，浏览器 Local Storage 复制
 
 WidgetMetadata = {
@@ -13,7 +13,7 @@ WidgetMetadata = {
   title: "123云盘-番号",
   description: "按番号搜索 123 云盘，详情页自动匹配播放源",
   author: "老头",
-  version: "1.3.0",
+  version: "1.4.0",
   requiredVersion: "0.0.1",
   site: "https://yun.123pan.com",
   detailCacheDuration: 300,
@@ -77,9 +77,10 @@ WidgetMetadata = {
 console.log("[pan123-jav] version: " + WidgetMetadata.version);
 
 // ==================== 常量 ====================
-// 登录/刷新：www + Android 协议（无签名，免验证码）
-// 文件操作：yun + Web 签名（与磁力脚本一致）
+// 登录/刷新：优先猫源 Web 协议（App-Version 43，www 免签名）
+// 文件操作：yun + Web 签名；失败时回退 www + Bearer
 var PAN123_API = "https://yun.123pan.com";
+var PAN123_WEB_API = "https://www.123pan.com";
 var PAN123_ANDROID_API = "https://www.123pan.com";
 var PAN123_SIGN_TABLE = "adeghlmyijnopkqrstubcvwssz";
 var TIMEOUT = 15000;
@@ -87,7 +88,8 @@ var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, l
 
 var LOGIN_PATH = "/b/api/user/sign_in";
 var REFRESH_PATH = "/b/api/user/refresh_token";
-var LEGACY_LOGIN_URL = "https://login.123pan.com/api/user/sign_in";
+var CAT_APP_VERSION = "43";
+var WEB43_LOGIN_REFERER = PAN123_WEB_API + "/login?redirect=" + encodeURIComponent(PAN123_WEB_API + "/");
 var ANDROID_APP_VERSION = "61";
 var ANDROID_X_APP_VERSION = "2.4.0";
 var ANDROID_OS_VERSION = "Android_13";
@@ -231,9 +233,13 @@ function signPan123Path(path, os, version) {
   return { key: timeSign, value: timestamp + "-" + random + "-" + dataSign };
 }
 
+function buildSignedUrl(base, apiPath, os, version) {
+  var sign = signPan123Path(apiPath, os || "web", version || "3");
+  return base + apiPath + "?" + sign.key + "=" + encodeURIComponent(sign.value);
+}
+
 function buildPan123ApiUrl(apiPath) {
-  var sign = signPan123Path(apiPath, "web", "3");
-  return PAN123_API + apiPath + "?" + sign.key + "=" + encodeURIComponent(sign.value);
+  return buildSignedUrl(PAN123_API, apiPath, "web", "3");
 }
 
 function pan123Headers(token) {
@@ -276,10 +282,33 @@ function saveToken(token, passport, password) {
   );
 }
 
+function web43Headers(token) {
+  var headers = {
+    accept: "application/json, text/plain, */*",
+    "content-type": "application/json;charset=UTF-8",
+    "App-Version": CAT_APP_VERSION,
+    platform: "web",
+    origin: PAN123_WEB_API,
+    referer: PAN123_WEB_API + "/",
+    "user-agent": UA
+  };
+  if (token) headers.authorization = "Bearer " + token;
+  return headers;
+}
+
+function web43LoginHeaders() {
+  return {
+    accept: "application/json, text/plain, */*",
+    "content-type": "application/json",
+    "App-Version": CAT_APP_VERSION,
+    Referer: WEB43_LOGIN_REFERER,
+    "user-agent": UA
+  };
+}
+
 function androidLoginHeaders(loginUuid, token) {
   var headers = {
     accept: "application/json, text/plain, */*",
-    "accept-encoding": "gzip",
     "content-type": "application/json",
     platform: "android",
     "app-version": ANDROID_APP_VERSION,
@@ -290,7 +319,6 @@ function androidLoginHeaders(loginUuid, token) {
     "x-channel": ANDROID_CHANNEL,
     loginuuid: loginUuid,
     LoginUuid: loginUuid,
-    host: "www.123pan.com",
     "user-agent": "123pan/v" + ANDROID_X_APP_VERSION + "(" + ANDROID_OS_VERSION + ";" + ANDROID_DEVICE_BRAND + ")"
   };
   if (token) headers.authorization = "Bearer " + token;
@@ -299,7 +327,7 @@ function androidLoginHeaders(loginUuid, token) {
 
 function loginErrorFromCode(code, message) {
   if (code === 11000) {
-    return "Web 登录需验证码(11000)，已切换 Android 协议重试；仍失败请填 authorToken";
+    return "登录需验证码(11000)，请检查账号密码或改用 authorToken";
   }
   return message || "登录失败 (" + code + ")";
 }
@@ -315,30 +343,37 @@ function extractLoginToken(data) {
   return token;
 }
 
-function loginHeaders(loginUuid) {
-  return {
-    accept: "application/json, text/plain, */*",
-    "content-type": "application/json;charset=UTF-8",
-    "App-Version": "3",
-    platform: "web",
-    LoginUuid: loginUuid,
-    origin: PAN123_API,
-    referer: PAN123_API + "/",
-    "user-agent": UA
-  };
+function parseLoginData(resp) {
+  var raw = resp && resp.data;
+  if (typeof raw === "string") {
+    if (raw.charAt(0) === "<" || /<!doctype/i.test(raw)) {
+      throw new Error("登录返回 HTML 而非 JSON，接口可能已变更");
+    }
+    try { raw = JSON.parse(raw); } catch (e) { throw new Error("JSON 解析失败"); }
+  }
+  if (!raw) throw new Error("空响应");
+  var code = Number(raw.code);
+  if (code !== 0 && code !== 200) {
+    throw new Error(loginErrorFromCode(code, raw.message || raw.msg));
+  }
+  return raw;
 }
 
-function parseLoginData(resp) {
-  var data = resp && resp.data;
-  if (typeof data === "string") {
-    try { data = JSON.parse(data); } catch (e) { throw new Error("JSON 解析失败"); }
-  }
-  if (!data) throw new Error("空响应");
-  var code = Number(data.code);
-  if (code !== 0 && code !== 200) {
-    throw new Error(loginErrorFromCode(code, data.message || data.msg));
-  }
-  return data;
+async function postWeb43Login(passport, password) {
+  var body = { passport: passport, password: password, remember: true };
+  var resp = await Widget.http.post(PAN123_WEB_API + LOGIN_PATH, body, {
+    headers: web43LoginHeaders(),
+    timeout: TIMEOUT
+  });
+  return parseLoginData(resp);
+}
+
+async function loginWithWeb43(passport, password) {
+  var data = await postWeb43Login(passport, password);
+  var token = extractLoginToken(data);
+  saveToken(token, passport, password);
+  console.log("[pan123-jav] login ok via web43");
+  return token;
 }
 
 async function postAndroidLogin(url, body, loginUuid) {
@@ -349,65 +384,78 @@ async function postAndroidLogin(url, body, loginUuid) {
   return parseLoginData(resp);
 }
 
-async function refreshAccessToken(oldToken) {
-  if (!oldToken) throw new Error("无可用 token 刷新");
-  var loginUuid = getLoginUuid();
-  var url = PAN123_ANDROID_API + REFRESH_PATH;
-  var resp = await Widget.http.post(url, {}, {
-    headers: androidLoginHeaders(loginUuid, oldToken),
-    timeout: TIMEOUT
-  });
-  var data = parseLoginData(resp);
-  var token = extractLoginToken(data);
-  saveToken(token);
-  return token;
+function buildLoginBody(passport, password) {
+  return isEmailFormat(passport)
+    ? { mail: passport, password: password, type: 2 }
+    : { passport: passport, password: password, type: 1 };
 }
 
 async function loginWithAndroid(passport, password) {
   var loginUuid = getLoginUuid();
-  var body = isEmailFormat(passport)
-    ? { mail: passport, password: password, type: 2 }
-    : { passport: passport, password: password, type: 1 };
-  var url = PAN123_ANDROID_API + LOGIN_PATH;
-  var data = await postAndroidLogin(url, body, loginUuid);
-  var token = extractLoginToken(data);
-  saveToken(token, passport, password);
-  return token;
-}
-
-async function loginWithLegacy(passport, password) {
-  var body = isEmailFormat(passport)
-    ? { mail: passport, password: password, type: 2 }
-    : { passport: passport, password: password, remember: true };
-  var resp = await Widget.http.post(LEGACY_LOGIN_URL, body, {
-    headers: {
-      accept: "application/json, text/plain, */*",
-      "content-type": "application/json;charset=UTF-8",
-      platform: "web",
-      "app-version": "3",
-      origin: PAN123_API,
-      referer: PAN123_API + "/",
-      "user-agent": UA
-    },
-    timeout: TIMEOUT
-  });
-  var data = parseLoginData(resp);
-  var token = extractLoginToken(data);
-  saveToken(token, passport, password);
-  return token;
-}
-
-async function loginWithPassword(passport, password) {
+  var body = buildLoginBody(passport, password);
+  var attempts = [
+    { label: "android-www", url: PAN123_ANDROID_API + LOGIN_PATH },
+    { label: "android-yun", url: PAN123_API + LOGIN_PATH },
+    { label: "android-yun-signed", url: buildSignedUrl(PAN123_API, LOGIN_PATH, "android", ANDROID_APP_VERSION) },
+    { label: "android-yun-web-sign", url: buildSignedUrl(PAN123_API, LOGIN_PATH, "web", "3") }
+  ];
   var errors = [];
-  var methods = [loginWithAndroid, loginWithLegacy];
-  for (var i = 0; i < methods.length; i++) {
+  for (var i = 0; i < attempts.length; i++) {
     try {
-      return await methods[i](passport, password);
+      var data = await postAndroidLogin(attempts[i].url, body, loginUuid);
+      var token = extractLoginToken(data);
+      saveToken(token, passport, password);
+      console.log("[pan123-jav] login ok via " + attempts[i].label);
+      return token;
+    } catch (err) {
+      var msg = "[" + attempts[i].label + "] " + String(err && err.message || err || "");
+      errors.push(msg);
+      console.error("[pan123-jav/login]", msg);
+    }
+  }
+  throw new Error(errors.join(" | "));
+}
+
+async function refreshAccessToken(oldToken) {
+  if (!oldToken) throw new Error("无可用 token 刷新");
+  var loginUuid = getLoginUuid();
+  var attempts = [
+    PAN123_ANDROID_API + REFRESH_PATH,
+    PAN123_API + REFRESH_PATH,
+    buildSignedUrl(PAN123_API, REFRESH_PATH, "android", ANDROID_APP_VERSION)
+  ];
+  var errors = [];
+  for (var i = 0; i < attempts.length; i++) {
+    try {
+      var resp = await Widget.http.post(attempts[i], {}, {
+        headers: androidLoginHeaders(loginUuid, oldToken),
+        timeout: TIMEOUT
+      });
+      var data = parseLoginData(resp);
+      var token = extractLoginToken(data);
+      saveToken(token);
+      return token;
     } catch (err) {
       errors.push(String(err && err.message || err || ""));
     }
   }
-  throw new Error(errors[errors.length - 1] || "账号密码登录失败");
+  throw new Error(errors[errors.length - 1] || "token 刷新失败");
+}
+
+async function loginWithPassword(passport, password) {
+  var errors = [];
+  try {
+    return await loginWithWeb43(passport, password);
+  } catch (err) {
+    errors.push("[web43] " + String(err && err.message || err || ""));
+    console.error("[pan123-jav/login]", errors[errors.length - 1]);
+  }
+  try {
+    return await loginWithAndroid(passport, password);
+  } catch (err2) {
+    errors.push("[android] " + String(err2 && err2.message || err2 || ""));
+    throw new Error(errors.join(" | "));
+  }
 }
 
 async function ensureToken(params, forceRefresh) {
@@ -416,35 +464,38 @@ async function ensureToken(params, forceRefresh) {
   var authorToken = resolveAuthorToken(params);
   var cached = Widget.storage.get("pan123_access_token");
   var expires = Number(Widget.storage.get("pan123_token_expires") || 0);
+  var hasPassword = !!(passport && password);
+  var storedPassport = Widget.storage.get("pan123_passport");
+  var storedPassword = Widget.storage.get("pan123_password");
+  if (!hasPassword && storedPassport && storedPassword) {
+    passport = storedPassport;
+    password = storedPassword;
+    hasPassword = true;
+  }
 
   if (passport && password) {
     Widget.storage.set("pan123_passport", passport);
     Widget.storage.set("pan123_password", password);
   }
+  if (authorToken) Widget.storage.set("pan123_author_token", authorToken);
 
-  if (authorToken) {
-    Widget.storage.set("pan123_author_token", authorToken);
-    if (!cached) cached = authorToken;
+  // 有账号密码时优先直接 Android 登录，不走旧 token 刷新（避免先碰 Web/旧 token）
+  if (hasPassword && (forceRefresh || !cached || !expires || Date.now() >= expires)) {
+    return await loginWithPassword(passport, password);
   }
 
   if (!forceRefresh && cached && expires && Date.now() < expires) {
     return cached;
   }
 
+  if (hasPassword) {
+    return await loginWithPassword(passport, password);
+  }
+
   if (cached) {
     try {
       return await refreshAccessToken(cached);
     } catch (e) {}
-  }
-
-  if (passport && password) {
-    return await loginWithPassword(passport, password);
-  }
-
-  var storedPassport = Widget.storage.get("pan123_passport");
-  var storedPassword = Widget.storage.get("pan123_password");
-  if (storedPassport && storedPassword) {
-    return await loginWithPassword(storedPassport, storedPassword);
   }
 
   if (authorToken) {
@@ -455,20 +506,98 @@ async function ensureToken(params, forceRefresh) {
   throw new Error("请填写账号密码或 authorToken");
 }
 
+async function pan123GetAndroid(apiPath, token, query) {
+  var url = PAN123_ANDROID_API + apiPath;
+  var qs = buildQuery(query || {});
+  if (qs) url += "?" + qs;
+  var loginUuid = getLoginUuid();
+  var resp = await Widget.http.get(url, {
+    headers: androidLoginHeaders(loginUuid, token),
+    timeout: TIMEOUT
+  });
+  return parsePan123Data(resp);
+}
+
+async function pan123PostAndroid(apiPath, token, body) {
+  var url = PAN123_ANDROID_API + apiPath;
+  var loginUuid = getLoginUuid();
+  var resp = await Widget.http.post(url, body || {}, {
+    headers: androidLoginHeaders(loginUuid, token),
+    timeout: TIMEOUT
+  });
+  return parsePan123Data(resp);
+}
+
+async function pan123GetWww(apiPath, token, query) {
+  var url = PAN123_WEB_API + apiPath;
+  var qs = buildQuery(query || {});
+  if (qs) url += "?" + qs;
+  var resp = await Widget.http.get(url, {
+    headers: web43Headers(token),
+    timeout: TIMEOUT
+  });
+  return parsePan123Data(resp);
+}
+
+async function pan123PostWww(apiPath, token, body) {
+  var url = PAN123_WEB_API + apiPath;
+  var resp = await Widget.http.post(url, body || {}, {
+    headers: web43Headers(token),
+    timeout: TIMEOUT
+  });
+  return parsePan123Data(resp);
+}
+
 async function pan123Get(apiPath, params, query, forceRefresh) {
   var token = await ensureToken(params, forceRefresh);
-  var url = buildPan123ApiUrl(apiPath);
-  var qs = buildQuery(query || {});
-  if (qs) url += "&" + qs;
-  var resp = await Widget.http.get(url, { headers: pan123Headers(token), timeout: TIMEOUT });
-  return parsePan123Data(resp);
+  var errors = [];
+  try {
+    var url = buildPan123ApiUrl(apiPath);
+    var qs = buildQuery(query || {});
+    if (qs) url += "&" + qs;
+    var resp = await Widget.http.get(url, { headers: pan123Headers(token), timeout: TIMEOUT });
+    return parsePan123Data(resp);
+  } catch (err) {
+    var msg = String(err && err.message || err || "");
+    if (msg.indexOf("HTML") !== -1) errors.push(msg);
+    else errors.push(msg);
+  }
+  try {
+    return await pan123GetWww(apiPath, token, query);
+  } catch (err2) {
+    errors.push(String(err2 && err2.message || err2 || ""));
+  }
+  try {
+    return await pan123GetAndroid(apiPath, token, query);
+  } catch (err3) {
+    errors.push(String(err3 && err3.message || err3 || ""));
+    throw new Error(errors.join(" | "));
+  }
 }
 
 async function pan123Post(apiPath, params, body, forceRefresh) {
   var token = await ensureToken(params, forceRefresh);
-  var url = buildPan123ApiUrl(apiPath);
-  var resp = await Widget.http.post(url, body || {}, { headers: pan123Headers(token), timeout: TIMEOUT });
-  return parsePan123Data(resp);
+  var errors = [];
+  try {
+    var url = buildPan123ApiUrl(apiPath);
+    var resp = await Widget.http.post(url, body || {}, { headers: pan123Headers(token), timeout: TIMEOUT });
+    return parsePan123Data(resp);
+  } catch (err) {
+    var msg = String(err && err.message || err || "");
+    if (msg.indexOf("HTML") !== -1) errors.push(msg);
+    else errors.push(msg);
+  }
+  try {
+    return await pan123PostWww(apiPath, token, body);
+  } catch (err2) {
+    errors.push(String(err2 && err2.message || err2 || ""));
+  }
+  try {
+    return await pan123PostAndroid(apiPath, token, body);
+  } catch (err3) {
+    errors.push(String(err3 && err3.message || err3 || ""));
+    throw new Error(errors.join(" | "));
+  }
 }
 
 async function pan123Request(method, apiPath, params, payload, query) {
