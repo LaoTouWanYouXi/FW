@@ -1595,7 +1595,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.0.4",
+  version: "2.0.5",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2731,14 +2731,38 @@ function extractListCardCover($, box, base) {
   return candidates[0] || "";
 }
 
+var CATEMBY_CDN_BASE = "https://tp.spfcas.com/rhe951l4q";
+
+function buildCatembySiteCoverUrl(videoId) {
+  var id = String(videoId || "").trim();
+  if (!id || id.length < 2) return "";
+  return CATEMBY_CDN_BASE + "/covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+}
+
+function buildCatembySiteThumbUrl(videoId) {
+  var id = String(videoId || "").trim();
+  if (!id || id.length < 2) return "";
+  return CATEMBY_CDN_BASE + "/small_covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+}
+
+function resolveCatembyListCoverUrl(videoId) {
+  var siteCover = buildCatembySiteCoverUrl(videoId);
+  if (siteCover) return siteCover;
+  return buildCatembySiteThumbUrl(videoId) || "";
+}
+
+function isJdbstaticImageUrl(url) {
+  return /jdbstatic\.com/i.test(String(url || ""));
+}
+
 function resolveListBackdropPath(code, fallbackCover, videoId, params) {
   params = params || {};
+  var catembyCover = resolveCatembyListCoverUrl(videoId);
+  if (catembyCover) return catembyCover;
   var pageUrl = upgradeJavdbImageUrl(fallbackCover);
-  var idCover = buildJavdbCoverFromVideoId(videoId);
-
-  if (pageUrl && isLandscapeListCoverUrl(pageUrl)) return pageUrl;
-
-  return pageUrl || idCover || "";
+  if (pageUrl && isLandscapeListCoverUrl(pageUrl) && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
+  if (pageUrl && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
+  return "";
 }
 
 function resolveDetailBackdropPath(code, fallbackCover, videoId) {
@@ -2965,7 +2989,7 @@ function parseListItems(html, params) {
     var rawTitle = box.attr("title") || subTitle || titleText;
     var matchCode = resolveMatchCode(titleText, rawTitle);
     var fallbackCover = extractListCardCover($, box, base);
-    if (!fallbackCover) fallbackCover = buildJavdbCoverFromVideoId(videoId);
+    if (!fallbackCover) fallbackCover = resolveCatembyListCoverUrl(videoId);
     rawItems.push({
       id: matchCode || videoId,
       type: "url",
@@ -2993,7 +3017,7 @@ function enrichMovieItems(rawItems, params) {
     var raw = rawItems[i];
     var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId, forList: true }, params);
     var backdropPath =
-      covers.listBackdrop || buildJavdbCoverFromVideoId(raw.videoId) || raw.fallbackCover || "";
+      covers.listBackdrop || resolveCatembyListCoverUrl(raw.videoId) || raw.fallbackCover || "";
     items.push(Object.assign(
       {
         id: raw.id,

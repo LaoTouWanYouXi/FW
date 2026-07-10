@@ -1538,7 +1538,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.4.3",
+  version: "1.4.4",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1999,46 +1999,11 @@ function resolveListCoverUrl(movie) {
 }
 
 function resolveDetailBackdropUrl(movie) {
-  return resolveListThumbUrl(movie) || resolveListCoverUrl(movie);
+  return resolveListCoverUrl(movie);
 }
 
 function resolveDetailPosterUrl(movie) {
-  return resolveListThumbUrl(movie) || resolveListCoverUrl(movie);
-}
-
-function buildAggregationFields(code, title, description, displayTitle) {
-  const matchCode = safeText(code);
-  const rawTitle = safeText(title);
-  const desc = safeText(description);
-  const fields = {};
-  if (matchCode) {
-    fields.name = matchCode;
-    fields.number = matchCode;
-    fields.code = matchCode;
-    fields.seriesName = matchCode;
-    fields.episodeName = matchCode;
-    fields.fileName = matchCode;
-    fields.filename = matchCode;
-    fields.file_name = matchCode;
-    fields.originalName = matchCode;
-  }
-  if (rawTitle) fields.originalTitle = rawTitle;
-  if (matchCode && desc && desc.toUpperCase().indexOf(matchCode.toUpperCase()) < 0) {
-    fields.description = matchCode + " " + desc;
-  } else if (desc) {
-    fields.description = desc;
-  } else if (matchCode) {
-    fields.description = "番号: " + matchCode;
-  }
-  if (matchCode) {
-    fields.info = {
-      name: matchCode,
-      title: safeText(displayTitle) || (matchCode + (rawTitle ? " " + rawTitle : "")),
-      originalTitle: rawTitle || matchCode,
-      originalName: matchCode,
-    };
-  }
-  return fields;
+  return resolveListCoverUrl(movie);
 }
 
 function buildResolveCodeVariants(code) {
@@ -2455,24 +2420,20 @@ function mapListMovie(movie) {
   const code = safeText(movie.number || movie.id);
   const title = safeText(movie.title || code);
   const cover = resolveListCoverUrl(movie);
-  const desc = buildListDescription(movie);
-  return Object.assign(
-    {
-      id: code || movie.id,
-      type: "url",
-      mediaType: "movie",
-      title: code ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "") : title,
-      backdropPath: cover,
-      link: movieLink(movie.id),
-      description: desc,
-      releaseDate: movie.release_date || "",
-      durationText: movie.duration ? movie.duration + " 分钟" : "",
-      rating: Number(movie.score || 0) || 0,
-      playerType: "system",
-      videoId: movie.id,
-    },
-    buildAggregationFields(code, title, desc, code ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "") : title)
-  );
+  return {
+    id: code || movie.id,
+    type: "url",
+    mediaType: "movie",
+    title: code ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "") : title,
+    backdropPath: cover,
+    link: movieLink(movie.id),
+    description: buildListDescription(movie),
+    releaseDate: movie.release_date || "",
+    durationText: movie.duration ? movie.duration + " 分钟" : "",
+    rating: Number(movie.score || 0) || 0,
+    playerType: "system",
+    videoId: movie.id,
+  };
 }
 
 function buildListDescription(movie) {
@@ -2494,20 +2455,16 @@ function mapRelatedMovie(item, fallbackCover) {
     "";
   const code = safeText(item.number || item.id);
   const title = safeText(item.title || code);
-  const desc = code ? "番号: " + code : undefined;
-  return Object.assign(
-    {
-      id: code || item.id,
-      type: "url",
-      mediaType: "movie",
-      title: code || title,
-      backdropPath: cover || undefined,
-      link: movieLink(item.id),
-      description: desc,
-      videoId: item.id,
-    },
-    buildAggregationFields(code, title, desc, code || title)
-  );
+  return {
+    id: code || item.id,
+    type: "url",
+    mediaType: "movie",
+    title: code || title,
+    backdropPath: cover || undefined,
+    link: movieLink(item.id),
+    description: code ? "番号: " + code : undefined,
+    videoId: item.id,
+  };
 }
 
 function parseDetailMeta(movie) {
@@ -2721,54 +2678,51 @@ async function loadDetail(link) {
   const code = safeText(movie.number || movieId);
   const titleText = safeText(movie.title || code);
   const displayTitle = code && titleText.indexOf(code) !== 0 ? code + " " + titleText : titleText;
-  const summary = safeText(movie.summary || movie.origin_title || "");
+  const summary = safeText(movie.summary || "");
 
-  return Object.assign(
-    {
-      id: code || movie.id || movieId,
-      type: "detail",
-      mediaType: "movie",
-      title: displayTitle,
-      link: movieLink(movie.id || movieId),
-      description: summary || undefined,
-      videoUrl: playbackUrl || undefined,
-      playerType: playbackUrl && /\.m3u8/i.test(playbackUrl) ? "ijk" : "system",
-      customHeaders: {
-        "User-Agent": UA,
-        Referer: SITE_BASE + "/movie/" + movieId,
-        Origin: SITE_BASE,
-      },
-      backdropPath: coverUrl,
-      posterPath: posterUrl,
-      detailPoster: posterUrl,
-      backdropPaths: galleryUrls.length ? galleryUrls : coverUrl ? [coverUrl] : [],
-      genreItems: meta.genreItems.length ? meta.genreItems : undefined,
-      peoples: meta.peoples.length ? meta.peoples : undefined,
-      relatedItems,
-      trailers,
-      previewUrl: previewUrl || "",
-      releaseDate: movie.release_date || "",
-      durationText: movie.duration ? movie.duration + " 分钟" : "",
-      rating: Number(movie.score || 0) || 0,
-      videoId: movie.id || movieId,
-      extra: Object.assign(
-        {
-          videoMode: fullUrl ? "full" : previewUrl ? "preview" : "none",
-          previewVideoUrl: previewUrl || "",
-          fullVideoAvailable: !!fullUrl,
-        },
-        !fullUrl && movie.number ? { resolveNote: "站点未收录完整片源(" + movie.number + ")" } : {},
-        fullVideo
-          ? {
-              fullVideoUrl: fullVideo.sourceUrl,
-              fullVideoLabel: fullVideo.label || fullVideo.variant || "完整视频",
-              fullVideoType: fullVideo.sourceType || "video/mp4",
-            }
-          : {}
-      ),
+  return {
+    id: code || movie.id || movieId,
+    type: "detail",
+    mediaType: "movie",
+    title: displayTitle,
+    link: movieLink(movie.id || movieId),
+    description: summary || undefined,
+    videoUrl: playbackUrl || undefined,
+    playerType: playbackUrl && /\.m3u8/i.test(playbackUrl) ? "ijk" : "system",
+    customHeaders: {
+      "User-Agent": UA,
+      Referer: SITE_BASE + "/movie/" + movieId,
+      Origin: SITE_BASE,
     },
-    buildAggregationFields(code, titleText, summary || buildListDescription(movie), displayTitle)
-  );
+    backdropPath: coverUrl,
+    posterPath: posterUrl,
+    detailPoster: posterUrl,
+    backdropPaths: galleryUrls.length ? galleryUrls : coverUrl ? [coverUrl] : [],
+    genreItems: meta.genreItems.length ? meta.genreItems : undefined,
+    peoples: meta.peoples.length ? meta.peoples : undefined,
+    relatedItems,
+    trailers,
+    previewUrl: previewUrl || "",
+    releaseDate: movie.release_date || "",
+    durationText: movie.duration ? movie.duration + " 分钟" : "",
+    rating: Number(movie.score || 0) || 0,
+    videoId: movie.id || movieId,
+    extra: Object.assign(
+      {
+        videoMode: fullUrl ? "full" : previewUrl ? "preview" : "none",
+        previewVideoUrl: previewUrl || "",
+        fullVideoAvailable: !!fullUrl,
+      },
+      !fullUrl && movie.number ? { resolveNote: "站点未收录完整片源(" + movie.number + ")" } : {},
+      fullVideo
+        ? {
+            fullVideoUrl: fullVideo.sourceUrl,
+            fullVideoLabel: fullVideo.label || fullVideo.variant || "完整视频",
+            fullVideoType: fullVideo.sourceType || "video/mp4",
+          }
+        : {}
+    ),
+  };
 }
 
 function normalizeCode(value) {
