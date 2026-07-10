@@ -1523,7 +1523,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.3.1",
+  version: "1.3.3",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1764,10 +1764,45 @@ function parseCategoryPath(path) {
   if (clean.indexOf("makers/") === 0) return { kind: "makers", id: clean.split("/")[1].split("?")[0] };
   if (clean.indexOf("series/") === 0) return { kind: "series", id: clean.split("/")[1].split("?")[0] };
   if (clean.indexOf("categories") === 0) {
-    const qMatch = clean.match(/[?&]q=([^&]+)/);
+    const qMatch = clean.match(/(?:[?&]q=)([^&]+)/);
     return { kind: "tags", id: qMatch ? decodeURIComponent(qMatch[1]) : "" };
   }
   return { kind: "", id: "" };
+}
+
+function resolveCategoryContext(params) {
+  params = params || {};
+  const moduleKind = params.category_kind || "";
+
+  function fromEncodedLink(ref) {
+    ref = String(ref || "").trim();
+    if (!ref || ref.indexOf(LINK_PREFIX) !== 0) return null;
+    const parsed = parseLinkQuery(ref);
+    const cat = parseCategoryPath(parsed.path);
+    if (cat.kind === "tags") {
+      const tagName = parsed.query.q || cat.id;
+      if (tagName) return { kind: "tags", itemId: tagName };
+    }
+    if (cat.kind && cat.id) return { kind: cat.kind, itemId: cat.id };
+    return null;
+  }
+
+  const peopleRef = fromEncodedLink(params.peopleId);
+  if (peopleRef) return peopleRef;
+
+  const genreRef = fromEncodedLink(params.genreId);
+  if (genreRef) return genreRef;
+
+  const urlRef = fromEncodedLink(params.url || params.link);
+  if (urlRef) return urlRef;
+
+  if (params.peopleId) {
+    return { kind: moduleKind || "actors", itemId: String(params.peopleId).trim() };
+  }
+  if (params.genreId) {
+    return { kind: moduleKind || "tags", itemId: String(params.genreId).trim() };
+  }
+  return { kind: moduleKind || "actors", itemId: "" };
 }
 
 function buildCategoryFilter(kind, itemId, movieType, listFilter) {
@@ -1801,14 +1836,11 @@ async function enrichListMovies(movies, decodeCover) {
   const items = movies.map(mapListMovie);
   await Promise.all(
     items.map(async (item, index) => {
-      const raw = movies[index].cover_url || movies[index].thumb_url || item.posterPath;
+      const raw = movies[index].cover_url || movies[index].thumb_url || item.backdropPath;
       if (!raw) return;
       const decoded = await decodeImageToDataUri(raw);
       if (!decoded || decoded === raw) return;
       item.backdropPath = decoded;
-      item.posterPath = decoded;
-      item.coverUrl = decoded;
-      item.image = decoded;
       item.detailPoster = decoded;
     })
   );
@@ -1985,14 +2017,8 @@ function siteHeaders(extra) {
 }
 
 async function apiGet(pathname, query) {
-  const url = new URL(API_BASE + pathname);
-  if (query) {
-    Object.keys(query).forEach((key) => {
-      const val = query[key];
-      if (val !== undefined && val !== null && val !== "") url.searchParams.set(key, String(val));
-    });
-  }
-  const resp = await Widget.http.get(url.toString(), { headers: apiHeaders() });
+  const url = API_BASE + pathname;
+  const resp = await Widget.http.get(url, { headers: apiHeaders(), params: query || {} });
   const data = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
   if (!data || data.success !== 1) {
     throw new Error((data && data.message) || "API 请求失败");
@@ -2001,14 +2027,8 @@ async function apiGet(pathname, query) {
 }
 
 async function siteGet(path, query) {
-  const url = new URL(siteUrl(path));
-  if (query) {
-    Object.keys(query).forEach((key) => {
-      const val = query[key];
-      if (val !== undefined && val !== null && val !== "") url.searchParams.set(key, String(val));
-    });
-  }
-  const resp = await Widget.http.get(url.toString(), { headers: siteHeaders() });
+  const url = siteUrl(path);
+  const resp = await Widget.http.get(url, { headers: siteHeaders(), params: query || {} });
   if (!resp || !resp.data) return null;
   if (typeof resp.data === "string") {
     const text = resp.data.trim();
@@ -2129,10 +2149,7 @@ function mapListMovie(movie) {
     mediaType: "movie",
     title: code ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "") : title,
     backdropPath: poster,
-    posterPath: poster,
-    coverUrl: poster,
-    image: poster,
-    detailPoster: poster,
+    detailPoster: poster || undefined,
     link: movieLink(movie.id),
     description: buildListDescription(movie),
     releaseDate: movie.release_date || "",
@@ -2160,7 +2177,6 @@ function mapRelatedMovie(item, fallbackCover) {
     mediaType: "movie",
     title: safeText(item.number || item.title || item.id),
     backdropPath: cover || undefined,
-    posterPath: cover || undefined,
     link: movieLink(item.id),
     description: item.number ? "番号: " + item.number : undefined,
   };
@@ -2231,53 +2247,76 @@ function buildTrailers(movie, cover) {
 }
 
 async function loadLatest(params) {
-  params = params || {};
-  const page = Number(params.page || params.from || 1);
-  const filterBy = String(params.filter_by || "all");
-  const data = await apiGet("/v1/movies/latest", { page, filter_by: filterBy });
-  return enrichListMovies(data.movies || [], params.decode_cover !== false);
+  try {
+    params = params || {};
+    const page = Number(params.page || params.from || 1);
+    const filterBy = String(params.filter_by || "all");
+    const data = await apiGet("/v1/movies/latest", { page, filter_by: filterBy });
+    return enrichListMovies(data.movies || [], params.decode_cover !== false);
+  } catch (error) {
+    console.error("[catemby] loadLatest 失败:", error.message || error);
+    throw error;
+  }
 }
 
 async function loadRecommend(params) {
-  params = params || {};
-  const data = await apiGet("/v1/movies/recommend");
-  return enrichListMovies(data.movies || [], params.decode_cover !== false);
+  try {
+    params = params || {};
+    const data = await apiGet("/v1/movies/recommend");
+    return enrichListMovies(data.movies || [], params.decode_cover !== false);
+  } catch (error) {
+    console.error("[catemby] loadRecommend 失败:", error.message || error);
+    throw error;
+  }
 }
 
 async function loadRankings(params) {
-  params = params || {};
-  const page = Number(params.page || params.from || 1);
-  const period = String(params.period || "daily");
-  const data = await apiGet("/v1/movies/rankings", { page, period });
-  return enrichListMovies(data.movies || [], params.decode_cover !== false);
+  try {
+    params = params || {};
+    const page = Number(params.page || params.from || 1);
+    const period = String(params.period || "daily");
+    const data = await apiGet("/v1/movies/rankings", { page, period });
+    return enrichListMovies(data.movies || [], params.decode_cover !== false);
+  } catch (error) {
+    console.error("[catemby] loadRankings 失败:", error.message || error);
+    throw error;
+  }
 }
 
 async function loadPage(params) {
-  params = params || {};
-  const parsed = parseCategoryPath(parseLinkQuery(params.url || params.link || "").path);
-  const kind = params.category_kind || parsed.kind || "actors";
-  const itemId = params.peopleId || params.genreId || parsed.id;
-  if (!itemId) throw new Error("请选择分类项");
+  try {
+    params = params || {};
+    const ctx = resolveCategoryContext(params);
+    if (!ctx.itemId) throw new Error("请选择分类项");
 
-  const movieType = params.movie_type || "censored";
-  const filterBy = buildCategoryFilter(kind, itemId, movieType, params.list_filter || "all");
-  const movies = await fetchCategoryMovies(filterBy, params);
-  if (!movies.length && kind === "makers") {
-    const searchData = await apiGet("/v2/search", { q: itemId, page: Number(params.page || 1), type: "movie" });
-    return enrichListMovies(searchData.movies || [], params.decode_cover !== false);
+    const movieType = params.movie_type || "censored";
+    const filterBy = buildCategoryFilter(ctx.kind, ctx.itemId, movieType, params.list_filter || "all");
+    const movies = await fetchCategoryMovies(filterBy, params);
+    if (!movies.length && ctx.kind === "makers") {
+      const searchData = await apiGet("/v2/search", { q: ctx.itemId, page: Number(params.page || 1), type: "movie" });
+      return enrichListMovies(searchData.movies || [], params.decode_cover !== false);
+    }
+    return enrichListMovies(movies, params.decode_cover !== false);
+  } catch (error) {
+    console.error("[catemby] loadPage 失败:", error.message || error);
+    throw error;
   }
-  return enrichListMovies(movies, params.decode_cover !== false);
 }
 
 async function searchMovies(params) {
-  params = params || {};
-  const keyword = safeText(params.keyword);
-  if (!keyword) {
-    return [{ id: "tip", type: "text", title: "请输入关键词开始搜索" }];
+  try {
+    params = params || {};
+    const keyword = safeText(params.keyword);
+    if (!keyword) {
+      return [{ id: "tip", type: "text", title: "请输入关键词开始搜索" }];
+    }
+    const page = Number(params.page || params.from || 1);
+    const data = await apiGet("/v2/search", { q: keyword, page, type: "movie" });
+    return enrichListMovies(data.movies || [], params.decode_cover !== false);
+  } catch (error) {
+    console.error("[catemby] searchMovies 失败:", error.message || error);
+    throw error;
   }
-  const page = Number(params.page || params.from || 1);
-  const data = await apiGet("/v2/search", { q: keyword, page, type: "movie" });
-  return enrichListMovies(data.movies || [], params.decode_cover !== false);
 }
 
 async function searchGlobal(params) {
@@ -2331,6 +2370,7 @@ async function loadDetail(link) {
     type: "detail",
     mediaType: "movie",
     title: displayTitle,
+    link: movieLink(movie.id || movieId),
     description: safeText(movie.summary || movie.origin_title || "") || undefined,
     videoUrl: playbackUrl,
     playerType: /\.m3u8/i.test(playbackUrl) ? "ijk" : "system",
