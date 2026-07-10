@@ -879,26 +879,26 @@ var JAVDB_SERIES_OPTIONS = [
 ];
 
 var JAVDB_TAG_OPTIONS = [
-  { title: "\u4e2d\u6587\u5b57\u5e55", value: "search:\u4e2d\u6587\u5b57\u5e55" },
+  { title: "中文字幕", value: "search:中文字幕" },
   { title: "VR", value: "search:VR" },
-  { title: "\u5de8\u4e73", value: "search:\u5de8\u4e73" },
-  { title: "\u7f8e\u4e73", value: "search:\u7f8e\u4e73" },
-  { title: "\u4e2d\u51fa", value: "search:\u4e2d\u51fa" },
-  { title: "\u984f\u5c04", value: "search:\u989c\u5c04" },
-  { title: "\u53e3\u4ea4", value: "search:\u53e3\u4ea4" },
-  { title: "\u4eba\u59bb", value: "search:\u4eba\u59bb" },
-  { title: "\u719f\u5973", value: "search:\u719f\u5973" },
-  { title: "\u5b78\u751f", value: "search:\u5b78\u751f" },
+  { title: "巨乳", value: "search:巨乳" },
+  { title: "美乳", value: "search:美乳" },
+  { title: "中出", value: "search:中出" },
+  { title: "颜射", value: "search:颜射" },
+  { title: "口交", value: "search:口交" },
+  { title: "人妻", value: "search:人妻" },
+  { title: "熟女", value: "search:熟女" },
+  { title: "学生", value: "search:學生" },
   { title: "OL", value: "search:OL" },
-  { title: "\u8b77\u58eb", value: "search:\u62a4\u58eb" },
-  { title: "\u6559\u5e2b", value: "search:\u6559\u5e08" },
+  { title: "护士", value: "search:护士" },
+  { title: "教师", value: "search:教师" },
   { title: "NTR", value: "search:NTR" },
   { title: "SM", value: "search:SM" },
-  { title: "\u8abf\u6559", value: "search:\u8c03\u6559" },
-  { title: "\u5c48\u8fb1", value: "search:\u5c48\u8fb1" },
-  { title: "\u65e0\u7801\u6d41\u51fa", value: "search:\u65e0\u7801\u6d41\u51fa" },
-  { title: "\u8fde\u88e4\u889c", value: "search:\u8fde\u88e4\u889c" },
-  { title: "\u7d20\u4eba", value: "search:\u7d20\u4eba" },
+  { title: "调教", value: "search:调教" },
+  { title: "屈辱", value: "search:屈辱" },
+  { title: "无码流出", value: "search:无码流出" },
+  { title: "连裤袜", value: "search:连裤袜" },
+  { title: "素人", value: "search:素人" },
   { title: "FC2", value: "search:FC2" },
 ];
 
@@ -917,15 +917,647 @@ var JAVDB_MAKER_OPTIONS = [
   { title: "HEYZO", value: "search:HEYZO" },
   { title: "万象工厂", value: "search:WANZ" },
   { title: "优质", value: "search:PREMIUM" },
-  { title: "OPAI", value: "search:OPPAI" },
-  { title: "HONNAKA", value: "search:Honnaka" },
+  { title: "OPPAI", value: "search:OPPAI" },
+  { title: "本中", value: "search:Honnaka" },
   { title: "Das!", value: "search:DASDAS" },
-  { title: "本中", value: "search:\u672c\u4e2d" },
+  { title: "本中", value: "search:本中" },
   { title: "维他命", value: "search:Vitamin" },
   { title: "爱丽丝日本", value: "search:Alice Japan" },
 ];
 
 /* @category-options-end */
+var JAVDB_TRAD_TO_SIMP = {
+  體: "体",
+  單: "单",
+  婦: "妇",
+  藝: "艺",
+  職: "职",
+  業: "业",
+  類: "类",
+  時: "时",
+  長: "长",
+  無: "无",
+  碼: "码",
+  標: "标",
+  籤: "签",
+  綠: "绿",
+  綺: "绮",
+  羅: "罗",
+  亞: "亚",
+  結: "结",
+  檸: "柠",
+  學: "学",
+  師: "师",
+  護: "护",
+  臉: "脸",
+  紗: "纱",
+  愛: "爱",
+  韻: "韵",
+  齋: "斋",
+  與: "与",
+  國: "国",
+  東: "东",
+  專: "专",
+  門: "门",
+  開: "开",
+  關: "关",
+  來: "来",
+  對: "对",
+  這: "这",
+  個: "个",
+  們: "们",
+  說: "说",
+  話: "话",
+  視: "视",
+  頻: "频",
+  發: "发",
+  現: "现",
+  網: "网",
+  電: "电",
+  動: "动",
+  畫: "画",
+  裡: "里",
+  後: "后",
+  為: "为",
+  會: "会",
+  過: "过",
+  還: "还",
+  進: "进",
+  達: "达",
+  運: "运",
+  連: "连",
+  遠: "远",
+  選: "选",
+  頭: "头",
+  歲: "岁",
+  從: "从",
+  帶: "带",
+  廣: "广",
+  應: "应",
+  變: "变",
+  讓: "让",
+  機: "机",
+  樣: "样",
+  雙: "双",
+  雞: "鸡",
+  馬: "马",
+  魚: "鱼",
+  鳥: "鸟",
+  龍: "龙",
+  車: "车",
+  風: "风",
+  雲: "云",
+  點: "点",
+  書: "书",
+  買: "买",
+  賣: "卖",
+  貨: "货",
+  質: "质",
+  問: "问",
+  題: "题",
+  聽: "听",
+  聲: "声",
+  響: "响",
+  顏: "颜",
+  顯: "显",
+  顧: "顾",
+  飲: "饮",
+  飯: "饭",
+  養: "养",
+  餘: "余",
+  驚: "惊",
+  驗: "验",
+  髮: "发",
+  鬥: "斗",
+  魯: "鲁",
+  鮮: "鲜",
+  鳳: "凤",
+  鹽: "盐",
+  麗: "丽",
+  麵: "面",
+  黃: "黄",
+  齊: "齐",
+  齒: "齿",
+  龜: "龟",
+  歡: "欢",
+  當: "当",
+  將: "将",
+  戲: "戏",
+  戰: "战",
+  極: "极",
+  樂: "乐",
+  歷: "历",
+  歸: "归",
+  難: "难",
+  雜: "杂",
+  離: "离",
+  雖: "虽",
+  靈: "灵",
+  靜: "静",
+  韓: "韩",
+  頁: "页",
+  預: "预",
+  領: "领",
+  顆: "颗",
+  飛: "飞",
+  餅: "饼",
+  館: "馆",
+  駕: "驾",
+  驅: "驱",
+  鬱: "郁",
+  魷: "鱿",
+  鳴: "鸣",
+  鷹: "鹰",
+  鹹: "咸",
+  麼: "么",
+  齡: "龄",
+  黨: "党",
+  戀: "恋",
+  間: "间",
+  浜: "滨",
+  涼: "凉",
+  歩: "步",
+  彌: "弥",
+  亜: "亚",
+  沖: "冲",
+  岡: "冈",
+  蒼: "苍",
+  絵: "绘",
+  鈴: "铃",
+  実: "实",
+  楓: "枫",
+  內: "内",
+  兩: "两",
+  兒: "儿",
+  賽: "赛",
+  鉤: "钩",
+  異: "异",
+  經: "经",
+  總: "总",
+  縣: "县",
+  繼: "继",
+  續: "续",
+  纖: "纤",
+  聯: "联",
+  聰: "聪",
+  腦: "脑",
+  臨: "临",
+  舊: "旧",
+  華: "华",
+  萬: "万",
+  葉: "叶",
+  著: "着",
+  蔵: "藏",
+  藍: "蓝",
+  處: "处",
+  號: "号",
+  裝: "装",
+  製: "制",
+  複: "复",
+  褲: "裤",
+  見: "见",
+  規: "规",
+  覽: "览",
+  觀: "观",
+  訂: "订",
+  計: "计",
+  記: "记",
+  設: "设",
+  許: "许",
+  試: "试",
+  語: "语",
+  誠: "诚",
+  誤: "误",
+  請: "请",
+  談: "谈",
+  論: "论",
+  講: "讲",
+  謝: "谢",
+  證: "证",
+  識: "识",
+  譯: "译",
+  議: "议",
+  讀: "读",
+  豐: "丰",
+  貝: "贝",
+  負: "负",
+  財: "财",
+  貧: "贫",
+  販: "贩",
+  責: "责",
+  貴: "贵",
+  費: "费",
+  資: "资",
+  賓: "宾",
+  賞: "赏",
+  賠: "赔",
+  賢: "贤",
+  賤: "贱",
+  賬: "账",
+  購: "购",
+  贈: "赠",
+  贊: "赞",
+  贏: "赢",
+  軟: "软",
+  較: "较",
+  載: "载",
+  輕: "轻",
+  輪: "轮",
+  輸: "输",
+  轉: "转",
+  辦: "办",
+  農: "农",
+  迴: "回",
+  違: "违",
+  遺: "遗",
+  邊: "边",
+  鄉: "乡",
+  醫: "医",
+  釋: "释",
+  針: "针",
+  鋼: "钢",
+  錄: "录",
+  錢: "钱",
+  錯: "错",
+  鍵: "键",
+  鎖: "锁",
+  鏡: "镜",
+  鐵: "铁",
+  閃: "闪",
+  閉: "闭",
+  閒: "闲",
+  閣: "阁",
+  閱: "阅",
+  闊: "阔",
+  闡: "阐",
+  陽: "阳",
+  陰: "阴",
+  陳: "陈",
+  陸: "陆",
+  隊: "队",
+  階: "阶",
+  隨: "随",
+  險: "险",
+  隱: "隐",
+  霧: "雾",
+  韋: "韦",
+  頂: "顶",
+  項: "项",
+  順: "顺",
+  須: "须",
+  頒: "颁",
+  頓: "顿",
+  頗: "颇",
+  額: "额",
+  願: "愿",
+  飄: "飘",
+  飾: "饰",
+  餃: "饺",
+  駐: "驻",
+  駛: "驶",
+  騎: "骑",
+  騙: "骗",
+  騰: "腾",
+  鬆: "松",
+  鯨: "鲸",
+  鴻: "鸿",
+  鵝: "鹅",
+  鶴: "鹤",
+  麥: "麦",
+  幹: "干",
+  醜: "丑",
+  獨: "独",
+  獲: "获",
+  產: "产",
+  畢: "毕",
+  疊: "叠",
+  盡: "尽",
+  監: "监",
+  盤: "盘",
+  確: "确",
+  礎: "础",
+  禮: "礼",
+  種: "种",
+  積: "积",
+  穩: "稳",
+  競: "竞",
+  節: "节",
+  範: "范",
+  簡: "简",
+  簽: "签",
+  紀: "纪",
+  紅: "红",
+  純: "纯",
+  紙: "纸",
+  級: "级",
+  細: "细",
+  終: "终",
+  組: "组",
+  絕: "绝",
+  絡: "络",
+  給: "给",
+  統: "统",
+  絲: "丝",
+  綜: "综",
+  維: "维",
+  緊: "紧",
+  緣: "缘",
+  編: "编",
+  練: "练",
+  縮: "缩",
+  績: "绩",
+  織: "织",
+  繪: "绘",
+  罰: "罚",
+  義: "义",
+  習: "习",
+  聖: "圣",
+  聞: "闻",
+  聾: "聋",
+  肅: "肃",
+  脈: "脉",
+  腸: "肠",
+  膠: "胶",
+  興: "兴",
+  舉: "举",
+  艷: "艳",
+  莊: "庄",
+  虧: "亏",
+  衛: "卫",
+  覺: "觉",
+  觸: "触",
+  訊: "讯",
+  訪: "访",
+  詞: "词",
+  詩: "诗",
+  該: "该",
+  詳: "详",
+  認: "认",
+  誘: "诱",
+  誌: "志",
+  調: "调",
+  諸: "诸",
+  諾: "诺",
+  謀: "谋",
+  謂: "谓",
+  謹: "谨",
+  譜: "谱",
+  警: "警",
+  貓: "猫",
+  貫: "贯",
+  賀: "贺",
+  賜: "赐",
+  賦: "赋",
+  賭: "赌",
+  趙: "赵",
+  跡: "迹",
+  踐: "践",
+  軸: "轴",
+  輔: "辅",
+  輩: "辈",
+  轟: "轰",
+  遊: "游",
+  遙: "遥",
+  遜: "逊",
+  適: "适",
+  邏: "逻",
+  郵: "邮",
+  鄭: "郑",
+  鍾: "钟",
+  鑑: "鉴",
+  闆: "板",
+  鬧: "闹",
+  鴨: "鸭",
+  圖: "图",
+  圍: "围",
+  園: "园",
+  壓: "压",
+  壞: "坏",
+  壽: "寿",
+  夢: "梦",
+  奧: "奥",
+  孫: "孙",
+  寧: "宁",
+  實: "实",
+  寬: "宽",
+  寫: "写",
+  尋: "寻",
+  導: "导",
+  層: "层",
+  屬: "属",
+  島: "岛",
+  巖: "岩",
+  帰: "归",
+  幾: "几",
+  廢: "废",
+  廳: "厅",
+  彈: "弹",
+  彥: "彦",
+  徴: "征",
+  復: "复",
+  徹: "彻",
+  徑: "径",
+  惡: "恶",
+  惱: "恼",
+  懷: "怀",
+  懸: "悬",
+  戶: "户",
+  擊: "击",
+  擔: "担",
+  據: "据",
+  擴: "扩",
+  擺: "摆",
+  擾: "扰",
+  攝: "摄",
+  攤: "摊",
+  攪: "搅",
+  敗: "败",
+  數: "数",
+  斷: "断",
+  於: "于",
+  晉: "晋",
+  條: "条",
+  棄: "弃",
+  棟: "栋",
+  榮: "荣",
+  樓: "楼",
+  樹: "树",
+  橋: "桥",
+  檢: "检",
+  權: "权",
+  歐: "欧",
+  殘: "残",
+  殺: "杀",
+  殼: "壳",
+  氣: "气",
+  決: "决",
+  沒: "没",
+  況: "况",
+  測: "测",
+  溫: "温",
+  滿: "满",
+  漢: "汉",
+  潔: "洁",
+  潤: "润",
+  濃: "浓",
+  濕: "湿",
+  濟: "济",
+  濱: "滨",
+  濾: "滤",
+  灣: "湾",
+  熱: "热",
+  燈: "灯",
+  燒: "烧",
+  營: "营",
+  爭: "争",
+  爺: "爷",
+  獎: "奖",
+  盧: "卢",
+  眾: "众",
+  睏: "困",
+  祿: "禄",
+  禍: "祸",
+  禦: "御",
+  穀: "谷",
+  窮: "穷",
+  簾: "帘",
+  紛: "纷",
+  緩: "缓",
+  縱: "纵",
+  繞: "绕",
+  罷: "罢",
+  艦: "舰",
+  艱: "艰",
+  薦: "荐",
+  藏: "藏",
+  螢: "萤",
+  診: "诊",
+  詢: "询",
+  軌: "轨",
+  爛: "烂",
+  獵: "猎",
+  蠻: "蛮",
+  橫: "横",
+  嬌: "娇",
+  羞: "羞",
+  僕: "仆",
+  隸: "隶"
+};
+
+var JAVDB_MAKER_ALIAS = {
+  "ケイ・エム・プロデュース": "KM Produce",
+  "PRESTIGE,プレステージ": "Prestige",
+  "マドンナ(Madonna)": "Madonna",
+  "S1 NO.1 STYLE": "S1 NO.1 STYLE",
+  "センタービレッジ": "Center Village",
+  "クリスタル映像": "Crystal 映像",
+  "ワンズファクトリー": "WANZ FACTORY",
+  "プレミアム": "Premium",
+  "ぎがdeれいん": "Giga",
+  "溜池ゴロー": "溜池五郎",
+  "本中": "本中",
+  "ルビー": "Ruby",
+  "パラダイステレビ": "Paradise TV",
+  "アリスJAPAN": "Alice Japan",
+  "ビッグモーカル": "Big Morkal",
+  "シロウトTV": "素人TV",
+  "ナチュラルハイ": "Natural High",
+  "ディープス": "DEEP'S",
+  "なでしこ": "Nadeshiko",
+  Ideapocket: "IDEA POCKET",
+  "IDEA POCKET": "IDEA POCKET",
+  Honnaka: "本中",
+  HONNAKA: "本中",
+  DASDAS: "Das!",
+  "Das!": "Das!",
+  PREMIUM: "Premium",
+  WANZ: "WANZ FACTORY",
+  OPPAI: "OPPAI",
+  Vitamin: "Vitamine",
+  "Alice Japan": "Alice Japan",
+  "Natural High": "Natural High",
+  Attackers: "Attackers",
+  kawaii: "kawaii",
+  FALENO: "FALENO",
+  MOODYZ: "MOODYZ",
+  SOD: "SOD",
+  "E-BODY": "E-BODY",
+  HEYZO: "HEYZO"
+};
+
+var JAVDB_TAG_ALIAS = {
+  單體作品: "单体作品",
+  單體影片: "单体作品",
+  有碼: "有码",
+  無碼: "无码",
+  含磁鏈: "含磁链",
+  可播放: "可播放"
+};
+
+var JAVDB_LATIN_NAME = /^[A-Za-z0-9\s.\-&'!]+$/;
+
+function javdbToSimplifiedChinese(text) {
+  var out = "";
+  var source = String(text || "");
+  for (var i = 0; i < source.length; i++) {
+    var ch = source.charAt(i);
+    out += JAVDB_TRAD_TO_SIMP[ch] || ch;
+  }
+  return out;
+}
+
+function javdbTranslateMakerLabel(name) {
+  name = String(name || "").replace(/\s+/g, " ").trim();
+  if (!name) return "";
+  if (JAVDB_MAKER_ALIAS[name]) return JAVDB_MAKER_ALIAS[name];
+  var paren = name.match(/\(([^)]+)\)/);
+  if (paren) return String(paren[1]).trim();
+  var parts = name.split(/[,，、]/).map(function (s) { return s.trim(); }).filter(Boolean);
+  if (parts.length > 1) {
+    var latin = null;
+    for (var i = 0; i < parts.length; i++) {
+      if (JAVDB_LATIN_NAME.test(parts[i])) { latin = parts[i]; break; }
+    }
+    if (latin) return latin;
+    for (var j = 0; j < parts.length; j++) {
+      if (/[\u4e00-\u9fff]/.test(parts[j])) return javdbToSimplifiedChinese(parts[j]);
+    }
+  }
+  if (JAVDB_LATIN_NAME.test(name)) return name;
+  if (/[\u4e00-\u9fff]/.test(name)) return javdbToSimplifiedChinese(name);
+  return name;
+}
+
+function javdbTranslateTagLabel(name) {
+  name = String(name || "").replace(/\s+/g, " ").trim();
+  if (!name) return "";
+  if (JAVDB_TAG_ALIAS[name]) return JAVDB_TAG_ALIAS[name];
+  var simp = javdbToSimplifiedChinese(name);
+  if (JAVDB_TAG_ALIAS[simp]) return JAVDB_TAG_ALIAS[simp];
+  return simp;
+}
+
+function javdbDetectLabelKind(pathOrId) {
+  var path = String(pathOrId || "");
+  if (path.indexOf("/makers/") >= 0 || /^maker:/i.test(path)) return "maker";
+  if (path.indexOf("/tags") >= 0 || /^tags\//i.test(path)) return "tag";
+  if (path.indexOf("search:") === 0) {
+    var keyword = path.slice(7);
+    if (/^(Ideapocket|Prestige|Madonna|FALENO|SOD|Attackers|E-?BODY|kawaii|Natural High|HEYZO|WANZ|PREMIUM|OPPAI|Honnaka|DASDAS|Vitamin|Alice Japan)$/i.test(keyword)) {
+      return "maker";
+    }
+    return "tag";
+  }
+  return "";
+}
+
+function javdbTranslateLabelByPath(name, pathOrId) {
+  var kind = javdbDetectLabelKind(pathOrId);
+  if (kind === "maker") return javdbTranslateMakerLabel(name);
+  if (kind === "tag") return javdbTranslateTagLabel(name);
+  return javdbToSimplifiedChinese(name);
+}
+
 
 function firstEnumValue(options) {
   if (!options || !options.length) return "";
@@ -963,7 +1595,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.0.3",
+  version: "2.0.4",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -1422,8 +2054,13 @@ function resolveCategorySearchFallback(params, categoryPath) {
   var slug = cleanPath.split("/").pop() || "";
   if (slug && !/^(censored|uncensored|western|tags|series|makers|actors)$/i.test(slug)) {
     var makerGuess = legacyMakerSlugToSearchKeyword(slug);
-    if (makerGuess) return makerGuess;
-    if (/^[a-z0-9-]+$/i.test(slug)) return slug.replace(/-/g, " ");
+    if (makerGuess) return javdbTranslateMakerLabel(makerGuess);
+    if (/^[a-z0-9-]+$/i.test(slug)) return javdbTranslateMakerLabel(slug.replace(/-/g, " "));
+  }
+  if (cleanPath.indexOf("/tags/") === 0) {
+    var tagSlug = cleanPath.split("/").pop() || "";
+    try { tagSlug = decodeURIComponent(tagSlug); } catch (err2) {}
+    if (tagSlug) return javdbTranslateTagLabel(tagSlug);
   }
   return "";
 }
@@ -2196,6 +2833,7 @@ function lookupCategoryOptionTitle(path) {
   var raw = String(path || "").trim();
   if (!raw) return "";
   var clean = raw.split("?")[0];
+  var ref = parseCategoryParamRef(raw);
   var tables = [JAVDB_TAG_OPTIONS, JAVDB_MAKER_OPTIONS, JAVDB_SERIES_OPTIONS, JAVDB_ACTOR_OPTIONS];
   for (var t = 0; t < tables.length; t++) {
     var opts = tables[t] || [];
@@ -2204,10 +2842,19 @@ function lookupCategoryOptionTitle(path) {
       if (!opt || !opt.value) continue;
       var optValue = String(opt.value);
       var optClean = optValue.split("?")[0];
-      if (optValue === raw || optClean === clean) {
+      if (optValue === raw || optClean === clean || optValue === ref.id || optClean === String(ref.id).split("?")[0]) {
         return String(opt.title || "").trim();
       }
     }
+  }
+  if (ref.title) return javdbTranslateLabelByPath(ref.title, ref.id || clean);
+  if (clean.indexOf("/makers/") === 0 || clean.indexOf("/tags/") === 0 || clean.indexOf("tags/") === 0) {
+    var slug = clean.split("/").pop() || "";
+    try { slug = decodeURIComponent(slug); } catch (err) {}
+    if (slug) return javdbTranslateLabelByPath(slug, clean);
+  }
+  if (raw.indexOf("search:") === 0) {
+    return javdbTranslateLabelByPath(raw.slice(7), raw);
   }
   return "";
 }
@@ -2386,10 +3033,11 @@ function buildPeopleBrowseItem(id, title, avatar, path) {
 }
 
 function buildGenreBrowseItem(genreId, title, poster, path) {
+  var displayTitle = javdbTranslateLabelByPath(title, path || genreId);
   return {
     id: String(genreId),
     type: "url",
-    title: title,
+    title: displayTitle,
     posterPath: poster || "",
     description: "点击查看作品",
   };
@@ -2544,7 +3192,7 @@ async function parseCategoryDetailPage(html, path, params) {
   var base = javdbBase(params);
   var $ = Widget.html.load(html);
   var title = textOf($, $("h2.title strong").first()) || textOf($, $("h2 strong").first()) || path.split("/").pop();
-  title = stripCountSuffix(title);
+  title = javdbTranslateLabelByPath(stripCountSuffix(title), path);
   var avatar = absUrl(attrOf($, $("img.avatar").first(), "src"), base);
   var movies = await fetchMovieList(path, params);
   return sanitizeDetailOutput({
@@ -2624,7 +3272,8 @@ function categoryItemIdFromPath(path, fallbackTitle) {
 function buildDetailGenreItem(title, path) {
   var name = String(title || "").replace(/\s+/g, " ").trim();
   if (!name) return null;
-  return { id: categoryItemIdFromPath(path, name), title: name };
+  var display = javdbTranslateLabelByPath(name, path);
+  return { id: categoryItemIdFromPath(path, name), title: display };
 }
 
 function buildDetailPeopleItem(title, role, avatar, path) {
