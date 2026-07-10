@@ -1538,7 +1538,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.4.1",
+  version: "1.4.2",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1972,29 +1972,38 @@ function buildJdbstaticCoverUrl(movieId) {
   return JDBSTATIC_BASE + "/covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
 }
 
-function resolveListCoverUrl(movie) {
-  const apiCover = movie.cover_url || "";
+function buildJdbstaticSampleUrl(movieId, index) {
+  const id = String(movieId || "").trim();
+  const n = Number(index);
+  if (!id || id.length < 2 || !n || n < 1) return "";
+  return JDBSTATIC_BASE + "/samples/" + id.slice(0, 2).toLowerCase() + "/" + id + "/" + id + "_b" + n + ".jpg";
+}
+
+function resolveSiteCoverUrl(movie) {
+  const apiCover = String(movie.cover_url || "").trim();
   if (apiCover && !/^data:/i.test(apiCover)) return apiCover;
+  return "";
+}
+
+function resolveListCoverUrl(movie) {
+  const site = resolveSiteCoverUrl(movie);
+  if (site) return site;
   const cover = buildJdbstaticCoverUrl(movie.id);
   if (cover) return cover;
-  const apiThumb = movie.thumb_url || "";
+  const apiThumb = String(movie.thumb_url || "").trim();
   if (apiThumb && !/^data:/i.test(apiThumb)) return apiThumb;
   return "";
 }
 
 function resolveDetailBackdropUrl(movie) {
-  return resolveListCoverUrl(movie);
+  return resolveSiteCoverUrl(movie) || resolveListCoverUrl(movie);
 }
 
 function resolveDetailPosterUrl(movie) {
-  const cover = buildJdbstaticCoverUrl(movie.id);
-  if (cover) return cover;
-  const apiCover = movie.cover_url || "";
-  if (apiCover && !/^data:/i.test(apiCover)) return apiCover;
-  return "";
+  return resolveSiteCoverUrl(movie) || buildJdbstaticCoverUrl(movie.id) || "";
 }
 
-function buildAggregationFields(code, title, description) {
+function buildAggregationFields(code, title, description, displayTitle) {
   const matchCode = safeText(code);
   const rawTitle = safeText(title);
   const desc = safeText(description);
@@ -2005,6 +2014,10 @@ function buildAggregationFields(code, title, description) {
     fields.code = matchCode;
     fields.seriesName = matchCode;
     fields.episodeName = matchCode;
+    fields.fileName = matchCode;
+    fields.filename = matchCode;
+    fields.file_name = matchCode;
+    fields.originalName = matchCode;
   }
   if (rawTitle) fields.originalTitle = rawTitle;
   if (matchCode && desc && desc.toUpperCase().indexOf(matchCode.toUpperCase()) < 0) {
@@ -2013,6 +2026,14 @@ function buildAggregationFields(code, title, description) {
     fields.description = desc;
   } else if (matchCode) {
     fields.description = "番号: " + matchCode;
+  }
+  if (matchCode) {
+    fields.info = {
+      name: matchCode,
+      title: safeText(displayTitle) || (matchCode + (rawTitle ? " " + rawTitle : "")),
+      originalTitle: rawTitle || matchCode,
+      originalName: matchCode,
+    };
   }
   return fields;
 }
@@ -2411,14 +2432,14 @@ function collectGalleryUrls(movie) {
     seen[cover] = true;
     urls.push(cover);
   }
-  (movie.preview_images || []).forEach((item) => {
-    const raw = item.large_url || item.medium_url || item.thumb_url || "";
-    if (!raw || /^data:/i.test(raw) || seen[raw]) return;
-    seen[raw] = true;
-    urls.push(raw);
-  });
-  const poster = resolveDetailPosterUrl(movie);
-  if (poster && !seen[poster]) urls.push(poster);
+  const sampleCount = Math.min(Math.max((movie.preview_images || []).length, 1), 12);
+  for (let i = 1; i <= sampleCount; i++) {
+    const url = buildJdbstaticSampleUrl(movie.id, i);
+    if (url && !seen[url]) {
+      seen[url] = true;
+      urls.push(url);
+    }
+  }
   return urls;
 }
 
@@ -2433,7 +2454,7 @@ function mapListMovie(movie) {
   const desc = buildListDescription(movie);
   return Object.assign(
     {
-      id: movie.id,
+      id: code || movie.id,
       type: "url",
       mediaType: "movie",
       title: code ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "") : title,
@@ -2446,7 +2467,7 @@ function mapListMovie(movie) {
       playerType: "system",
       videoId: movie.id,
     },
-    buildAggregationFields(code, title, desc)
+    buildAggregationFields(code, title, desc, code ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "") : title)
   );
 }
 
@@ -2472,7 +2493,7 @@ function mapRelatedMovie(item, fallbackCover) {
   const desc = code ? "番号: " + code : undefined;
   return Object.assign(
     {
-      id: item.id,
+      id: code || item.id,
       type: "url",
       mediaType: "movie",
       title: code || title,
@@ -2481,7 +2502,7 @@ function mapRelatedMovie(item, fallbackCover) {
       description: desc,
       videoId: item.id,
     },
-    buildAggregationFields(code, title, desc)
+    buildAggregationFields(code, title, desc, code || title)
   );
 }
 
@@ -2700,7 +2721,7 @@ async function loadDetail(link) {
 
   return Object.assign(
     {
-      id: movie.id || movieId,
+      id: code || movie.id || movieId,
       type: "detail",
       mediaType: "movie",
       title: displayTitle,
@@ -2742,7 +2763,7 @@ async function loadDetail(link) {
           : {}
       ),
     },
-    buildAggregationFields(code, titleText, summary || buildListDescription(movie))
+    buildAggregationFields(code, titleText, summary || buildListDescription(movie), displayTitle)
   );
 }
 
