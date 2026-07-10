@@ -11,6 +11,7 @@ const JD_SIG_KEY =
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const LINK_PREFIX = "catemby:";
+const JDBSTATIC_BASE = "https://c0.jdbstatic.com";
 
 const MOVIE_TYPE_CODE = { censored: "0", uncensored: "1", western: "2", fc2: "3", all: "0" };
 const CATEGORY_KIND_CODE = { actors: "a", makers: "m", series: "s", tags: "0", directors: "d", codes: "c" };
@@ -1365,6 +1366,19 @@ const CATEMBY_TAG_CATEGORY_OPTIONS = [
   { title: "VR", value: "VR" },
 ];
 
+const CATEMBY_ALL_CATEGORY_OPTIONS = [
+  CATEMBY_ACTOR_OPTIONS,
+  CATEMBY_MAKER_OPTIONS,
+  CATEMBY_TAG_MAIN_OPTIONS,
+  CATEMBY_TAG_SUBJECT_OPTIONS,
+  CATEMBY_TAG_ROLE_OPTIONS,
+  CATEMBY_TAG_CLOTH_OPTIONS,
+  CATEMBY_TAG_BODY_OPTIONS,
+  CATEMBY_TAG_BEHAVIOR_OPTIONS,
+  CATEMBY_TAG_PLAY_OPTIONS,
+  CATEMBY_TAG_CATEGORY_OPTIONS,
+];
+
 const CATEMBY_TRAD_TO_SIMP = {
   體: "体", 單: "单", 婦: "妇", 藝: "艺", 職: "职", 業: "业", 類: "类", 時: "时", 長: "长",
   無: "无", 碼: "码", 標: "标", 籤: "签", 綠: "绿", 綺: "绮", 羅: "罗", 亞: "亚", 結: "结",
@@ -1493,12 +1507,13 @@ function categoryModuleParams(options) {
       title: "影片类型",
       type: "enumeration",
       enumOptions: [
+        { title: "全部", value: "all" },
         { title: "有码", value: "censored" },
         { title: "无码", value: "uncensored" },
         { title: "欧美", value: "western" },
         { title: "FC2", value: "fc2" },
       ],
-      value: "censored",
+      value: "all",
     },
     {
       name: "sort_by",
@@ -1523,7 +1538,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.3.4",
+  version: "1.4.1",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1563,6 +1578,43 @@ WidgetMetadata = {
       cacheDuration: 3600,
       params: [
         {
+          name: "rank_mode",
+          title: "榜单类型",
+          type: "enumeration",
+          enumOptions: [
+            { title: "热播", value: "playback" },
+            { title: "TOP榜", value: "top" },
+          ],
+          value: "playback",
+        },
+        {
+          name: "filter_by",
+          title: "分类",
+          type: "enumeration",
+          belongTo: { paramName: "rank_mode", value: ["playback"] },
+          enumOptions: [
+            { title: "全部", value: "all" },
+            { title: "有码", value: "censored" },
+            { title: "无码", value: "uncensored" },
+            { title: "欧美", value: "western" },
+            { title: "FC2", value: "fc2" },
+          ],
+          value: "all",
+        },
+        {
+          name: "movie_type",
+          title: "影片类型",
+          type: "enumeration",
+          belongTo: { paramName: "rank_mode", value: ["top"] },
+          enumOptions: [
+            { title: "有码", value: "censored" },
+            { title: "无码", value: "uncensored" },
+            { title: "欧美", value: "western" },
+            { title: "FC2", value: "fc2" },
+          ],
+          value: "censored",
+        },
+        {
           name: "period",
           title: "周期",
           type: "enumeration",
@@ -1573,7 +1625,6 @@ WidgetMetadata = {
           ],
           value: "daily",
         },
-        { name: "page", title: "页码", type: "page", value: "1" },
       ],
     },
     {
@@ -1770,9 +1821,61 @@ function parseCategoryPath(path) {
   return { kind: "", id: "" };
 }
 
+function enumOptionsForKind(kind) {
+  if (kind === "actors") return [CATEMBY_ACTOR_OPTIONS];
+  if (kind === "makers") return [CATEMBY_MAKER_OPTIONS];
+  return [
+    CATEMBY_TAG_MAIN_OPTIONS,
+    CATEMBY_TAG_SUBJECT_OPTIONS,
+    CATEMBY_TAG_ROLE_OPTIONS,
+    CATEMBY_TAG_CLOTH_OPTIONS,
+    CATEMBY_TAG_BODY_OPTIONS,
+    CATEMBY_TAG_BEHAVIOR_OPTIONS,
+    CATEMBY_TAG_PLAY_OPTIONS,
+    CATEMBY_TAG_CATEGORY_OPTIONS,
+  ];
+}
+
+function extractEnumValue(raw, preferLists) {
+  if (raw && typeof raw === "object") {
+    if (raw.value != null && raw.value !== "") return extractEnumValue(raw.value, preferLists);
+    if (raw.id != null && raw.id !== "") return extractEnumValue(raw.id, preferLists);
+    if (raw.title != null && raw.title !== "") return extractEnumValue(raw.title, preferLists);
+    return "";
+  }
+  let text = String(raw || "").trim();
+  if (!text || text === "[object Object]") return "";
+  const lists = preferLists || CATEMBY_ALL_CATEGORY_OPTIONS;
+  for (let i = 0; i < lists.length; i++) {
+    const options = lists[i] || [];
+    for (let j = 0; j < options.length; j++) {
+      const opt = options[j];
+      if (!opt) continue;
+      if (opt.value === text || opt.title === text) return String(opt.value || opt.title);
+    }
+  }
+  return text;
+}
+
+function normalizeParamId(raw, preferLists) {
+  let text = extractEnumValue(raw, preferLists);
+  if (!text) return "";
+  const pipe = text.indexOf("|");
+  if (pipe >= 0) text = text.slice(0, pipe);
+  if (text.indexOf(LINK_PREFIX) === 0) {
+    const parsed = parseLinkQuery(text);
+    const cat = parseCategoryPath(parsed.path);
+    if (cat.kind === "tags") return parsed.query.q || cat.id || "";
+    if (cat.id) return cat.id;
+  }
+  text = text.replace(/^\/actors\//, "").replace(/^\/makers\//, "").replace(/^\/series\//, "");
+  return text.split(/[/?#&=]/)[0].trim();
+}
+
 function resolveCategoryContext(params) {
   params = params || {};
   const moduleKind = params.category_kind || "";
+  const preferLists = enumOptionsForKind(moduleKind);
 
   function fromEncodedLink(ref) {
     ref = String(ref || "").trim();
@@ -1797,18 +1900,44 @@ function resolveCategoryContext(params) {
   if (urlRef) return urlRef;
 
   if (params.peopleId) {
-    return { kind: moduleKind || "actors", itemId: String(params.peopleId).trim() };
+    return { kind: moduleKind || "actors", itemId: normalizeParamId(params.peopleId, preferLists) };
   }
   if (params.genreId) {
-    return { kind: moduleKind || "tags", itemId: String(params.genreId).trim() };
+    const kind = moduleKind || (String(params.genreId).indexOf("/makers/") >= 0 ? "makers" : "tags");
+    return { kind: kind, itemId: normalizeParamId(params.genreId, preferLists) };
+  }
+  if (params.item) {
+    const itemId = normalizeParamId(params.item, preferLists);
+    if (itemId) return { kind: moduleKind || "actors", itemId: itemId };
   }
   return { kind: moduleKind || "actors", itemId: "" };
 }
 
+function sanitizeQuery(query) {
+  if (!query) return {};
+  const out = {};
+  Object.keys(query).forEach((key) => {
+    const val = query[key];
+    if (val === undefined || val === null || val === "") return;
+    if (typeof val === "object") return;
+    out[key] = val;
+  });
+  return out;
+}
+
+function normalizeRankPeriod(period) {
+  const p = String(period || "daily").toLowerCase();
+  if (p === "day") return "daily";
+  if (p === "week") return "weekly";
+  if (p === "month") return "monthly";
+  if (p === "daily" || p === "weekly" || p === "monthly") return p;
+  return "daily";
+}
+
 function buildCategoryFilter(kind, itemId, movieType, listFilter) {
   const kindCode = CATEGORY_KIND_CODE[kind] || "0";
-  const typeCode = MOVIE_TYPE_CODE[movieType] || "0";
-  let filterBy = kindCode + ":" + typeCode + ":" + itemId;
+  const typePart = movieType && movieType !== "all" ? MOVIE_TYPE_CODE[movieType] || "0" : "";
+  let filterBy = kindCode + ":" + typePart + ":" + itemId;
   const extra = LIST_FILTER_CODE[listFilter || "all"];
   if (extra) filterBy += ":" + extra;
   return filterBy;
@@ -1831,20 +1960,92 @@ async function fetchCategoryMovies(filterBy, params) {
   return data.movies || [];
 }
 
-async function enrichListMovies(movies, decodeCover) {
-  if (!decodeCover) return movies.map(mapListMovie);
-  const items = movies.map(mapListMovie);
-  await Promise.all(
-    items.map(async (item, index) => {
-      const raw = movies[index].cover_url || movies[index].thumb_url || item.backdropPath;
-      if (!raw) return;
-      const decoded = await decodeImageToDataUri(raw);
-      if (!decoded || decoded === raw) return;
-      item.backdropPath = decoded;
-      item.detailPoster = decoded;
-    })
-  );
-  return items;
+function buildJdbstaticThumbUrl(movieId) {
+  const id = String(movieId || "").trim();
+  if (!id || id.length < 2) return "";
+  return JDBSTATIC_BASE + "/thumbs/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+}
+
+function buildJdbstaticCoverUrl(movieId) {
+  const id = String(movieId || "").trim();
+  if (!id || id.length < 2) return "";
+  return JDBSTATIC_BASE + "/covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+}
+
+function resolveListCoverUrl(movie) {
+  const apiCover = movie.cover_url || "";
+  if (apiCover && !/^data:/i.test(apiCover)) return apiCover;
+  const cover = buildJdbstaticCoverUrl(movie.id);
+  if (cover) return cover;
+  const apiThumb = movie.thumb_url || "";
+  if (apiThumb && !/^data:/i.test(apiThumb)) return apiThumb;
+  return "";
+}
+
+function resolveDetailBackdropUrl(movie) {
+  return resolveListCoverUrl(movie);
+}
+
+function resolveDetailPosterUrl(movie) {
+  const cover = buildJdbstaticCoverUrl(movie.id);
+  if (cover) return cover;
+  const apiCover = movie.cover_url || "";
+  if (apiCover && !/^data:/i.test(apiCover)) return apiCover;
+  return "";
+}
+
+function buildAggregationFields(code, title, description) {
+  const matchCode = safeText(code);
+  const rawTitle = safeText(title);
+  const desc = safeText(description);
+  const fields = {};
+  if (matchCode) {
+    fields.name = matchCode;
+    fields.number = matchCode;
+    fields.code = matchCode;
+    fields.seriesName = matchCode;
+    fields.episodeName = matchCode;
+  }
+  if (rawTitle) fields.originalTitle = rawTitle;
+  if (matchCode && desc && desc.toUpperCase().indexOf(matchCode.toUpperCase()) < 0) {
+    fields.description = matchCode + " " + desc;
+  } else if (desc) {
+    fields.description = desc;
+  } else if (matchCode) {
+    fields.description = "番号: " + matchCode;
+  }
+  return fields;
+}
+
+function buildResolveCodeVariants(code) {
+  const raw = safeText(code);
+  const variants = [];
+  if (raw) variants.push(raw);
+  if (raw) {
+    const upper = raw.toUpperCase();
+    const compact = upper.replace(/[\s_]+/g, "").replace(/-+/g, "-");
+    const noDash = upper.replace(/-/g, "");
+    variants.push(upper, compact, noDash);
+  }
+  const out = [];
+  const seen = {};
+  variants.forEach((item) => {
+    const val = String(item || "").trim();
+    if (!val || seen[val]) return;
+    seen[val] = true;
+    out.push(val);
+  });
+  return out;
+}
+
+function pickResolveVariant(data) {
+  if (!data || data.error || !Array.isArray(data.variants) || !data.variants.length) return null;
+  const picked = data.variants.find((item) => item.variant === "original") || data.variants[0];
+  return picked && picked.sourceUrl ? picked : null;
+}
+
+async function enrichListMovies(movies) {
+  return movies.map(mapListMovie);
 }
 
 function movieLink(id) {
@@ -1869,148 +2070,169 @@ function buildQueryUrl(base, query) {
   return base + (base.indexOf("?") >= 0 ? "&" : "?") + parts.join("&");
 }
 
-function md5Hex(input) {
-  const text = String(input || "");
-  try {
-    if (typeof require === "function") {
-      return require("crypto").createHash("md5").update(text).digest("hex");
-    }
-  } catch (e) {}
-  function add32(a, b) {
-    return (a + b) & 0xffffffff;
+function utf8ToBinary(text) {
+  const raw = String(text || "");
+  if (typeof encodeURIComponent === "function") {
+    try {
+      if (typeof unescape === "function") return unescape(encodeURIComponent(raw));
+    } catch (e) {}
   }
-  function cmn(q, a, b, x, s, t) {
-    a = add32(add32(a, q), add32(x, t));
-    return add32((a << s) | (a >>> (32 - s)), b);
+  let out = "";
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw.charCodeAt(i);
+    if (c < 128) out += String.fromCharCode(c);
+    else if (c < 2048) out += String.fromCharCode(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+    else if (c < 0xd800 || c >= 0xe000) out += String.fromCharCode(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+    else {
+      i++;
+      const c2 = raw.charCodeAt(i);
+      const u = 0x10000 + (((c & 0x3ff) << 10) | (c2 & 0x3ff));
+      out += String.fromCharCode(0xf0 | (u >> 18), 0x80 | ((u >> 12) & 0x3f), 0x80 | ((u >> 6) & 0x3f), 0x80 | (u & 0x3f));
+    }
+  }
+  return out;
+}
+
+function md5BinaryHex(s) {
+  const hc = "0123456789abcdef";
+  function rh(n) {
+    let ss = "";
+    for (let j = 0; j <= 3; j++) {
+      ss += hc.charAt((n >> (j * 8 + 4)) & 0x0f) + hc.charAt((n >> (j * 8)) & 0x0f);
+    }
+    return ss;
+  }
+  function ad(x, y) {
+    const l = (x & 0xffff) + (y & 0xffff);
+    const m = (x >> 16) + (y >> 16) + (l >> 16);
+    return (m << 16) | (l & 0xffff);
+  }
+  function rl(n, c) {
+    return (n << c) | (n >>> (32 - c));
+  }
+  function cm(q, a, b, x, t, s) {
+    return ad(rl(ad(ad(a, q), ad(x, t)), s), b);
   }
   function ff(a, b, c, d, x, s, t) {
-    return cmn((b & c) | (~b & d), a, b, x, s, t);
+    return cm((b & c) | (~b & d), a, b, x, t, s);
   }
   function gg(a, b, c, d, x, s, t) {
-    return cmn((b & d) | (c & ~d), a, b, x, s, t);
+    return cm((b & d) | (c & ~d), a, b, x, t, s);
   }
   function hh(a, b, c, d, x, s, t) {
-    return cmn(b ^ c ^ d, a, b, x, s, t);
+    return cm(b ^ c ^ d, a, b, x, t, s);
   }
   function ii(a, b, c, d, x, s, t) {
-    return cmn(c ^ (b | ~d), a, b, x, s, t);
+    return cm(c ^ (b | ~d), a, b, x, t, s);
   }
-  function md5blk(s) {
-    const md5blks = [];
-    for (let i = 0; i < 64; i += 4) {
-      md5blks[i >> 2] =
-        s.charCodeAt(i) +
-        (s.charCodeAt(i + 1) << 8) +
-        (s.charCodeAt(i + 2) << 16) +
-        (s.charCodeAt(i + 3) << 24);
-    }
-    return md5blks;
-  }
-  function md5cycle(x, k) {
-    let a = x[0];
-    let b = x[1];
-    let c = x[2];
-    let d = x[3];
-    a = ff(a, b, c, d, k[0], 7, -680876936);
-    d = ff(d, a, b, c, k[1], 12, -389564586);
-    c = ff(c, d, a, b, k[2], 17, 606105819);
-    b = ff(b, c, d, a, k[3], 22, -1044525330);
-    a = ff(a, b, c, d, k[4], 7, -176418897);
-    d = ff(d, a, b, c, k[5], 12, 1200080426);
-    c = ff(c, d, a, b, k[6], 17, -1473231341);
-    b = ff(b, c, d, a, k[7], 22, -45705983);
-    a = ff(a, b, c, d, k[8], 7, 1770035416);
-    d = ff(d, a, b, c, k[9], 12, -1958414417);
-    c = ff(c, d, a, b, k[10], 17, -42063);
-    b = ff(b, c, d, a, k[11], 22, -1990404162);
-    a = ff(a, b, c, d, k[12], 7, 1804603682);
-    d = ff(d, a, b, c, k[13], 12, -40341101);
-    c = ff(c, d, a, b, k[14], 17, -1502002290);
-    b = ff(b, c, d, a, k[15], 22, 1236535329);
-    a = gg(a, b, c, d, k[1], 5, -165796510);
-    d = gg(d, a, b, c, k[6], 9, -1069501632);
-    c = gg(c, d, a, b, k[11], 14, 643717713);
-    b = gg(b, c, d, a, k[0], 20, -373897302);
-    a = gg(a, b, c, d, k[5], 5, -701558691);
-    d = gg(d, a, b, c, k[10], 9, 38016083);
-    c = gg(c, d, a, b, k[15], 14, -660478335);
-    b = gg(b, c, d, a, k[4], 20, -405537848);
-    a = gg(a, b, c, d, k[9], 5, 568446438);
-    d = gg(d, a, b, c, k[14], 9, -1019803690);
-    c = gg(c, d, a, b, k[3], 14, -187363961);
-    b = gg(b, c, d, a, k[8], 20, 1163531501);
-    a = hh(a, b, c, d, k[5], 4, -1444681467);
-    d = hh(d, a, b, c, k[8], 11, -51403784);
-    c = hh(c, d, a, b, k[11], 16, 1735328473);
-    b = hh(b, c, d, a, k[14], 23, -1926607734);
-    a = hh(a, b, c, d, k[1], 4, -378558);
-    d = hh(d, a, b, c, k[4], 11, -2022574463);
-    c = hh(c, d, a, b, k[7], 16, 1839030562);
-    b = hh(b, c, d, a, k[10], 23, -35309556);
-    a = hh(a, b, c, d, k[13], 4, -1530992060);
-    d = hh(d, a, b, c, k[0], 11, 1272893353);
-    c = hh(c, d, a, b, k[3], 16, -155497632);
-    b = hh(b, c, d, a, k[6], 23, -1094730640);
-    a = ii(a, b, c, d, k[0], 6, -198630844);
-    d = ii(d, a, b, c, k[7], 10, 1126891415);
-    c = ii(c, d, a, b, k[14], 15, -1416354905);
-    b = ii(b, c, d, a, k[5], 21, -57434055);
-    a = ii(a, b, c, d, k[12], 6, 1700485571);
-    d = ii(d, a, b, c, k[3], 10, -1894986606);
-    c = ii(c, d, a, b, k[10], 15, -1051523);
-    b = ii(b, c, d, a, k[1], 21, -2054922799);
-    a = ii(a, b, c, d, k[8], 6, 1873313359);
-    d = ii(d, a, b, c, k[15], 10, -30611744);
-    c = ii(c, d, a, b, k[6], 15, -1560198380);
-    b = ii(b, c, d, a, k[13], 21, 1309151649);
-    a = ii(a, b, c, d, k[4], 6, -145523070);
-    d = ii(d, a, b, c, k[11], 10, -1120210379);
-    c = ii(c, d, a, b, k[2], 15, 718787259);
-    b = ii(b, c, d, a, k[9], 21, -343485551);
-    x[0] = add32(a, x[0]);
-    x[1] = add32(b, x[1]);
-    x[2] = add32(c, x[2]);
-    x[3] = add32(d, x[3]);
-  }
-  function md51(s) {
-    const n = s.length;
-    const state = [1732584193, -271733879, -1732584194, 271733878];
+  function sb(x, len) {
+    const N = (((len + 8) >> 6) + 1) * 16;
+    const bl = new Array(N);
+    for (let i = 0; i < N; i++) bl[i] = 0;
     let i;
-    for (i = 64; i <= n; i += 64) md5cycle(state, md5blk(s.substring(i - 64, i)));
-    s = s.substring(i - 64);
-    const tail = new Array(16).fill(0);
-    for (i = 0; i < s.length; i++) tail[i >> 2] |= s.charCodeAt(i) << ((i % 4) << 3);
-    tail[i >> 2] |= 0x80 << ((i % 4) << 3);
-    if (i > 55) {
-      md5cycle(state, tail);
-      tail.fill(0);
-    }
-    tail[14] = n * 8;
-    md5cycle(state, tail);
-    return state;
+    for (i = 0; i < len; i++) bl[i >> 2] |= x.charCodeAt(i) << ((i % 4) * 8);
+    bl[i >> 2] |= 0x80 << ((i % 4) * 8);
+    bl[N - 2] = len * 8;
+    bl[N - 1] = len >>> 29;
+    return bl;
   }
-  function rhex(n) {
-    const hex = "0123456789abcdef";
-    let s = "";
-    for (let j = 0; j < 4; j++) {
-      s += hex.charAt((n >> (j * 8 + 4)) & 0x0f) + hex.charAt((n >> (j * 8)) & 0x0f);
-    }
-    return s;
+  let a = 1732584193;
+  let b = -271733879;
+  let c = -1732584194;
+  let d = 271733878;
+  const x = sb(s, s.length);
+  for (let i = 0; i < x.length; i += 16) {
+    const oa = a;
+    const ob = b;
+    const oc = c;
+    const od = d;
+    a = ff(a, b, c, d, x[i + 0], 7, -680876936);
+    d = ff(d, a, b, c, x[i + 1], 12, -389564586);
+    c = ff(c, d, a, b, x[i + 2], 17, 606105819);
+    b = ff(b, c, d, a, x[i + 3], 22, -1044525330);
+    a = ff(a, b, c, d, x[i + 4], 7, -176418897);
+    d = ff(d, a, b, c, x[i + 5], 12, 1200080426);
+    c = ff(c, d, a, b, x[i + 6], 17, -1473231341);
+    b = ff(b, c, d, a, x[i + 7], 22, -45705983);
+    a = ff(a, b, c, d, x[i + 8], 7, 1770035416);
+    d = ff(d, a, b, c, x[i + 9], 12, -1958414417);
+    c = ff(c, d, a, b, x[i + 10], 17, -42063);
+    b = ff(b, c, d, a, x[i + 11], 22, -1990404162);
+    a = ff(a, b, c, d, x[i + 12], 7, 1804603682);
+    d = ff(d, a, b, c, x[i + 13], 12, -40341101);
+    c = ff(c, d, a, b, x[i + 14], 17, -1502002290);
+    b = ff(b, c, d, a, x[i + 15], 22, 1236535329);
+    a = gg(a, b, c, d, x[i + 1], 5, -165796510);
+    d = gg(d, a, b, c, x[i + 6], 9, -1069501632);
+    c = gg(c, d, a, b, x[i + 11], 14, 643717713);
+    b = gg(b, c, d, a, x[i + 0], 20, -373897302);
+    a = gg(a, b, c, d, x[i + 5], 5, -701558691);
+    d = gg(d, a, b, c, x[i + 10], 9, 38016083);
+    c = gg(c, d, a, b, x[i + 15], 14, -660478335);
+    b = gg(b, c, d, a, x[i + 4], 20, -405537848);
+    a = gg(a, b, c, d, x[i + 9], 5, 568446438);
+    d = gg(d, a, b, c, x[i + 14], 9, -1019803690);
+    c = gg(c, d, a, b, x[i + 3], 14, -187363961);
+    b = gg(b, c, d, a, x[i + 8], 20, 1163531501);
+    a = gg(a, b, c, d, x[i + 13], 5, -1444681467);
+    d = gg(d, a, b, c, x[i + 2], 9, -51403784);
+    c = gg(c, d, a, b, x[i + 7], 14, 1735328473);
+    b = gg(b, c, d, a, x[i + 12], 20, -1926607734);
+    a = hh(a, b, c, d, x[i + 5], 4, -378558);
+    d = hh(d, a, b, c, x[i + 8], 11, -2022574463);
+    c = hh(c, d, a, b, x[i + 11], 16, 1839030562);
+    b = hh(b, c, d, a, x[i + 14], 23, -35309556);
+    a = hh(a, b, c, d, x[i + 1], 4, -1530992060);
+    d = hh(d, a, b, c, x[i + 4], 11, 1272893353);
+    c = hh(c, d, a, b, x[i + 7], 16, -155497632);
+    b = hh(b, c, d, a, x[i + 10], 23, -1094730640);
+    a = hh(a, b, c, d, x[i + 13], 4, 681279174);
+    d = hh(d, a, b, c, x[i + 0], 11, -358537222);
+    c = hh(c, d, a, b, x[i + 3], 16, -722521979);
+    b = hh(b, c, d, a, x[i + 6], 23, 76029189);
+    a = hh(a, b, c, d, x[i + 9], 4, -640364487);
+    d = hh(d, a, b, c, x[i + 12], 11, -421815835);
+    c = hh(c, d, a, b, x[i + 15], 16, 530742520);
+    b = hh(b, c, d, a, x[i + 2], 23, -995338651);
+    a = ii(a, b, c, d, x[i + 0], 6, -198630844);
+    d = ii(d, a, b, c, x[i + 7], 10, 1126891415);
+    c = ii(c, d, a, b, x[i + 14], 15, -1416354905);
+    b = ii(b, c, d, a, x[i + 5], 21, -57434055);
+    a = ii(a, b, c, d, x[i + 12], 6, 1700485571);
+    d = ii(d, a, b, c, x[i + 3], 10, -1894986606);
+    c = ii(c, d, a, b, x[i + 10], 15, -1051523);
+    b = ii(b, c, d, a, x[i + 1], 21, -2054922799);
+    a = ii(a, b, c, d, x[i + 8], 6, 1873313359);
+    d = ii(d, a, b, c, x[i + 15], 10, -30611744);
+    c = ii(c, d, a, b, x[i + 6], 15, -1560198380);
+    b = ii(b, c, d, a, x[i + 13], 21, 1309151649);
+    a = ii(a, b, c, d, x[i + 4], 6, -145523070);
+    d = ii(d, a, b, c, x[i + 11], 10, -1120210379);
+    c = ii(c, d, a, b, x[i + 2], 15, 718787259);
+    b = ii(b, c, d, a, x[i + 9], 21, -343485551);
+    a = ad(a, oa);
+    b = ad(b, ob);
+    c = ad(c, oc);
+    d = ad(d, od);
   }
-  const state = md51(unescape(encodeURIComponent(text)));
-  return rhex(state[0]) + rhex(state[1]) + rhex(state[2]) + rhex(state[3]);
+  return rh(a) + rh(b) + rh(c) + rh(d);
+}
+
+function md5Hex(input, asciiOnly) {
+  const text = String(input || "");
+  return md5BinaryHex(asciiOnly ? text : utf8ToBinary(text));
 }
 
 function buildJdSignature() {
   const ts = Math.floor(Date.now() / 1000).toString();
-  return ts + "." + JD_SIG_SALT + "." + md5Hex(ts + JD_SIG_KEY);
+  return ts + "." + JD_SIG_SALT + "." + md5Hex(ts + JD_SIG_KEY, true);
 }
 
 function apiHeaders(extra) {
   return Object.assign(
     {
-      Accept: "application/json",
-      "User-Agent": UA,
+      accept: "application/json",
+      "user-agent": "Mozilla/5.0",
       jdsignature: buildJdSignature(),
     },
     extra || {}
@@ -2029,26 +2251,47 @@ function siteHeaders(extra) {
   );
 }
 
-async function apiGet(pathname, query) {
-  const url = buildQueryUrl(API_BASE + pathname, query);
-  const resp = await Widget.http.get(url, { headers: apiHeaders() });
-  const status = resp && (resp.status || resp.statusCode);
-  if (status && Number(status) >= 400) {
-    throw new Error("API HTTP " + status + ": " + pathname);
+async function widgetHttpGet(url, headerFactory, retry) {
+  retry = retry || 0;
+  try {
+    const resp = await Widget.http.get(url, { headers: headerFactory() });
+    const status = resp && (resp.status || resp.statusCode);
+    if (status && Number(status) >= 400) {
+      let action = "";
+      try {
+        const body = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
+        action = (body && (body.action || body.message)) || "";
+      } catch (e) {}
+      if (retry < 2 && (Number(status) === 400 || /signature|expired|签名/i.test(action))) {
+        return widgetHttpGet(url, headerFactory, retry + 1);
+      }
+      throw new Error("HTTP " + status + (action ? " (" + action + ")" : "") + ": " + url);
+    }
+    return resp;
+  } catch (error) {
+    const msg = String((error && error.message) || error || "");
+    if (retry < 2 && /400|403|unacceptable|signature|expired|签名/i.test(msg)) {
+      return widgetHttpGet(url, headerFactory, retry + 1);
+    }
+    throw error;
   }
+}
+
+async function apiGet(pathname, query) {
+  const url = buildQueryUrl(API_BASE + pathname, sanitizeQuery(query));
+  const resp = await widgetHttpGet(url, apiHeaders);
   const data = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
   if (!data || data.success !== 1) {
-    throw new Error((data && data.message) || "API 请求失败");
+    throw new Error((data && data.message) || "API 请求失败: " + pathname);
   }
   return data.data;
 }
 
-async function siteGet(path, query) {
-  const url = buildQueryUrl(siteUrl(path), query);
-  const resp = await Widget.http.get(url, { headers: siteHeaders() });
-  if (!resp || !resp.data) return null;
+function parseSiteResponseData(resp) {
+  if (!resp || resp.data === undefined || resp.data === null) return null;
   if (typeof resp.data === "string") {
     const text = resp.data.trim();
+    if (!text) return null;
     if (text.startsWith("{") || text.startsWith("[")) {
       try {
         return JSON.parse(text);
@@ -2059,6 +2302,30 @@ async function siteGet(path, query) {
     return null;
   }
   return resp.data;
+}
+
+async function siteGet(path, query, options) {
+  options = options || {};
+  const url = buildQueryUrl(siteUrl(path), sanitizeQuery(query));
+  let resp = null;
+  try {
+    if (options.allowError) {
+      resp = await Widget.http.get(url, { headers: siteHeaders() });
+      const status = resp && (resp.status || resp.statusCode);
+      if (status && Number(status) >= 400) return parseSiteResponseData(resp);
+    } else {
+      resp = await widgetHttpGet(url, siteHeaders);
+    }
+  } catch (error) {
+    if (options.allowError) {
+      const errResp = (error && (error.response || error)) || null;
+      const parsed = parseSiteResponseData(errResp);
+      if (parsed) return parsed;
+      return null;
+    }
+    throw error;
+  }
+  return parseSiteResponseData(resp);
 }
 
 function detectImageMime(bytes) {
@@ -2139,14 +2406,19 @@ async function decodeImageToDataUri(url) {
 function collectGalleryUrls(movie) {
   const urls = [];
   const seen = {};
+  const cover = resolveDetailBackdropUrl(movie);
+  if (cover) {
+    seen[cover] = true;
+    urls.push(cover);
+  }
   (movie.preview_images || []).forEach((item) => {
-    const url = item.large_url || item.thumb_url || "";
-    if (url && !seen[url]) {
-      seen[url] = true;
-      urls.push(url);
-    }
+    const raw = item.large_url || item.medium_url || item.thumb_url || "";
+    if (!raw || /^data:/i.test(raw) || seen[raw]) return;
+    seen[raw] = true;
+    urls.push(raw);
   });
-  if (!urls.length && movie.cover_url) urls.push(movie.cover_url);
+  const poster = resolveDetailPosterUrl(movie);
+  if (poster && !seen[poster]) urls.push(poster);
   return urls;
 }
 
@@ -2157,23 +2429,25 @@ function buildPreviewClipUrl(code) {
 function mapListMovie(movie) {
   const code = safeText(movie.number || movie.id);
   const title = safeText(movie.title || code);
-  const cover = movie.cover_url || movie.thumb_url || "";
-  const gallery = collectGalleryUrls(movie);
-  const poster = gallery[0] || cover;
-  return {
-    id: movie.id,
-    type: "url",
-    mediaType: "movie",
-    title: code ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "") : title,
-    backdropPath: poster,
-    detailPoster: poster || undefined,
-    link: movieLink(movie.id),
-    description: buildListDescription(movie),
-    releaseDate: movie.release_date || "",
-    durationText: movie.duration ? movie.duration + " 分钟" : "",
-    rating: Number(movie.score || 0) || 0,
-    playerType: "system",
-  };
+  const cover = resolveListCoverUrl(movie);
+  const desc = buildListDescription(movie);
+  return Object.assign(
+    {
+      id: movie.id,
+      type: "url",
+      mediaType: "movie",
+      title: code ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "") : title,
+      backdropPath: cover,
+      link: movieLink(movie.id),
+      description: desc,
+      releaseDate: movie.release_date || "",
+      durationText: movie.duration ? movie.duration + " 分钟" : "",
+      rating: Number(movie.score || 0) || 0,
+      playerType: "system",
+      videoId: movie.id,
+    },
+    buildAggregationFields(code, title, desc)
+  );
 }
 
 function buildListDescription(movie) {
@@ -2187,16 +2461,28 @@ function buildListDescription(movie) {
 }
 
 function mapRelatedMovie(item, fallbackCover) {
-  const cover = item.thumb_url || item.cover_url || fallbackCover || "";
-  return {
-    id: item.id,
-    type: "url",
-    mediaType: "movie",
-    title: safeText(item.number || item.title || item.id),
-    backdropPath: cover || undefined,
-    link: movieLink(item.id),
-    description: item.number ? "番号: " + item.number : undefined,
-  };
+  const cover =
+    item.cover_url ||
+    buildJdbstaticCoverUrl(item.id) ||
+    item.thumb_url ||
+    fallbackCover ||
+    "";
+  const code = safeText(item.number || item.id);
+  const title = safeText(item.title || code);
+  const desc = code ? "番号: " + code : undefined;
+  return Object.assign(
+    {
+      id: item.id,
+      type: "url",
+      mediaType: "movie",
+      title: code || title,
+      backdropPath: cover || undefined,
+      link: movieLink(item.id),
+      description: desc,
+      videoId: item.id,
+    },
+    buildAggregationFields(code, title, desc)
+  );
 }
 
 function parseDetailMeta(movie) {
@@ -2244,10 +2530,25 @@ function parseDetailMeta(movie) {
 
 async function resolveFullVideo(code, lang) {
   if (!code) return null;
-  const data = await siteGet("/api/v/resolve", { code, lang: lang || "zh" });
-  if (!data || !Array.isArray(data.variants) || !data.variants.length) return null;
-  const picked = data.variants.find((item) => item.variant === "original") || data.variants[0];
-  return picked && picked.sourceUrl ? picked : null;
+  const codes = buildResolveCodeVariants(code);
+  for (let i = 0; i < codes.length; i++) {
+    const data = await siteGet("/api/v/resolve", { code: codes[i], lang: lang || "zh" }, { allowError: true });
+    const picked = pickResolveVariant(data);
+    if (picked) return picked;
+    if (data && data.error === "video_not_found") return null;
+  }
+  return null;
+}
+
+function extractMovieId(link) {
+  const parsed = parseLinkQuery(link);
+  let raw = String(parsed.path || "").trim();
+  if (raw.indexOf(LINK_PREFIX) === 0) raw = decodeLink(raw);
+  raw = raw.replace(/^\//, "");
+  const match = raw.match(/(?:^|\/)movie\/([^/?#]+)/i);
+  if (match) return match[1];
+  if (raw && raw.indexOf("/") < 0 && raw.indexOf("?") < 0) return raw;
+  throw new Error("无效的影片链接: " + link);
 }
 
 function buildTrailers(movie, cover) {
@@ -2269,7 +2570,7 @@ async function loadLatest(params) {
     const page = Number(params.page || params.from || 1);
     const filterBy = String(params.filter_by || "all");
     const data = await apiGet("/v1/movies/latest", { page, filter_by: filterBy });
-    return enrichListMovies(data.movies || [], params.decode_cover !== false);
+    return enrichListMovies(data.movies || []);
   } catch (error) {
     console.error("[catemby] loadLatest 失败:", error.message || error);
     throw error;
@@ -2280,7 +2581,7 @@ async function loadRecommend(params) {
   try {
     params = params || {};
     const data = await apiGet("/v1/movies/recommend");
-    return enrichListMovies(data.movies || [], params.decode_cover !== false);
+    return enrichListMovies(data.movies || []);
   } catch (error) {
     console.error("[catemby] loadRecommend 失败:", error.message || error);
     throw error;
@@ -2290,11 +2591,37 @@ async function loadRecommend(params) {
 async function loadRankings(params) {
   try {
     params = params || {};
-    const page = Number(params.page || params.from || 1);
-    const period = String(params.period || "daily");
-    const movieType = MOVIE_TYPE_CODE[params.movie_type || "censored"] || "0";
-    const data = await apiGet("/v1/rankings", { page, period, type: movieType });
-    return enrichListMovies(data.movies || [], params.decode_cover !== false);
+    const period = normalizeRankPeriod(params.period);
+    const mode = String(params.rank_mode || "playback").toLowerCase();
+    let data = null;
+    let lastError = null;
+
+    if (mode === "top") {
+      const typeCode = MOVIE_TYPE_CODE[params.movie_type || "censored"] || "0";
+      try {
+        data = await apiGet("/v1/rankings", { type: typeCode, period: period });
+      } catch (error) {
+        lastError = error;
+      }
+    } else {
+      const filterBy = String(params.filter_by || "all");
+      try {
+        data = await apiGet("/v1/rankings/playback", { filter_by: filterBy, period: period });
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (!data) {
+      const typeCode = MOVIE_TYPE_CODE[params.movie_type || params.filter_by || "censored"] || "0";
+      try {
+        data = await apiGet("/v1/rankings", { type: typeCode, period: period });
+      } catch (error) {
+        throw lastError || error;
+      }
+    }
+
+    return enrichListMovies(data.movies || []);
   } catch (error) {
     console.error("[catemby] loadRankings 失败:", error.message || error);
     throw error;
@@ -2307,14 +2634,14 @@ async function loadPage(params) {
     const ctx = resolveCategoryContext(params);
     if (!ctx.itemId) throw new Error("请选择分类项");
 
-    const movieType = params.movie_type || "censored";
+    const movieType = params.movie_type || "all";
     const filterBy = buildCategoryFilter(ctx.kind, ctx.itemId, movieType, params.list_filter || "all");
     const movies = await fetchCategoryMovies(filterBy, params);
     if (!movies.length && ctx.kind === "makers") {
       const searchData = await apiGet("/v2/search", { q: ctx.itemId, page: Number(params.page || 1), type: "movie" });
-      return enrichListMovies(searchData.movies || [], params.decode_cover !== false);
+      return enrichListMovies(searchData.movies || []);
     }
-    return enrichListMovies(movies, params.decode_cover !== false);
+    return enrichListMovies(movies);
   } catch (error) {
     console.error("[catemby] loadPage 失败:", error.message || error);
     throw error;
@@ -2330,7 +2657,7 @@ async function searchMovies(params) {
     }
     const page = Number(params.page || params.from || 1);
     const data = await apiGet("/v2/search", { q: keyword, page, type: "movie" });
-    return enrichListMovies(data.movies || [], params.decode_cover !== false);
+    return enrichListMovies(data.movies || []);
   } catch (error) {
     console.error("[catemby] searchMovies 失败:", error.message || error);
     throw error;
@@ -2342,89 +2669,81 @@ async function searchGlobal(params) {
 }
 
 async function loadDetail(link) {
+  const movieId = extractMovieId(link);
   const parsed = parseLinkQuery(link);
-  const raw = parsed.path;
-  let movieId = raw;
-  const match = raw.match(/\/movie\/([^/?#]+)/i);
-  if (match) movieId = match[1];
-  if (!movieId || movieId.indexOf("/") >= 0) throw new Error("无效的影片链接");
-
-  const videoMode = String(parsed.query.mode || parsed.query.video_mode || "preview").toLowerCase();
+  const videoMode = String(parsed.query.mode || parsed.query.video_mode || "full").toLowerCase();
+  const preferPreview = videoMode === "preview" || videoMode === "trailer";
 
   const detail = await apiGet("/v4/movies/" + movieId);
   const movie = detail.movie || {};
-  const galleryRaw = collectGalleryUrls(movie);
-  const coverRaw = galleryRaw[0] || movie.cover_url || movie.thumb_url || "";
-  const galleryDecoded = [];
-  for (let i = 0; i < galleryRaw.length; i++) {
-    galleryDecoded.push(await decodeImageToDataUri(galleryRaw[i]));
-  }
-  const cover = galleryDecoded[0] || (coverRaw ? await decodeImageToDataUri(coverRaw) : "");
+  const fullVideoPromise = movie.number && !preferPreview ? resolveFullVideo(movie.number, "zh") : Promise.resolve(null);
+
+  const coverUrl = resolveDetailBackdropUrl(movie);
+  const posterUrl = resolveDetailPosterUrl(movie);
+  const galleryUrls = collectGalleryUrls(movie);
   const meta = parseDetailMeta(movie);
   const actorMovies = (movie.actor_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
   const fallbackRelated = (movie.relative_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
   const relatedSource = actorMovies.length ? actorMovies : fallbackRelated;
-  const relatedItems = relatedSource.map((item) => mapRelatedMovie(item, coverRaw));
+  const relatedItems = relatedSource.map((item) => mapRelatedMovie(item, posterUrl || coverUrl));
 
-  const previewUrl = movie.preview_video_url || buildPreviewClipUrl(movie.number);
-  const trailers = buildTrailers(movie, cover || coverRaw);
-  let fullVideo = null;
-  if (movie.can_play || movie.number) {
-    fullVideo = await resolveFullVideo(movie.number, "zh");
-  }
-
-  const preferFull = videoMode === "full" || videoMode === "complete";
-  const playbackUrl = preferFull
-    ? (fullVideo && fullVideo.sourceUrl) || previewUrl || ""
-    : previewUrl || (fullVideo && fullVideo.sourceUrl) || "";
-  if (!playbackUrl) throw new Error("无法获取有效的播放地址");
+  const previewUrl = movie.preview_video_url || "";
+  const fullVideo = await fullVideoPromise;
+  const fullUrl = fullVideo && fullVideo.sourceUrl ? fullVideo.sourceUrl : "";
+  const playbackUrl = preferPreview ? previewUrl || fullUrl || "" : fullUrl || previewUrl || "";
+  const trailers = buildTrailers(movie, posterUrl || coverUrl);
 
   const code = safeText(movie.number || movieId);
   const titleText = safeText(movie.title || code);
   const displayTitle = code && titleText.indexOf(code) !== 0 ? code + " " + titleText : titleText;
+  const summary = safeText(movie.summary || movie.origin_title || "");
 
-  return {
-    id: movie.id || movieId,
-    type: "detail",
-    mediaType: "movie",
-    title: displayTitle,
-    link: movieLink(movie.id || movieId),
-    description: safeText(movie.summary || movie.origin_title || "") || undefined,
-    videoUrl: playbackUrl,
-    playerType: /\.m3u8/i.test(playbackUrl) ? "ijk" : "system",
-    customHeaders: {
-      "User-Agent": UA,
-      Referer: SITE_BASE + "/movie/" + movieId,
-      Origin: SITE_BASE,
-    },
-    coverUrl: cover || coverRaw,
-    posterPath: cover || coverRaw,
-    detailPoster: cover || coverRaw,
-    backdropPath: cover || coverRaw,
-    image: cover || coverRaw,
-    backdropPaths: galleryDecoded.length ? galleryDecoded : galleryRaw,
-    genreItems: meta.genreItems.length ? meta.genreItems : undefined,
-    peoples: meta.peoples.length ? meta.peoples : undefined,
-    relatedItems,
-    trailers,
-    previewUrl: previewUrl || "",
-    releaseDate: movie.release_date || "",
-    durationText: movie.duration ? movie.duration + " 分钟" : "",
-    rating: Number(movie.score || 0) || 0,
-    extra: Object.assign(
-      {
-        videoMode: preferFull ? "full" : "preview",
-        previewVideoUrl: previewUrl || "",
+  return Object.assign(
+    {
+      id: movie.id || movieId,
+      type: "detail",
+      mediaType: "movie",
+      title: displayTitle,
+      link: movieLink(movie.id || movieId),
+      description: summary || undefined,
+      videoUrl: playbackUrl || undefined,
+      playerType: playbackUrl && /\.m3u8/i.test(playbackUrl) ? "ijk" : "system",
+      customHeaders: {
+        "User-Agent": UA,
+        Referer: SITE_BASE + "/movie/" + movieId,
+        Origin: SITE_BASE,
       },
-      fullVideo
-        ? {
-            fullVideoUrl: fullVideo.sourceUrl,
-            fullVideoLabel: fullVideo.label || fullVideo.variant || "完整视频",
-            fullVideoType: fullVideo.sourceType || "video/mp4",
-          }
-        : {}
-    ),
-  };
+      backdropPath: coverUrl,
+      posterPath: posterUrl,
+      detailPoster: posterUrl,
+      backdropPaths: galleryUrls.length ? galleryUrls : coverUrl ? [coverUrl] : [],
+      genreItems: meta.genreItems.length ? meta.genreItems : undefined,
+      peoples: meta.peoples.length ? meta.peoples : undefined,
+      relatedItems,
+      trailers,
+      previewUrl: previewUrl || "",
+      releaseDate: movie.release_date || "",
+      durationText: movie.duration ? movie.duration + " 分钟" : "",
+      rating: Number(movie.score || 0) || 0,
+      videoId: movie.id || movieId,
+      extra: Object.assign(
+        {
+          videoMode: fullUrl ? "full" : previewUrl ? "preview" : "none",
+          previewVideoUrl: previewUrl || "",
+          fullVideoAvailable: !!fullUrl,
+        },
+        !fullUrl && movie.number ? { resolveNote: "站点未收录完整片源(" + movie.number + ")" } : {},
+        fullVideo
+          ? {
+              fullVideoUrl: fullVideo.sourceUrl,
+              fullVideoLabel: fullVideo.label || fullVideo.variant || "完整视频",
+              fullVideoType: fullVideo.sourceType || "video/mp4",
+            }
+          : {}
+      ),
+    },
+    buildAggregationFields(code, titleText, summary || buildListDescription(movie))
+  );
 }
 
 function normalizeCode(value) {
@@ -2520,23 +2839,7 @@ async function loadResource(params) {
     const movie = detail.movie || matched;
     const sources = [];
     const referer = SITE_BASE + "/movie/" + movie.id;
-
-    if (movie.preview_video_url) {
-      sources.push({
-        name: "Catemby 预告(HLS)",
-        description: "番号：" + code + "\n类型：预览视频",
-        url: movie.preview_video_url,
-        customHeaders: { "User-Agent": UA, Referer: referer, Origin: SITE_BASE },
-      });
-    }
-
-    const previewClip = buildPreviewClipUrl(movie.number || code);
-    sources.push({
-      name: "Catemby 预告(MP4)",
-      description: "番号：" + code + "\n类型：预览短片",
-      url: previewClip,
-      customHeaders: { "User-Agent": UA, Referer: referer, Origin: SITE_BASE },
-    });
+    const headers = { "User-Agent": UA, Referer: referer, Origin: SITE_BASE };
 
     const fullVideo = await resolveFullVideo(movie.number || code, "zh");
     if (fullVideo && fullVideo.sourceUrl) {
@@ -2544,7 +2847,16 @@ async function loadResource(params) {
         name: "Catemby 完整(" + (fullVideo.label || "原版") + ")",
         description: "番号：" + code + "\n类型：完整视频",
         url: fullVideo.sourceUrl,
-        customHeaders: { "User-Agent": UA, Referer: referer, Origin: SITE_BASE },
+        customHeaders: headers,
+      });
+    }
+
+    if (movie.preview_video_url) {
+      sources.push({
+        name: "Catemby 预告(HLS)",
+        description: "番号：" + code + "\n类型：预览视频（完整片不可用时的备选）",
+        url: movie.preview_video_url,
+        customHeaders: headers,
       });
     }
 
