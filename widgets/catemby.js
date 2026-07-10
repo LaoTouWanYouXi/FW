@@ -7,10 +7,10 @@ WidgetMetadata = {
   id: "catemby_legacy",
   title: "Catemby遗产",
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
-  author: "Cursor",
+  author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
   version: "1.3.0",
-  requiredVersion: "0.0.2",
+  requiredVersion: "0.0.1",
   detailCacheDuration: 60,
   modules: [
     {
