@@ -1538,7 +1538,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.4.2",
+  version: "1.4.3",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1972,17 +1972,22 @@ function buildJdbstaticCoverUrl(movieId) {
   return JDBSTATIC_BASE + "/covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
 }
 
-function buildJdbstaticSampleUrl(movieId, index) {
-  const id = String(movieId || "").trim();
-  const n = Number(index);
-  if (!id || id.length < 2 || !n || n < 1) return "";
-  return JDBSTATIC_BASE + "/samples/" + id.slice(0, 2).toLowerCase() + "/" + id + "/" + id + "_b" + n + ".jpg";
-}
-
 function resolveSiteCoverUrl(movie) {
   const apiCover = String(movie.cover_url || "").trim();
   if (apiCover && !/^data:/i.test(apiCover)) return apiCover;
   return "";
+}
+
+function resolveSiteThumbUrl(movie) {
+  const apiThumb = String(movie.thumb_url || "").trim();
+  if (apiThumb && !/^data:/i.test(apiThumb)) return apiThumb;
+  return "";
+}
+
+function resolveListThumbUrl(movie) {
+  const site = resolveSiteThumbUrl(movie);
+  if (site) return site;
+  return buildJdbstaticThumbUrl(movie.id) || "";
 }
 
 function resolveListCoverUrl(movie) {
@@ -1990,17 +1995,15 @@ function resolveListCoverUrl(movie) {
   if (site) return site;
   const cover = buildJdbstaticCoverUrl(movie.id);
   if (cover) return cover;
-  const apiThumb = String(movie.thumb_url || "").trim();
-  if (apiThumb && !/^data:/i.test(apiThumb)) return apiThumb;
-  return "";
+  return resolveListThumbUrl(movie);
 }
 
 function resolveDetailBackdropUrl(movie) {
-  return resolveSiteCoverUrl(movie) || resolveListCoverUrl(movie);
+  return resolveListThumbUrl(movie) || resolveListCoverUrl(movie);
 }
 
 function resolveDetailPosterUrl(movie) {
-  return resolveSiteCoverUrl(movie) || buildJdbstaticCoverUrl(movie.id) || "";
+  return resolveListThumbUrl(movie) || resolveListCoverUrl(movie);
 }
 
 function buildAggregationFields(code, title, description, displayTitle) {
@@ -2427,17 +2430,18 @@ async function decodeImageToDataUri(url) {
 function collectGalleryUrls(movie) {
   const urls = [];
   const seen = {};
-  const cover = resolveDetailBackdropUrl(movie);
-  if (cover) {
-    seen[cover] = true;
-    urls.push(cover);
-  }
-  const sampleCount = Math.min(Math.max((movie.preview_images || []).length, 1), 12);
-  for (let i = 1; i <= sampleCount; i++) {
-    const url = buildJdbstaticSampleUrl(movie.id, i);
-    if (url && !seen[url]) {
-      seen[url] = true;
-      urls.push(url);
+  (movie.preview_images || []).forEach((item) => {
+    const raw = String((item && item.large_url) || "").trim();
+    if (!raw || /^data:/i.test(raw) || seen[raw]) return;
+    seen[raw] = true;
+    urls.push(raw);
+  });
+  if (!urls.length) {
+    const thumb = resolveListThumbUrl(movie);
+    if (thumb) urls.push(thumb);
+    else {
+      const cover = resolveListCoverUrl(movie);
+      if (cover) urls.push(cover);
     }
   }
   return urls;
