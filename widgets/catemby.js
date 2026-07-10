@@ -1523,7 +1523,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.3.3",
+  version: "1.3.4",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1856,6 +1856,19 @@ function siteUrl(path) {
   return SITE_BASE + p;
 }
 
+function buildQueryUrl(base, query) {
+  if (!query) return base;
+  const parts = [];
+  Object.keys(query).forEach((key) => {
+    const val = query[key];
+    if (val !== undefined && val !== null && val !== "") {
+      parts.push(encodeURIComponent(key) + "=" + encodeURIComponent(String(val)));
+    }
+  });
+  if (!parts.length) return base;
+  return base + (base.indexOf("?") >= 0 ? "&" : "?") + parts.join("&");
+}
+
 function md5Hex(input) {
   const text = String(input || "");
   try {
@@ -2017,8 +2030,12 @@ function siteHeaders(extra) {
 }
 
 async function apiGet(pathname, query) {
-  const url = API_BASE + pathname;
-  const resp = await Widget.http.get(url, { headers: apiHeaders(), params: query || {} });
+  const url = buildQueryUrl(API_BASE + pathname, query);
+  const resp = await Widget.http.get(url, { headers: apiHeaders() });
+  const status = resp && (resp.status || resp.statusCode);
+  if (status && Number(status) >= 400) {
+    throw new Error("API HTTP " + status + ": " + pathname);
+  }
   const data = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
   if (!data || data.success !== 1) {
     throw new Error((data && data.message) || "API 请求失败");
@@ -2027,8 +2044,8 @@ async function apiGet(pathname, query) {
 }
 
 async function siteGet(path, query) {
-  const url = siteUrl(path);
-  const resp = await Widget.http.get(url, { headers: siteHeaders(), params: query || {} });
+  const url = buildQueryUrl(siteUrl(path), query);
+  const resp = await Widget.http.get(url, { headers: siteHeaders() });
   if (!resp || !resp.data) return null;
   if (typeof resp.data === "string") {
     const text = resp.data.trim();
@@ -2275,7 +2292,8 @@ async function loadRankings(params) {
     params = params || {};
     const page = Number(params.page || params.from || 1);
     const period = String(params.period || "daily");
-    const data = await apiGet("/v1/movies/rankings", { page, period });
+    const movieType = MOVIE_TYPE_CODE[params.movie_type || "censored"] || "0";
+    const data = await apiGet("/v1/rankings", { page, period, type: movieType });
     return enrichListMovies(data.movies || [], params.decode_cover !== false);
   } catch (error) {
     console.error("[catemby] loadRankings 失败:", error.message || error);
