@@ -3,215 +3,6 @@
  * 数据源：JavDB API + catemby 站点播放解析
  */
 
-WidgetMetadata = {
-  id: "catemby_legacy",
-  title: "Catemby遗产",
-  description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
-  author: "老头",
-  site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.3.0",
-  requiredVersion: "0.0.1",
-  detailCacheDuration: 60,
-  modules: [
-    {
-      id: "latest",
-      title: "最新",
-      functionName: "loadLatest",
-      cacheDuration: 1800,
-      params: [
-        {
-          name: "filter_by",
-          title: "分类",
-          type: "enumeration",
-          enumOptions: [
-            { title: "全部", value: "all" },
-            { title: "有码", value: "censored" },
-            { title: "无码", value: "uncensored" },
-            { title: "欧美", value: "western" },
-            { title: "FC2", value: "fc2" },
-          ],
-          value: "all",
-        },
-        { name: "page", title: "页码", type: "page", value: "1" },
-      ],
-    },
-    {
-      id: "recommend",
-      title: "推荐",
-      functionName: "loadRecommend",
-      cacheDuration: 3600,
-      params: [{ name: "page", title: "页码", type: "page", value: "1" }],
-    },
-    {
-      id: "rankings",
-      title: "排行榜",
-      functionName: "loadRankings",
-      cacheDuration: 3600,
-      params: [
-        {
-          name: "period",
-          title: "周期",
-          type: "enumeration",
-          enumOptions: [
-            { title: "日榜", value: "daily" },
-            { title: "周榜", value: "weekly" },
-            { title: "月榜", value: "monthly" },
-          ],
-          value: "daily",
-        },
-        { name: "page", title: "页码", type: "page", value: "1" },
-      ],
-    },
-    {
-      id: "actors",
-      title: "演员",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryModuleParams({
-        paramName: "peopleId",
-        itemTitle: "选择演员",
-        kind: "actors",
-        enumOptions: CATEMBY_ACTOR_OPTIONS,
-      }),
-    },
-    {
-      id: "makers",
-      title: "片商",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryModuleParams({
-        paramName: "genreId",
-        itemTitle: "选择片商",
-        kind: "makers",
-        enumOptions: CATEMBY_MAKER_OPTIONS,
-      }),
-    },
-    {
-      id: "tag_main",
-      title: "基本",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryModuleParams({
-        paramName: "genreId",
-        itemTitle: "选择标签",
-        kind: "tags",
-        enumOptions: CATEMBY_TAG_MAIN_OPTIONS,
-      }),
-    },
-    {
-      id: "tag_subject",
-      title: "主题",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryModuleParams({
-        paramName: "genreId",
-        itemTitle: "选择标签",
-        kind: "tags",
-        enumOptions: CATEMBY_TAG_SUBJECT_OPTIONS,
-      }),
-    },
-    {
-      id: "tag_role",
-      title: "角色",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryModuleParams({
-        paramName: "genreId",
-        itemTitle: "选择标签",
-        kind: "tags",
-        enumOptions: CATEMBY_TAG_ROLE_OPTIONS,
-      }),
-    },
-    {
-      id: "tag_cloth",
-      title: "服装",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryModuleParams({
-        paramName: "genreId",
-        itemTitle: "选择标签",
-        kind: "tags",
-        enumOptions: CATEMBY_TAG_CLOTH_OPTIONS,
-      }),
-    },
-    {
-      id: "tag_body",
-      title: "体型",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryModuleParams({
-        paramName: "genreId",
-        itemTitle: "选择标签",
-        kind: "tags",
-        enumOptions: CATEMBY_TAG_BODY_OPTIONS,
-      }),
-    },
-    {
-      id: "tag_behavior",
-      title: "行为",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryModuleParams({
-        paramName: "genreId",
-        itemTitle: "选择标签",
-        kind: "tags",
-        enumOptions: CATEMBY_TAG_BEHAVIOR_OPTIONS,
-      }),
-    },
-    {
-      id: "tag_play_method",
-      title: "玩法",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryModuleParams({
-        paramName: "genreId",
-        itemTitle: "选择标签",
-        kind: "tags",
-        enumOptions: CATEMBY_TAG_PLAY_OPTIONS,
-      }),
-    },
-    {
-      id: "tag_category",
-      title: "类别",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryModuleParams({
-        paramName: "genreId",
-        itemTitle: "选择标签",
-        kind: "tags",
-        enumOptions: CATEMBY_TAG_CATEGORY_OPTIONS,
-      }),
-    },
-    {
-      id: "search",
-      title: "搜索",
-      functionName: "searchMovies",
-      cacheDuration: 1800,
-      params: [
-        { name: "keyword", title: "关键词", type: "input", value: "" },
-        { name: "page", title: "页码", type: "page", value: "1" },
-      ],
-    },
-    {
-      id: "loadResource",
-      title: "Catemby 播放源",
-      description: "通过番号匹配预告片与完整影片播放源",
-      functionName: "loadResource",
-      type: "stream",
-      cacheDuration: 600,
-      params: [],
-    },
-  ],
-  search: {
-    title: "全局搜索",
-    functionName: "searchGlobal",
-    params: [
-      { name: "keyword", title: "关键词", type: "input", value: "" },
-      { name: "page", title: "页码", type: "page", value: "1" },
-    ],
-  },
-};
-
 const SITE_BASE = "https://catembylegacy.fastcdn.dpdns.org";
 const API_BASE = "https://jdforrepam.com/api";
 const JD_SIG_SALT = "lpw6vgqzsp";
@@ -1725,6 +1516,215 @@ function categoryModuleParams(options) {
   ];
 }
 
+
+WidgetMetadata = {
+  id: "catemby_legacy",
+  title: "Catemby遗产",
+  description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
+  author: "老头",
+  site: "https://catembylegacy.fastcdn.dpdns.org",
+  version: "1.3.1",
+  requiredVersion: "0.0.2",
+  detailCacheDuration: 60,
+  modules: [
+    {
+      id: "latest",
+      title: "最新",
+      functionName: "loadLatest",
+      cacheDuration: 1800,
+      params: [
+        {
+          name: "filter_by",
+          title: "分类",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "all" },
+            { title: "有码", value: "censored" },
+            { title: "无码", value: "uncensored" },
+            { title: "欧美", value: "western" },
+            { title: "FC2", value: "fc2" },
+          ],
+          value: "all",
+        },
+        { name: "page", title: "页码", type: "page", value: "1" },
+      ],
+    },
+    {
+      id: "recommend",
+      title: "推荐",
+      functionName: "loadRecommend",
+      cacheDuration: 3600,
+      params: [{ name: "page", title: "页码", type: "page", value: "1" }],
+    },
+    {
+      id: "rankings",
+      title: "排行榜",
+      functionName: "loadRankings",
+      cacheDuration: 3600,
+      params: [
+        {
+          name: "period",
+          title: "周期",
+          type: "enumeration",
+          enumOptions: [
+            { title: "日榜", value: "daily" },
+            { title: "周榜", value: "weekly" },
+            { title: "月榜", value: "monthly" },
+          ],
+          value: "daily",
+        },
+        { name: "page", title: "页码", type: "page", value: "1" },
+      ],
+    },
+    {
+      id: "actors",
+      title: "演员",
+      functionName: "loadPage",
+      cacheDuration: 3600,
+      params: categoryModuleParams({
+        paramName: "peopleId",
+        itemTitle: "选择演员",
+        kind: "actors",
+        enumOptions: CATEMBY_ACTOR_OPTIONS,
+      }),
+    },
+    {
+      id: "makers",
+      title: "片商",
+      functionName: "loadPage",
+      cacheDuration: 3600,
+      params: categoryModuleParams({
+        paramName: "genreId",
+        itemTitle: "选择片商",
+        kind: "makers",
+        enumOptions: CATEMBY_MAKER_OPTIONS,
+      }),
+    },
+    {
+      id: "tag_main",
+      title: "基本",
+      functionName: "loadPage",
+      cacheDuration: 3600,
+      params: categoryModuleParams({
+        paramName: "genreId",
+        itemTitle: "选择标签",
+        kind: "tags",
+        enumOptions: CATEMBY_TAG_MAIN_OPTIONS,
+      }),
+    },
+    {
+      id: "tag_subject",
+      title: "主题",
+      functionName: "loadPage",
+      cacheDuration: 3600,
+      params: categoryModuleParams({
+        paramName: "genreId",
+        itemTitle: "选择标签",
+        kind: "tags",
+        enumOptions: CATEMBY_TAG_SUBJECT_OPTIONS,
+      }),
+    },
+    {
+      id: "tag_role",
+      title: "角色",
+      functionName: "loadPage",
+      cacheDuration: 3600,
+      params: categoryModuleParams({
+        paramName: "genreId",
+        itemTitle: "选择标签",
+        kind: "tags",
+        enumOptions: CATEMBY_TAG_ROLE_OPTIONS,
+      }),
+    },
+    {
+      id: "tag_cloth",
+      title: "服装",
+      functionName: "loadPage",
+      cacheDuration: 3600,
+      params: categoryModuleParams({
+        paramName: "genreId",
+        itemTitle: "选择标签",
+        kind: "tags",
+        enumOptions: CATEMBY_TAG_CLOTH_OPTIONS,
+      }),
+    },
+    {
+      id: "tag_body",
+      title: "体型",
+      functionName: "loadPage",
+      cacheDuration: 3600,
+      params: categoryModuleParams({
+        paramName: "genreId",
+        itemTitle: "选择标签",
+        kind: "tags",
+        enumOptions: CATEMBY_TAG_BODY_OPTIONS,
+      }),
+    },
+    {
+      id: "tag_behavior",
+      title: "行为",
+      functionName: "loadPage",
+      cacheDuration: 3600,
+      params: categoryModuleParams({
+        paramName: "genreId",
+        itemTitle: "选择标签",
+        kind: "tags",
+        enumOptions: CATEMBY_TAG_BEHAVIOR_OPTIONS,
+      }),
+    },
+    {
+      id: "tag_play_method",
+      title: "玩法",
+      functionName: "loadPage",
+      cacheDuration: 3600,
+      params: categoryModuleParams({
+        paramName: "genreId",
+        itemTitle: "选择标签",
+        kind: "tags",
+        enumOptions: CATEMBY_TAG_PLAY_OPTIONS,
+      }),
+    },
+    {
+      id: "tag_category",
+      title: "类别",
+      functionName: "loadPage",
+      cacheDuration: 3600,
+      params: categoryModuleParams({
+        paramName: "genreId",
+        itemTitle: "选择标签",
+        kind: "tags",
+        enumOptions: CATEMBY_TAG_CATEGORY_OPTIONS,
+      }),
+    },
+    {
+      id: "search",
+      title: "搜索",
+      functionName: "searchMovies",
+      cacheDuration: 1800,
+      params: [
+        { name: "keyword", title: "关键词", type: "input", value: "" },
+        { name: "page", title: "页码", type: "page", value: "1" },
+      ],
+    },
+    {
+      id: "loadResource",
+      title: "Catemby 播放源",
+      description: "通过番号匹配预告片与完整影片播放源",
+      functionName: "loadResource",
+      type: "stream",
+      cacheDuration: 600,
+      params: [],
+    },
+  ],
+  search: {
+    title: "全局搜索",
+    functionName: "searchGlobal",
+    params: [
+      { name: "keyword", title: "关键词", type: "input", value: "" },
+      { name: "page", title: "页码", type: "page", value: "1" },
+    ],
+  },
+};
 function safeText(str) {
   return String(str || "").replace(/\s+/g, " ").trim();
 }
