@@ -1595,7 +1595,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.0.6",
+  version: "2.0.7",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2677,8 +2677,8 @@ function resolvePortraitFallbackForList(portraitUrl) {
   return upgradeJavdbCoverUrl(portraitUrl);
 }
 
-function isRankingsDailyDmmSmallList(params) {
-  return String((params && params.listCoverStyle) || "") === "dmm-small";
+function isRankingsDailyDmmLargeList(params) {
+  return String((params && params.listCoverStyle) || "") === "dmm-large";
 }
 
 function resolveDefaultListBackdropPath(code, fallbackCover, videoId) {
@@ -2690,8 +2690,8 @@ function resolveDefaultListBackdropPath(code, fallbackCover, videoId) {
   return fallbackCover || "";
 }
 
-function resolveDmmSmallListBackdropPath(code, fallbackCover, videoId) {
-  var urls = code ? pickSyncHdCoverUrls(code, "small") : [];
+function resolveDmmLargeListBackdropPath(code, fallbackCover, videoId) {
+  var urls = code ? pickSyncHdCoverUrls(code, "large") : [];
   if (urls[0]) return urls[0];
   return resolveDefaultListBackdropPath(code, fallbackCover, videoId);
 }
@@ -2776,8 +2776,8 @@ function isJdbstaticImageUrl(url) {
 
 function resolveListBackdropPath(code, fallbackCover, videoId, params) {
   params = params || {};
-  if (isRankingsDailyDmmSmallList(params)) {
-    return resolveDmmSmallListBackdropPath(code, fallbackCover, videoId);
+  if (isRankingsDailyDmmLargeList(params)) {
+    return resolveDmmLargeListBackdropPath(code, fallbackCover, videoId);
   }
   return resolveDefaultListBackdropPath(code, fallbackCover, videoId);
 }
@@ -3035,8 +3035,8 @@ function enrichMovieItems(rawItems, params) {
     var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId, forList: true }, params);
     var backdropPath = covers.listBackdrop || "";
     if (!backdropPath) {
-      backdropPath = isRankingsDailyDmmSmallList(params)
-        ? resolveDmmSmallListBackdropPath(raw.code, raw.fallbackCover, raw.videoId)
+      backdropPath = isRankingsDailyDmmLargeList(params)
+        ? resolveDmmLargeListBackdropPath(raw.code, raw.fallbackCover, raw.videoId)
         : resolveDefaultListBackdropPath(raw.code, raw.fallbackCover, raw.videoId);
     }
     items.push(Object.assign(
@@ -3707,7 +3707,7 @@ async function loadLatest(params) {
 async function loadRankings(params) {
   var period = String((params && params.period) || "daily");
   var listParams = Object.assign({}, params || {});
-  if (period === "daily") listParams.listCoverStyle = "dmm-small";
+  if (period === "daily") listParams.listCoverStyle = "dmm-large";
   return loadBrowseList("/rankings/movies?period=" + encodeURIComponent(period), listParams);
 }
 
