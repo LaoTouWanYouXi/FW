@@ -2652,12 +2652,10 @@ function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
   };
 }
 
-function buildCoverBundle(code, fallbackCover, options, params) {
-  options = options || {};
-  var pageCover = resolvePageCover(fallbackCover, options.videoId);
+function buildDetailCoverBundle(code) {
   var hdCovers = buildCoverUrlsFromVideoId(code);
-  var hdBackdrop = hdCovers.backdropUrl || pageCover;
-  var hdPoster = pageCover || hdCovers.posterUrl || pageCover;
+  var hdPoster = hdCovers.posterUrl || "";
+  var hdBackdrop = hdCovers.backdropUrl || hdPoster || "";
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
 }
 
@@ -2681,27 +2679,6 @@ async function resolveListCoverBundle(code, fallbackCover, options, params) {
 function buildDetailBackdropPaths(displayCode) {
   var jtMeta = fetchJavTrailersMeta(displayCode);
   return compactUniqueUrls([jtMeta.backdropPath].concat(jtMeta.backdropPaths || [])).filter(Boolean);
-}
-
-function extractBestImageUrl($, node, base) {
-  if (!node || !node.length) return "";
-  var dataSrc = attrOf($, node, "data-src") || attrOf($, node, "data-original");
-  var src = attrOf($, node, "src");
-  var srcset = attrOf($, node, "srcset");
-  var best = dataSrc || src;
-  if (srcset) {
-    var parts = srcset.split(",");
-    for (var i = parts.length - 1; i >= 0; i--) {
-      var piece = String(parts[i] || "")
-        .trim()
-        .split(/\s+/)[0];
-      if (piece) {
-        best = piece;
-        break;
-      }
-    }
-  }
-  return upgradeJavdbImageUrl(absUrl(best, base));
 }
 
 function enrichDetailLinks(item, pageUrl, displayCode, cover, currentPath, params) {
@@ -3392,8 +3369,6 @@ async function parseDetailPage(html, link, params) {
     code = textOf($, $("span.value").first());
   }
 
-  var videoId = path.split("/").pop() || path;
-
   var description = textOf($, $("#introduction dd p").first());
   if (!description) {
     description = textOf($, $("h2.title.is-4 strong").first());
@@ -3420,21 +3395,18 @@ async function parseDetailPage(html, link, params) {
     rating = parseRatingText(textOf($, scoreNode.parent()));
   }
 
-  var cover = extractBestImageUrl($, $("img.video-cover").first(), base);
-
   var displayCode = resolveMatchCode(code, title, description);
   var displayTitle = formatDisplayTitle(displayCode, title);
   var matchFields = buildGuangyaMatchFields(displayCode, title || displayTitle, description);
-  var fallbackCover = cover || resolveJavdbCoverUrl("", videoId);
   params = getEffectiveParams(params);
 
   var detailMeta = parseDetailMeta($, base);
   var genreItems = detailMeta.genreItems;
   var peoples = detailMeta.peoples;
 
-  var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
+  var coverBundle = buildDetailCoverBundle(displayCode);
   var allBackdropPaths = buildDetailBackdropPaths(displayCode);
-  var trailers = parseTrailersFromHtml($, base, displayCode, coverBundle.backdropPath || fallbackCover);
+  var trailers = parseTrailersFromHtml($, base, displayCode, coverBundle.backdropPath || coverBundle.posterPath);
 
   return enrichDetailLinks(
     Object.assign(
