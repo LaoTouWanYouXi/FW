@@ -1593,7 +1593,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.1.8",
+  version: "2.1.9",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2273,7 +2273,7 @@ function buildDmmContentIdVariants(parts) {
   var ordered = [];
 
   if (prefix === "IESP") {
-    ordered = [monoPlain, legacyDigital, plainMono, plainDigital];
+    ordered = [legacyDigital, plainDigital, monoPlain, plainMono];
   } else if (makerPrefix.indexOf("h_") === 0) {
     ordered = [legacyDigital, monoPlain, plainDigital, plainMono];
   } else {
@@ -2311,11 +2311,10 @@ function buildMgstageCoverCandidatesFromParts(parts, rule) {
 function buildDmmMonoCoverCandidatesForId(contentId) {
   var id = String(contentId || "").toLowerCase();
   if (!id) return { posterCandidates: [], backdropCandidates: [] };
-  var picsBase = "https://pics.dmm.co.jp/mono/movie/adult/" + id;
   var awsBase = "https://awsimgsrc.dmm.co.jp/pics/mono/movie/adult/" + id;
   return {
-    posterCandidates: compactUniqueUrls([picsBase + "/" + id + "ps.jpg", awsBase + "/" + id + "ps.jpg"]),
-    backdropCandidates: compactUniqueUrls([picsBase + "/" + id + "pl.jpg", awsBase + "/" + id + "pl.jpg"]),
+    posterCandidates: compactUniqueUrls([awsBase + "/" + id + "ps.jpg"]),
+    backdropCandidates: compactUniqueUrls([awsBase + "/" + id + "pl.jpg"]),
   };
 }
 
@@ -2323,15 +2322,9 @@ function buildDmmDigitalCoverCandidatesForId(contentId) {
   var id = String(contentId || "").toLowerCase();
   if (!id) return { posterCandidates: [], backdropCandidates: [] };
   var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id;
-  var picsBase = "https://pics.dmm.co.jp/digital/video/" + id;
   return {
-    posterCandidates: compactUniqueUrls([
-      awsBase + "/" + id + "ps.jpg",
-      picsBase + "/" + id + "ps.jpg",
-      awsBase + "/" + id + "jp-1.jpg",
-      picsBase + "/" + id + "jp-1.jpg",
-    ]),
-    backdropCandidates: compactUniqueUrls([awsBase + "/" + id + "pl.jpg", picsBase + "/" + id + "pl.jpg"]),
+    posterCandidates: compactUniqueUrls([awsBase + "/" + id + "ps.jpg", awsBase + "/" + id + "jp-1.jpg"]),
+    backdropCandidates: compactUniqueUrls([awsBase + "/" + id + "pl.jpg"]),
   };
 }
 
@@ -2538,7 +2531,6 @@ function filterTrustedCdnUrls(urls) {
     var value = String(url || "");
     if (/image\.mgstage\.com/i.test(value)) return true;
     if (/awsimgsrc\.dmm\.co\.jp/i.test(value)) return true;
-    if (/pics\.dmm\.co\.jp\/mono\/movie\/adult\//i.test(value)) return true;
     return false;
   });
 }
