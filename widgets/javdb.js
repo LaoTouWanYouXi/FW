@@ -2267,7 +2267,12 @@ function buildDmmCoverCandidatesFromParts(parts) {
   var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
   var picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
   return {
-    posterCandidates: compactUniqueUrls([awsBase + "/" + contentId + "ps.jpg", picsBase + "/" + contentId + "ps.jpg"]),
+    posterCandidates: compactUniqueUrls([
+      awsBase + "/" + contentId + "ps.jpg",
+      picsBase + "/" + contentId + "ps.jpg",
+      awsBase + "/" + contentId + "jp-1.jpg",
+      picsBase + "/" + contentId + "jp-1.jpg",
+    ]),
     backdropCandidates: compactUniqueUrls([awsBase + "/" + contentId + "pl.jpg", picsBase + "/" + contentId + "pl.jpg"]),
   };
 }
@@ -2381,13 +2386,23 @@ function upgradeJavdbImageUrl(url) {
 }
 
 var COVER_VERIFY_MIN_BYTES = 8000;
+var POSTER_VERIFY_MIN_BYTES = 35000;
 var COVER_VERIFY_TIMEOUT_MS = 1500;
+
+function normalizeJavdbCoverUrl(url) {
+  var cover = String(url || "").trim();
+  if (!cover) return "";
+  var at = cover.indexOf("@");
+  if (at >= 0) cover = cover.slice(0, at);
+  return cover;
+}
 
 function isInvalidCoverTarget(url) {
   var u = String(url || "").toLowerCase();
   if (!u) return true;
   if (u.indexOf("now_printing") >= 0) return true;
   if (u.indexOf("/noimage/") >= 0) return true;
+  if (/adult_pl\.jpg(\?|$)/i.test(u)) return true;
   return false;
 }
 
@@ -2430,8 +2445,9 @@ function extractPosterFinalUrl(resp, url) {
   return String(url || "");
 }
 
-async function verifyCoverUrl(url, params) {
+async function verifyCoverUrl(url, params, minBytes) {
   if (!url || isInvalidCoverTarget(url)) return "";
+  minBytes = minBytes || COVER_VERIFY_MIN_BYTES;
   params = getEffectiveParams(params || {});
   try {
     var resp = await Widget.http.get(url, {
@@ -2444,17 +2460,17 @@ async function verifyCoverUrl(url, params) {
     if (!isCoverVerifyResponseOk(resp)) return "";
     var size = parseCoverContentLength(resp);
     if (!size) size = posterResponseSize(resp && resp.data);
-    if (size > 0 && size < COVER_VERIFY_MIN_BYTES) return "";
+    if (size > 0 && size < minBytes) return "";
     return url;
   } catch (err) {
     return "";
   }
 }
 
-async function resolveFirstVerifiedCoverUrl(urls, params) {
+async function resolveFirstVerifiedCoverUrl(urls, params, minBytes) {
   urls = compactUniqueUrls(urls || []).slice(0, 4);
   for (var i = 0; i < urls.length; i++) {
-    var verified = await verifyCoverUrl(urls[i], params);
+    var verified = await verifyCoverUrl(urls[i], params, minBytes);
     if (verified) return verified;
   }
   return "";
@@ -2615,13 +2631,14 @@ function buildJavdbCoverFromVideoId(videoId) {
 }
 
 function resolveJavdbCoverUrl(fallbackCover, videoId) {
-  var upgraded = upgradeJavdbImageUrl(fallbackCover);
-  var fromId = buildJavdbCoverFromVideoId(videoId);
-  return upgraded || fromId || fallbackCover || "";
+  var fromId = normalizeJavdbCoverUrl(buildJavdbCoverFromVideoId(videoId));
+  var upgraded = normalizeJavdbCoverUrl(upgradeJavdbImageUrl(fallbackCover));
+  if (fromId) return fromId;
+  return upgraded || normalizeJavdbCoverUrl(fallbackCover) || "";
 }
 
 function resolvePageCover(fallbackCover, videoId) {
-  return resolveJavdbCoverUrl(fallbackCover, videoId) || upgradeJavdbImageUrl(fallbackCover) || "";
+  return resolveJavdbCoverUrl(fallbackCover, videoId) || normalizeJavdbCoverUrl(upgradeJavdbImageUrl(fallbackCover)) || "";
 }
 
 function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
@@ -2635,7 +2652,16 @@ function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
   };
 }
 
-async function resolveCoverBundle(code, fallbackCover, options, params) {
+function buildCoverBundle(code, fallbackCover, options, params) {
+  options = options || {};
+  var pageCover = resolvePageCover(fallbackCover, options.videoId);
+  var hdCovers = buildCoverUrlsFromVideoId(code);
+  var hdBackdrop = hdCovers.backdropUrl || pageCover;
+  var hdPoster = pageCover || hdCovers.posterUrl || pageCover;
+  return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
+}
+
+async function resolveListCoverBundle(code, fallbackCover, options, params) {
   options = options || {};
   params = getEffectiveParams(params || {});
   var pageCover = resolvePageCover(fallbackCover, options.videoId);
@@ -2647,20 +2673,14 @@ async function resolveCoverBundle(code, fallbackCover, options, params) {
     return buildCoverBundleFromUrls(pageCover, pageCover);
   }
 
-  var hdBackdrop = await resolveFirstVerifiedCoverUrl(backdropUrls, params);
-  var hdPoster = await resolveFirstVerifiedCoverUrl(posterUrls, params);
+  var hdBackdrop = await resolveFirstVerifiedCoverUrl(backdropUrls, params, COVER_VERIFY_MIN_BYTES);
+  var hdPoster = await resolveFirstVerifiedCoverUrl(posterUrls, params, POSTER_VERIFY_MIN_BYTES);
   return buildCoverBundleFromUrls(hdPoster || pageCover, hdBackdrop || pageCover);
 }
 
-async function buildDetailBackdropPaths(displayCode, params) {
+function buildDetailBackdropPaths(displayCode) {
   var jtMeta = fetchJavTrailersMeta(displayCode);
-  var urls = compactUniqueUrls([jtMeta.backdropPath].concat(jtMeta.backdropPaths || []));
-  var verified = [];
-  for (var i = 0; i < urls.length && verified.length < 12; i++) {
-    var ok = await verifyCoverUrl(urls[i], params);
-    if (ok) verified.push(ok);
-  }
-  return verified;
+  return compactUniqueUrls([jtMeta.backdropPath].concat(jtMeta.backdropPaths || [])).filter(Boolean);
 }
 
 function extractBestImageUrl($, node, base) {
@@ -2871,7 +2891,7 @@ async function enrichMovieItems(rawItems, params) {
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = await resolveCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId }, params);
+    var covers = await resolveListCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId }, params);
     items.push(Object.assign(
       {
         id: raw.id,
@@ -3412,8 +3432,8 @@ async function parseDetailPage(html, link, params) {
   var genreItems = detailMeta.genreItems;
   var peoples = detailMeta.peoples;
 
-  var coverBundle = await resolveCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
-  var allBackdropPaths = await buildDetailBackdropPaths(displayCode, params);
+  var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
+  var allBackdropPaths = buildDetailBackdropPaths(displayCode);
   var trailers = parseTrailersFromHtml($, base, displayCode, coverBundle.backdropPath || fallbackCover);
 
   return enrichDetailLinks(
