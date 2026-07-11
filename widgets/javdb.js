@@ -1595,7 +1595,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.1.3",
+  version: "2.0.8",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2019,19 +2019,6 @@ function isValidCategoryBrowsePath(path) {
   return false;
 }
 
-function getText(value) {
-  if (value == null || value === "") return "";
-  if (typeof value === "object") {
-    if (value.title != null && String(value.title).trim()) {
-      return String(value.title).replace(/\s+/g, " ").trim();
-    }
-    if (value.name != null && String(value.name).trim()) {
-      return String(value.name).replace(/\s+/g, " ").trim();
-    }
-  }
-  return String(value).replace(/\s+/g, " ").trim();
-}
-
 function resolveCategorySearchFallback(params, categoryPath) {
   params = params || {};
   if (params.categoryTitle) {
@@ -2041,7 +2028,7 @@ function resolveCategorySearchFallback(params, categoryPath) {
 
   var fields = [params.genreTitle, params.peopleTitle, params.filterTitle, params.item, params.title, params.name];
   for (var i = 0; i < fields.length; i++) {
-    var text = getText(fields[i]);
+    var text = String(fields[i] == null ? "" : fields[i]).replace(/\s+/g, " ").trim();
     if (!text) continue;
     if (text.indexOf("/") === 0 || text.indexOf(DETAIL_SEARCH_PREFIX) === 0) continue;
     if (text.indexOf(CATEGORY_ID_TITLE_SEP) >= 0) continue;
@@ -2295,71 +2282,24 @@ function buildMgstageCoverCandidatesFromParts(parts, rule) {
   };
 }
 
-function buildDmmContentIdCandidates(code) {
-  var ids = [];
-  function add(value) {
-    var id = String(value || "").toLowerCase().trim();
-    if (!id || ids.indexOf(id) >= 0) return;
-    ids.push(id);
-  }
-  var parts = parseJavCodeParts(code);
-  if (parts) {
-    add(parts.code);
-    add(parts.plainCode);
-  }
-  add(buildDmmContentIdFromDvdId(code));
-  return ids;
-}
-
 function buildDmmCoverCandidatesFromParts(parts) {
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
-  var contentIds = [];
-  function addId(value) {
-    var id = String(value || "").toLowerCase().trim();
-    if (!id || contentIds.indexOf(id) >= 0) return;
-    contentIds.push(id);
-  }
-  addId(parts.code);
-  addId(parts.plainCode);
-  if (!contentIds.length) return { posterCandidates: [], backdropCandidates: [] };
-  var posterCandidates = [];
-  var backdropCandidates = [];
-  for (var i = 0; i < contentIds.length; i++) {
-    var contentId = contentIds[i];
-    var picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
-    var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
-    posterCandidates.push(picsBase + "/" + contentId + "ps.jpg", awsBase + "/" + contentId + "ps.jpg");
-    backdropCandidates.push(picsBase + "/" + contentId + "pl.jpg", awsBase + "/" + contentId + "pl.jpg");
-  }
+  var contentId = String(parts.code || "").toLowerCase();
+  if (!contentId) return { posterCandidates: [], backdropCandidates: [] };
+  var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
+  var picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
   return {
-    posterCandidates: compactUniqueUrls(posterCandidates),
-    backdropCandidates: compactUniqueUrls(backdropCandidates),
-  };
-}
-
-function buildDmmCoverCandidatesFromCode(code) {
-  var parts = parseJavCodeParts(code);
-  if (parts && MGSTAGE_COVER_RULES[parts.prefix]) {
-    return buildMgstageCoverCandidatesFromParts(parts, MGSTAGE_COVER_RULES[parts.prefix]);
-  }
-  var posterCandidates = [];
-  var backdropCandidates = [];
-  var contentIds = buildDmmContentIdCandidates(code);
-  for (var i = 0; i < contentIds.length; i++) {
-    var contentId = contentIds[i];
-    var picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
-    var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
-    posterCandidates.push(picsBase + "/" + contentId + "ps.jpg", awsBase + "/" + contentId + "ps.jpg");
-    backdropCandidates.push(picsBase + "/" + contentId + "pl.jpg", awsBase + "/" + contentId + "pl.jpg");
-  }
-  return {
-    posterCandidates: compactUniqueUrls(posterCandidates),
-    backdropCandidates: compactUniqueUrls(backdropCandidates),
+    posterCandidates: compactUniqueUrls([awsBase + "/" + contentId + "ps.jpg", picsBase + "/" + contentId + "ps.jpg"]),
+    backdropCandidates: compactUniqueUrls([awsBase + "/" + contentId + "pl.jpg", picsBase + "/" + contentId + "pl.jpg"]),
   };
 }
 
 function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
-  return buildDmmCoverCandidatesFromCode(videoIdOrTitle);
+  var parts = parseJavCodeParts(videoIdOrTitle);
+  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
+  var rule = MGSTAGE_COVER_RULES[parts.prefix];
+  if (rule) return buildMgstageCoverCandidatesFromParts(parts, rule);
+  return buildDmmCoverCandidatesFromParts(parts);
 }
 
 function buildCoverUrlsFromVideoId(videoIdOrTitle) {
@@ -2378,7 +2318,9 @@ function pickSyncHdCoverUrls(code, posterSize) {
   if (posterSize === "small") {
     return compactUniqueUrls(candidates.posterCandidates || []).slice(0, 2);
   }
-  return compactUniqueUrls(candidates.backdropCandidates || []).slice(0, 8);
+  return compactUniqueUrls(
+    (candidates.backdropCandidates || []).concat(candidates.posterCandidates || [])
+  ).slice(0, 2);
 }
 
 function cleanDvdId(raw) {
@@ -2777,23 +2719,23 @@ function resolvePortraitFallbackForList(portraitUrl) {
   return upgradeJavdbCoverUrl(portraitUrl);
 }
 
+function isRankingsDailyDmmLargeList(params) {
+  return String((params && params.listCoverStyle) || "") === "dmm-large";
+}
+
 function resolveDefaultListBackdropPath(code, fallbackCover, videoId) {
   var catembyCover = resolveCatembyListCoverUrl(videoId);
   if (catembyCover) return catembyCover;
-  var javdbCover = buildJavdbCoverFromVideoId(videoId);
-  if (javdbCover) return javdbCover;
   var pageUrl = upgradeJavdbImageUrl(fallbackCover);
   if (pageUrl && isLandscapeListCoverUrl(pageUrl) && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
   if (pageUrl && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
   return fallbackCover || "";
 }
 
-function resolveDetailTopBackdropPath(fallbackCover, videoId, galleryUrls) {
-  var catembyCover = resolveCatembyListCoverUrl(videoId);
-  if (catembyCover) return catembyCover;
-  var galleryBackdrop = pickBestGalleryPosterUrl(galleryUrls || []);
-  if (galleryBackdrop) return galleryBackdrop;
-  return resolveDetailBackdropPath("", fallbackCover, videoId);
+function resolveDmmLargeListBackdropPath(code, fallbackCover, videoId) {
+  var urls = code ? pickSyncHdCoverUrls(code, "large") : [];
+  if (urls[0]) return urls[0];
+  return resolveDefaultListBackdropPath(code, fallbackCover, videoId);
 }
 
 function extractBackgroundImageUrl(style) {
@@ -2875,6 +2817,10 @@ function isJdbstaticImageUrl(url) {
 }
 
 function resolveListBackdropPath(code, fallbackCover, videoId, params) {
+  params = params || {};
+  if (isRankingsDailyDmmLargeList(params)) {
+    return resolveDmmLargeListBackdropPath(code, fallbackCover, videoId);
+  }
   return resolveDefaultListBackdropPath(code, fallbackCover, videoId);
 }
 
@@ -3131,7 +3077,9 @@ function enrichMovieItems(rawItems, params) {
     var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId, forList: true }, params);
     var backdropPath = covers.listBackdrop || "";
     if (!backdropPath) {
-      backdropPath = resolveDefaultListBackdropPath(raw.code, raw.fallbackCover, raw.videoId);
+      backdropPath = isRankingsDailyDmmLargeList(params)
+        ? resolveDmmLargeListBackdropPath(raw.code, raw.fallbackCover, raw.videoId)
+        : resolveDefaultListBackdropPath(raw.code, raw.fallbackCover, raw.videoId);
     }
     items.push(Object.assign(
       {
@@ -3682,10 +3630,7 @@ async function parseDetailPage(html, link, params) {
   var peoples = detailMeta.peoples;
 
   var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
-  var backdropPath =
-    resolveDetailTopBackdropPath(fallbackCover, videoId, backdropPaths) ||
-    coverBundle.backdropPath ||
-    fallbackCover;
+  var backdropPath = coverBundle.backdropPath || fallbackCover;
   var detailPoster =
     coverMode === "hd"
       ? (await detailPosterPromise) || buildFastDetailPoster(cover, fallbackCover)
@@ -3808,7 +3753,9 @@ async function loadLatest(params) {
 
 async function loadRankings(params) {
   var period = String((params && params.period) || "daily");
-  return loadBrowseList("/rankings/movies?period=" + encodeURIComponent(period), params || {});
+  var listParams = Object.assign({}, params || {});
+  if (period === "daily") listParams.listCoverStyle = "dmm-large";
+  return loadBrowseList("/rankings/movies?period=" + encodeURIComponent(period), listParams);
 }
 
 async function loadMovies(params) {
