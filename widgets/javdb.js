@@ -1595,7 +1595,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.1.2",
+  version: "2.1.3",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2017,6 +2017,19 @@ function isValidCategoryBrowsePath(path) {
   if (/^\/series\/?(\?|$)/.test(path)) return false;
   if ((match = path.match(/^\/makers\/([^/?#]+)/))) return !!match[1];
   return false;
+}
+
+function getText(value) {
+  if (value == null || value === "") return "";
+  if (typeof value === "object") {
+    if (value.title != null && String(value.title).trim()) {
+      return String(value.title).replace(/\s+/g, " ").trim();
+    }
+    if (value.name != null && String(value.name).trim()) {
+      return String(value.name).replace(/\s+/g, " ").trim();
+    }
+  }
+  return String(value).replace(/\s+/g, " ").trim();
 }
 
 function resolveCategorySearchFallback(params, categoryPath) {
