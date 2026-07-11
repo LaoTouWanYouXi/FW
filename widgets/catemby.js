@@ -1539,7 +1539,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.4.5",
+  version: "1.4.6",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1761,7 +1761,7 @@ WidgetMetadata = {
     {
       id: "loadResource",
       title: "Catemby 播放源",
-      description: "通过番号匹配预告片与完整影片播放源",
+      description: "通过番号匹配完整影片播放源",
       functionName: "loadResource",
       type: "stream",
       cacheDuration: 600,
@@ -2102,9 +2102,22 @@ function buildResolveCodeVariants(code) {
   return out;
 }
 
+function isPreviewVariant(item) {
+  if (!item || !item.sourceUrl) return true;
+  const variant = String(item.variant || "").toLowerCase();
+  const label = String(item.label || "").toLowerCase();
+  const url = String(item.sourceUrl || "").toLowerCase();
+  const text = variant + " " + label + " " + url;
+  if (/preview|trailer|teaser|sample|预告|預覽|样品|樣品/.test(text)) return true;
+  if (/\/preview\.mp4(?:\?|$)|preview_video|\/preview\//.test(url)) return true;
+  return false;
+}
+
 function pickResolveVariant(data) {
   if (!data || data.error || !Array.isArray(data.variants) || !data.variants.length) return null;
-  const picked = data.variants.find((item) => item.variant === "original") || data.variants[0];
+  const picked =
+    data.variants.find((item) => item.variant === "original" && item.sourceUrl && !isPreviewVariant(item)) ||
+    data.variants.find((item) => item.sourceUrl && !isPreviewVariant(item));
   return picked && picked.sourceUrl ? picked : null;
 }
 
@@ -2891,30 +2904,20 @@ async function loadResource(params) {
 
     const detail = await apiGet("/v4/movies/" + matched.id);
     const movie = detail.movie || matched;
-    const sources = [];
     const referer = SITE_BASE + "/movie/" + movie.id;
     const headers = { "User-Agent": UA, Referer: referer, Origin: SITE_BASE };
 
     const fullVideo = await resolveFullVideo(movie.number || code, "zh");
-    if (fullVideo && fullVideo.sourceUrl) {
-      sources.push({
+    if (!fullVideo || !fullVideo.sourceUrl) return [];
+
+    return [
+      {
         name: "Catemby 完整(" + (fullVideo.label || "原版") + ")",
         description: "番号：" + code + "\n类型：完整视频",
         url: fullVideo.sourceUrl,
         customHeaders: headers,
-      });
-    }
-
-    if (movie.preview_video_url) {
-      sources.push({
-        name: "Catemby 预告(HLS)",
-        description: "番号：" + code + "\n类型：预览视频（完整片不可用时的备选）",
-        url: movie.preview_video_url,
-        customHeaders: headers,
-      });
-    }
-
-    return sources;
+      },
+    ];
   } catch (e) {
     return [];
   }
