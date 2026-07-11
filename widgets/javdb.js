@@ -1593,7 +1593,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.1.3",
+  version: "2.1.4",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2206,6 +2206,10 @@ function compactUniqueUrls(urls) {
   return result;
 }
 
+var DMM_MONO_PLAIN_PREFIXES = {
+  IESP: 1,
+};
+
 function parseJavCodeParts(title) {
   var raw = String(title || "").toUpperCase();
   var match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
@@ -2234,16 +2238,14 @@ function parseJavCodeParts(title) {
     REBD: "h_346",
     REBDB: "h_346",
     GSHRB: "h_346",
-    IESP: "h_173",
+    IESP: "1",
   };
   var number3 = match[2];
   while (number3.length < 3) number3 = "0" + number3;
   var makerPrefix = String(numMap[prefix] || "");
   var numberPlain = String(parseInt(match[2], 10));
-  var code =
-    makerPrefix.indexOf("h_") === 0
-      ? makerPrefix + prefixLower + numberPlain
-      : makerPrefix + prefixLower + number5;
+  var isMonoPlain = !!DMM_MONO_PLAIN_PREFIXES[prefix] || makerPrefix.indexOf("h_") === 0;
+  var code = isMonoPlain ? makerPrefix + prefixLower + numberPlain : makerPrefix + prefixLower + number5;
   return {
     prefix: prefix,
     prefixLower: prefixLower,
@@ -2252,12 +2254,15 @@ function parseJavCodeParts(title) {
     number5: number5,
     code: code,
     plainCode: prefixLower + number5,
-    isMono: makerPrefix.indexOf("h_") === 0,
+    isMono: isMonoPlain,
   };
 }
 
 function isDmmMonoContentId(contentId) {
-  return /^h_\d/i.test(String(contentId || ""));
+  var id = String(contentId || "").toLowerCase();
+  if (/^h_\d/.test(id)) return true;
+  var monoMatch = id.match(/^1([a-z]+)(\d+)$/);
+  return !!(monoMatch && monoMatch[2].length < 5);
 }
 
 function buildMgstageCoverCandidatesFromParts(parts, rule) {
@@ -2310,7 +2315,14 @@ function buildDmmDigitalCoverCandidatesFromParts(parts) {
 function buildDmmCoverCandidatesFromParts(parts) {
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
   if (parts.isMono || isDmmMonoContentId(parts.code)) {
-    return buildDmmMonoCoverCandidatesFromParts(parts);
+    var mono = buildDmmMonoCoverCandidatesFromParts(parts);
+    if (parts.prefix !== "IESP") return mono;
+    var digitalParts = { code: "1" + parts.prefixLower + parts.number5 };
+    var digital = buildDmmDigitalCoverCandidatesFromParts(digitalParts);
+    return {
+      posterCandidates: compactUniqueUrls(mono.posterCandidates.concat(digital.posterCandidates)),
+      backdropCandidates: compactUniqueUrls(mono.backdropCandidates.concat(digital.backdropCandidates)),
+    };
   }
   return buildDmmDigitalCoverCandidatesFromParts(parts);
 }
