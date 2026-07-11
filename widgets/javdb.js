@@ -1595,7 +1595,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.0.7",
+  version: "2.0.8",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2422,7 +2422,7 @@ function isLowResGalleryUrl(url) {
 
 var DETAIL_GALLERY_LIMIT = 12;
 var COVER_VERIFY_MIN_BYTES = 15360;
-var COVER_VERIFY_TIMEOUT_MS = 3000;
+var COVER_VERIFY_TIMEOUT_MS = 1500;
 
 function normalizePosterUrl(url) {
   var cover = String(url || "").trim();
@@ -2438,6 +2438,27 @@ function buildDetailPosterUrlFromJavdb(coverUrl) {
 
 function isNowPrintingPosterTarget(url) {
   return String(url || "").toLowerCase().indexOf("now_printing") >= 0;
+}
+
+function isTrustedHdCoverUrl(url) {
+  var u = String(url || "").trim();
+  if (!u || isNowPrintingPosterTarget(u)) return false;
+  if (/dmm\.co\.jp/i.test(u) && /(?:pl|ps)\.jpe?g(\?|$)/i.test(u)) return true;
+  if (/awsimgsrc\.dmm\.co\.jp/i.test(u) && /(?:pl|ps)\.jpe?g(\?|$)/i.test(u)) return true;
+  if (/image\.mgstage\.com/i.test(u) && /(?:pf_[eo]|pb_e_)/i.test(u)) return true;
+  return false;
+}
+
+function parseCoverContentLength(resp) {
+  var headers = (resp && resp.headers) || {};
+  var raw = headers["content-length"] || headers["Content-Length"] || "";
+  var size = parseInt(String(raw), 10);
+  return isNaN(size) ? 0 : size;
+}
+
+function isCoverVerifyResponseOk(resp) {
+  var status = resp && Number(resp.status || resp.statusCode || 0);
+  return !status || status < 400;
 }
 
 function posterResponseSize(data) {
@@ -2469,17 +2490,35 @@ function extractPosterFinalUrl(resp, url) {
 
 async function verifyCoverUrl(url, params) {
   if (!url || isNowPrintingPosterTarget(url)) return "";
+  if (isTrustedHdCoverUrl(url)) return url;
+  var headers = posterRequestHeaders(params);
   try {
-    var resp = await Widget.http.get(url, {
+    var headResp = await Widget.http.get(url, {
+      method: "HEAD",
       timeout: COVER_VERIFY_TIMEOUT_MS,
-      headers: posterRequestHeaders(params),
+      headers: headers,
       allow_redirects: true,
     });
-    var finalUrl = extractPosterFinalUrl(resp, url);
-    if (isNowPrintingPosterTarget(finalUrl)) return "";
-    var size = posterResponseSize(resp && resp.data);
-    if (size < COVER_VERIFY_MIN_BYTES) return "";
-    return url;
+    var headFinalUrl = extractPosterFinalUrl(headResp, url);
+    if (isNowPrintingPosterTarget(headFinalUrl)) return "";
+    if (!isCoverVerifyResponseOk(headResp)) return "";
+    var headSize = parseCoverContentLength(headResp);
+    if (headSize >= COVER_VERIFY_MIN_BYTES) return url;
+    if (headSize > 0 && headSize < COVER_VERIFY_MIN_BYTES) return "";
+  } catch (err) {}
+
+  try {
+    var rangeResp = await Widget.http.get(url, {
+      timeout: COVER_VERIFY_TIMEOUT_MS,
+      headers: Object.assign({}, headers, { Range: "bytes=0-" + String(COVER_VERIFY_MIN_BYTES - 1) }),
+      allow_redirects: true,
+    });
+    var rangeFinalUrl = extractPosterFinalUrl(rangeResp, url);
+    if (isNowPrintingPosterTarget(rangeFinalUrl)) return "";
+    if (!isCoverVerifyResponseOk(rangeResp)) return "";
+    if (parseCoverContentLength(rangeResp) >= COVER_VERIFY_MIN_BYTES) return url;
+    if (posterResponseSize(rangeResp && rangeResp.data) >= COVER_VERIFY_MIN_BYTES) return url;
+    return "";
   } catch (err) {
     return "";
   }
@@ -2541,10 +2580,13 @@ async function resolveDetailPosterUrl(javdbCover, code, params, options) {
   options = options || {};
   params = getEffectiveParams(params || {});
   var posterSize = String(params.dmmPosterSize || "large");
-  var syncUrls = code ? pickSyncHdCoverUrls(code, posterSize) : [];
-  var primary = syncUrls[0] || "";
+  var syncUrls = compactUniqueUrls(code ? pickSyncHdCoverUrls(code, posterSize) : []);
 
-  if (primary) {
+  for (var i = 0; i < syncUrls.length; i++) {
+    if (isTrustedHdCoverUrl(syncUrls[i])) return syncUrls[i];
+  }
+
+  if (syncUrls.length) {
     var verified = await resolveFirstVerifiedCoverUrl(syncUrls, params);
     if (verified) return verified;
   }
@@ -3568,25 +3610,30 @@ async function parseDetailPage(html, link, params) {
   var cover = extractBestImageUrl($, $("img.video-cover").first(), base);
   if (!cover && backdropPaths.length) cover = absUrl(backdropPaths[0], base);
 
-  var detailMeta = parseDetailMeta($, base);
-  var genreItems = detailMeta.genreItems;
-  var peoples = detailMeta.peoples;
-
   var displayCode = resolveMatchCode(code, title, description);
   var displayTitle = formatDisplayTitle(displayCode, title);
   var matchFields = buildGuangyaMatchFields(displayCode, title || displayTitle, description);
   var fallbackCover = cover || resolveJavdbCoverUrl("", videoId);
   params = getEffectiveParams(params);
-  var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
-  var backdropPath = coverBundle.backdropPath || fallbackCover;
   var coverMode = String(params.coverMode || "fast");
-  var detailPoster =
+  var detailPosterPromise =
     coverMode === "hd"
-      ? await resolveDetailPosterUrl(fallbackCover, displayCode, params, {
+      ? resolveDetailPosterUrl(fallbackCover, displayCode, params, {
           videoId: videoId,
           pageCover: cover,
           galleryUrls: backdropPaths,
         })
+      : null;
+
+  var detailMeta = parseDetailMeta($, base);
+  var genreItems = detailMeta.genreItems;
+  var peoples = detailMeta.peoples;
+
+  var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
+  var backdropPath = coverBundle.backdropPath || fallbackCover;
+  var detailPoster =
+    coverMode === "hd"
+      ? (await detailPosterPromise) || buildFastDetailPoster(cover, fallbackCover)
       : buildFastDetailPoster(cover, fallbackCover);
   var posterPath = detailPoster || buildDetailPosterUrlFromJavdb(fallbackCover) || "";
 
