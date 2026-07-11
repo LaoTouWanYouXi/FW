@@ -11,6 +11,7 @@ const JD_SIG_KEY =
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const LINK_PREFIX = "catemby:";
+const CATEGORY_ID_TITLE_SEP = "~";
 const JDBSTATIC_BASE = "https://c0.jdbstatic.com";
 
 const MOVIE_TYPE_CODE = { censored: "0", uncensored: "1", western: "2", fc2: "3", all: "0" };
@@ -1538,7 +1539,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.4.4",
+  version: "1.4.5",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1836,6 +1837,19 @@ function enumOptionsForKind(kind) {
   ];
 }
 
+function parseCategoryParamRef(raw) {
+  raw = String(raw || "");
+  const tilde = raw.indexOf(CATEGORY_ID_TITLE_SEP);
+  if (tilde < 0) return { id: raw, title: "" };
+  let title = raw.slice(tilde + 1);
+  try {
+    title = decodeURIComponent(title);
+  } catch (e) {
+    title = raw.slice(tilde + 1);
+  }
+  return { id: raw.slice(0, tilde), title: title };
+}
+
 function extractEnumValue(raw, preferLists) {
   if (raw && typeof raw === "object") {
     if (raw.value != null && raw.value !== "") return extractEnumValue(raw.value, preferLists);
@@ -1845,6 +1859,9 @@ function extractEnumValue(raw, preferLists) {
   }
   let text = String(raw || "").trim();
   if (!text || text === "[object Object]") return "";
+  const ref = parseCategoryParamRef(text);
+  text = String(ref.id || "").trim();
+  if (!text) return "";
   const lists = preferLists || CATEMBY_ALL_CATEGORY_OPTIONS;
   for (let i = 0; i < lists.length; i++) {
     const options = lists[i] || [];
@@ -1852,6 +1869,7 @@ function extractEnumValue(raw, preferLists) {
       const opt = options[j];
       if (!opt) continue;
       if (opt.value === text || opt.title === text) return String(opt.value || opt.title);
+      if (ref.title && (opt.value === ref.title || opt.title === ref.title)) return String(opt.value || opt.title);
     }
   }
   return text;
@@ -1872,8 +1890,51 @@ function normalizeParamId(raw, preferLists) {
   return text.split(/[/?#&=]/)[0].trim();
 }
 
-function resolveCategoryContext(params) {
+function syncCategoryParams(params) {
   params = params || {};
+  const moduleKind = String(params.category_kind || "").trim();
+
+  const item = String(params.item || "").trim();
+  if (item && !params.genreId && !params.peopleId) {
+    const itemRef = parseCategoryParamRef(item);
+    const itemId = String(itemRef.id || "").trim();
+    if (itemId.indexOf("/actors/") === 0 || (moduleKind === "actors" && itemId.indexOf(LINK_PREFIX) !== 0)) {
+      params.peopleId = normalizeParamId(itemId, enumOptionsForKind("actors"));
+    } else {
+      params.genreId = itemId;
+    }
+    if (itemRef.title) params.categoryTitle = itemRef.title;
+  }
+
+  if (params.genreId) {
+    const genreRef = parseCategoryParamRef(params.genreId);
+    params.genreId = normalizeParamId(genreRef.id, enumOptionsForKind(moduleKind === "makers" ? "makers" : "tags"));
+    if (genreRef.title) params.categoryTitle = genreRef.title;
+  }
+  if (params.peopleId) {
+    const peopleRef = parseCategoryParamRef(params.peopleId);
+    params.peopleId = normalizeParamId(peopleRef.id, enumOptionsForKind("actors"));
+    if (peopleRef.title) params.categoryTitle = peopleRef.title;
+  }
+
+  if (moduleKind === "actors") {
+    if (params.peopleId) params.genreId = "";
+  } else if (moduleKind === "makers" || moduleKind === "tags") {
+    if (params.genreId) params.peopleId = "";
+  }
+
+  if (params.peopleId && String(params.genreId || "").indexOf(LINK_PREFIX) === 0 && moduleKind === "actors") {
+    params.genreId = "";
+  }
+  if (params.genreId && String(params.peopleId || "").indexOf(LINK_PREFIX) === 0 && (moduleKind === "makers" || moduleKind === "tags")) {
+    params.peopleId = "";
+  }
+
+  return params;
+}
+
+function resolveCategoryContext(params) {
+  params = syncCategoryParams(params || {});
   const moduleKind = params.category_kind || "";
   const preferLists = enumOptionsForKind(moduleKind);
 
@@ -1888,6 +1949,20 @@ function resolveCategoryContext(params) {
     }
     if (cat.kind && cat.id) return { kind: cat.kind, itemId: cat.id };
     return null;
+  }
+
+  if (moduleKind === "actors") {
+    const peopleRef = fromEncodedLink(params.peopleId);
+    if (peopleRef) return peopleRef;
+    if (params.peopleId) {
+      return { kind: "actors", itemId: normalizeParamId(params.peopleId, preferLists) };
+    }
+  } else if (moduleKind === "makers" || moduleKind === "tags") {
+    const genreRef = fromEncodedLink(params.genreId);
+    if (genreRef) return genreRef;
+    if (params.genreId) {
+      return { kind: moduleKind, itemId: normalizeParamId(params.genreId, preferLists) };
+    }
   }
 
   const peopleRef = fromEncodedLink(params.peopleId);
@@ -1936,7 +2011,7 @@ function normalizeRankPeriod(period) {
 
 function buildCategoryFilter(kind, itemId, movieType, listFilter) {
   const kindCode = CATEGORY_KIND_CODE[kind] || "0";
-  const typePart = movieType && movieType !== "all" ? MOVIE_TYPE_CODE[movieType] || "0" : "";
+  const typePart = MOVIE_TYPE_CODE[movieType || "all"] || "0";
   let filterBy = kindCode + ":" + typePart + ":" + itemId;
   const extra = LIST_FILTER_CODE[listFilter || "all"];
   if (extra) filterBy += ":" + extra;
