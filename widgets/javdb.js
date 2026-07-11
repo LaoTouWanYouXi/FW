@@ -1593,7 +1593,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.1.6",
+  version: "2.1.8",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2497,18 +2497,19 @@ function isInvalidCoverTarget(url) {
 function isLowResDmmPosterUrl(url) {
   var u = String(url || "").toLowerCase();
   if (!u) return false;
-  if (/ps\.jpe?g(\?|$)/i.test(u)) return true;
   if (/[?&]w=147(?:&|$|[?#])/.test(u) && /[?&]h=200(?:&|$|[?#])/.test(u)) return true;
+  if (/pics\.dmm\.co\.jp\/.*ps\.jpe?g(\?|$)/i.test(u)) return true;
+  if (/pics\.dmm\.com\/.*ps\.jpe?g(\?|$)/i.test(u)) return true;
   return false;
 }
 
-function resolvePosterUrlWithCatembyFallback(posterUrl, catembyCover) {
+function resolvePosterUrlWithCatembyFallback(posterUrl, videoId) {
   var poster = String(posterUrl || "").trim();
-  var fallback = String(catembyCover || "").trim();
-  if (poster && isLowResDmmPosterUrl(poster)) {
-    return fallback || poster;
+  if (!poster) return "";
+  if (isLowResDmmPosterUrl(poster)) {
+    return resolveCatembySmallCoverUrl(videoId) || poster;
   }
-  return poster || fallback || "";
+  return poster;
 }
 
 function pickFirstUsableCoverUrl(urls) {
@@ -2552,10 +2553,13 @@ function buildListCoverBundle(code, videoId) {
   }
   var candidates = buildCoverCandidatesFromVideoId(code);
   var hdBackdrop = pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.backdropCandidates)) || catembyCover || "";
-  var hdPoster = resolvePosterUrlWithCatembyFallback(
-    pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)),
-    catembyCover
-  );
+  var hdPoster =
+    resolvePosterUrlWithCatembyFallback(
+      pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)),
+      videoId
+    ) ||
+    catembyCover ||
+    "";
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
 }
 
@@ -2696,6 +2700,14 @@ function buildCatembySiteThumbUrl(videoId) {
   return CATEMBY_CDN_BASE + "/small_covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
 }
 
+function resolveCatembySmallCoverUrl(videoId) {
+  var id = String(videoId || "").trim();
+  if (!id) return "";
+  var siteThumb = buildCatembySiteThumbUrl(id);
+  if (siteThumb) return siteThumb;
+  return normalizeJavdbCoverUrl(buildJdbstaticThumbUrl(id)) || "";
+}
+
 function resolveCatembyListCoverUrl(videoId) {
   var siteCover = buildCatembySiteCoverUrl(videoId);
   if (siteCover) return siteCover;
@@ -2754,7 +2766,8 @@ function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
 function buildDetailCoverBundle(code, videoId) {
   var hdCovers = buildCoverUrlsFromVideoId(code);
   var catembyCover = videoId ? resolveCatembyStyleCoverUrl(videoId) : "";
-  var hdPoster = resolvePosterUrlWithCatembyFallback(hdCovers.posterUrl || "", catembyCover);
+  var hdPoster =
+    resolvePosterUrlWithCatembyFallback(hdCovers.posterUrl || "", videoId) || catembyCover || "";
   var hdBackdrop = hdCovers.backdropUrl || hdPoster || "";
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
 }
