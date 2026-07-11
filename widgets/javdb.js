@@ -1593,7 +1593,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.1.4",
+  version: "2.1.6",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2210,6 +2210,29 @@ var DMM_MONO_PLAIN_PREFIXES = {
   IESP: 1,
 };
 
+var DMM_NUM_MAP = {
+  WSA: "2",
+  FSDSS: "1",
+  FCDSS: "1",
+  FNS: "1",
+  FTHTD: "1",
+  FALENO: "1",
+  FGAN: "1",
+  FSNF: "1",
+  FLAV: "1",
+  DLDSS: "1",
+  ABP: "118",
+  CHN: "118",
+  STARS: "1",
+  STAR: "1",
+  START: "1",
+  SODS: "1",
+  REBD: "h_346",
+  REBDB: "h_346",
+  GSHRB: "h_346",
+  IESP: "1",
+};
+
 function parseJavCodeParts(title) {
   var raw = String(title || "").toUpperCase();
   var match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
@@ -2218,51 +2241,59 @@ function parseJavCodeParts(title) {
   var prefixLower = prefix.toLowerCase();
   var number5 = match[2];
   while (number5.length < 5) number5 = "0" + number5;
-  var numMap = {
-    WSA: "2",
-    FSDSS: "1",
-    FCDSS: "1",
-    FNS: "1",
-    FTHTD: "1",
-    FALENO: "1",
-    FGAN: "1",
-    FSNF: "1",
-    FLAV: "1",
-    DLDSS: "1",
-    ABP: "118",
-    CHN: "118",
-    STARS: "1",
-    STAR: "1",
-    START: "1",
-    SODS: "1",
-    REBD: "h_346",
-    REBDB: "h_346",
-    GSHRB: "h_346",
-    IESP: "1",
-  };
   var number3 = match[2];
   while (number3.length < 3) number3 = "0" + number3;
-  var makerPrefix = String(numMap[prefix] || "");
+  var makerPrefix = String(DMM_NUM_MAP[prefix] || "");
   var numberPlain = String(parseInt(match[2], 10));
-  var isMonoPlain = !!DMM_MONO_PLAIN_PREFIXES[prefix] || makerPrefix.indexOf("h_") === 0;
-  var code = isMonoPlain ? makerPrefix + prefixLower + numberPlain : makerPrefix + prefixLower + number5;
   return {
     prefix: prefix,
     prefixLower: prefixLower,
     number: match[2],
     number3: number3,
     number5: number5,
-    code: code,
+    numberPlain: numberPlain,
+    makerPrefix: makerPrefix,
+    code: makerPrefix + prefixLower + number5,
     plainCode: prefixLower + number5,
-    isMono: isMonoPlain,
   };
+}
+
+function buildDmmContentIdVariants(parts) {
+  if (!parts) return [];
+  var makerPrefix = String(parts.makerPrefix || "");
+  var prefix = parts.prefix;
+  var prefixLower = parts.prefixLower;
+  var legacyDigital = makerPrefix + prefixLower + parts.number5;
+  var monoPlain =
+    makerPrefix && (makerPrefix.indexOf("h_") === 0 || DMM_MONO_PLAIN_PREFIXES[prefix])
+      ? makerPrefix + prefixLower + parts.numberPlain
+      : "";
+  var plainDigital = prefixLower + parts.number5;
+  var plainMono = prefixLower + parts.numberPlain;
+  var ordered = [];
+
+  if (prefix === "IESP") {
+    ordered = [monoPlain, legacyDigital, plainMono, plainDigital];
+  } else if (makerPrefix.indexOf("h_") === 0) {
+    ordered = [legacyDigital, monoPlain, plainDigital, plainMono];
+  } else {
+    ordered = [legacyDigital, plainDigital, monoPlain, plainMono];
+  }
+
+  return compactUniqueUrls(
+    ordered.filter(function (item) {
+      return !!item;
+    })
+  );
 }
 
 function isDmmMonoContentId(contentId) {
   var id = String(contentId || "").toLowerCase();
-  if (/^h_\d/.test(id)) return true;
-  var monoMatch = id.match(/^1([a-z]+)(\d+)$/);
-  return !!(monoMatch && monoMatch[2].length < 5);
+  var hMatch = id.match(/^h_\d+[a-z0-9]+?(\d+)$/);
+  if (hMatch) return hMatch[1].length < 5;
+  var oneMatch = id.match(/^1([a-z]+)(\d+)$/);
+  if (oneMatch) return oneMatch[2].length < 5;
+  return false;
 }
 
 function buildMgstageCoverCandidatesFromParts(parts, rule) {
@@ -2277,54 +2308,58 @@ function buildMgstageCoverCandidatesFromParts(parts, rule) {
   };
 }
 
-function buildDmmMonoCoverCandidatesFromParts(parts) {
-  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
-  var contentId = String(parts.code || "").toLowerCase();
-  if (!contentId) return { posterCandidates: [], backdropCandidates: [] };
-  var picsBase = "https://pics.dmm.co.jp/mono/movie/adult/" + contentId;
-  var awsBase = "https://awsimgsrc.dmm.co.jp/pics/mono/movie/adult/" + contentId;
+function buildDmmMonoCoverCandidatesForId(contentId) {
+  var id = String(contentId || "").toLowerCase();
+  if (!id) return { posterCandidates: [], backdropCandidates: [] };
+  var picsBase = "https://pics.dmm.co.jp/mono/movie/adult/" + id;
+  var awsBase = "https://awsimgsrc.dmm.co.jp/pics/mono/movie/adult/" + id;
   return {
-    posterCandidates: compactUniqueUrls([
-      picsBase + "/" + contentId + "ps.jpg",
-      awsBase + "/" + contentId + "ps.jpg",
-    ]),
-    backdropCandidates: compactUniqueUrls([
-      picsBase + "/" + contentId + "pl.jpg",
-      awsBase + "/" + contentId + "pl.jpg",
-    ]),
+    posterCandidates: compactUniqueUrls([picsBase + "/" + id + "ps.jpg", awsBase + "/" + id + "ps.jpg"]),
+    backdropCandidates: compactUniqueUrls([picsBase + "/" + id + "pl.jpg", awsBase + "/" + id + "pl.jpg"]),
   };
 }
 
-function buildDmmDigitalCoverCandidatesFromParts(parts) {
-  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
-  var contentId = String(parts.code || "").toLowerCase();
-  if (!contentId) return { posterCandidates: [], backdropCandidates: [] };
-  var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
-  var picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
+function buildDmmDigitalCoverCandidatesForId(contentId) {
+  var id = String(contentId || "").toLowerCase();
+  if (!id) return { posterCandidates: [], backdropCandidates: [] };
+  var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id;
+  var picsBase = "https://pics.dmm.co.jp/digital/video/" + id;
   return {
     posterCandidates: compactUniqueUrls([
-      awsBase + "/" + contentId + "ps.jpg",
-      picsBase + "/" + contentId + "ps.jpg",
-      awsBase + "/" + contentId + "jp-1.jpg",
-      picsBase + "/" + contentId + "jp-1.jpg",
+      awsBase + "/" + id + "ps.jpg",
+      picsBase + "/" + id + "ps.jpg",
+      awsBase + "/" + id + "jp-1.jpg",
+      picsBase + "/" + id + "jp-1.jpg",
     ]),
-    backdropCandidates: compactUniqueUrls([awsBase + "/" + contentId + "pl.jpg", picsBase + "/" + contentId + "pl.jpg"]),
+    backdropCandidates: compactUniqueUrls([awsBase + "/" + id + "pl.jpg", picsBase + "/" + id + "pl.jpg"]),
   };
+}
+
+function appendDmmCoverCandidates(target, contentId) {
+  var id = String(contentId || "").toLowerCase();
+  if (!id || !target) return;
+  var digital = buildDmmDigitalCoverCandidatesForId(id);
+  var mono = isDmmMonoContentId(id) ? buildDmmMonoCoverCandidatesForId(id) : { posterCandidates: [], backdropCandidates: [] };
+  if (isDmmMonoContentId(id)) {
+    target.posterCandidates = target.posterCandidates.concat(mono.posterCandidates, digital.posterCandidates);
+    target.backdropCandidates = target.backdropCandidates.concat(mono.backdropCandidates, digital.backdropCandidates);
+  } else {
+    target.posterCandidates = target.posterCandidates.concat(digital.posterCandidates, mono.posterCandidates);
+    target.backdropCandidates = target.backdropCandidates.concat(digital.backdropCandidates, mono.backdropCandidates);
+  }
 }
 
 function buildDmmCoverCandidatesFromParts(parts) {
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
-  if (parts.isMono || isDmmMonoContentId(parts.code)) {
-    var mono = buildDmmMonoCoverCandidatesFromParts(parts);
-    if (parts.prefix !== "IESP") return mono;
-    var digitalParts = { code: "1" + parts.prefixLower + parts.number5 };
-    var digital = buildDmmDigitalCoverCandidatesFromParts(digitalParts);
-    return {
-      posterCandidates: compactUniqueUrls(mono.posterCandidates.concat(digital.posterCandidates)),
-      backdropCandidates: compactUniqueUrls(mono.backdropCandidates.concat(digital.backdropCandidates)),
-    };
+  var ids = buildDmmContentIdVariants(parts);
+  var result = { posterCandidates: [], backdropCandidates: [] };
+  for (var i = 0; i < ids.length; i++) {
+    appendDmmCoverCandidates(result, ids[i]);
   }
-  return buildDmmDigitalCoverCandidatesFromParts(parts);
+  return {
+    posterCandidates: compactUniqueUrls(result.posterCandidates),
+    backdropCandidates: compactUniqueUrls(result.backdropCandidates),
+  };
 }
 
 function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
@@ -2407,10 +2442,10 @@ function fetchJavTrailersMeta(dvdId) {
   } else if (parts) {
     var dmm = buildDmmCoverCandidatesFromParts(parts);
     backdropPath = dmm.backdropCandidates[0] || "";
-    backdropPaths = buildDmmGallery(parts.code || contentId, 10);
+    var galleryIds = buildDmmContentIdVariants(parts);
+    backdropPaths = buildDmmGallery(galleryIds[0] || parts.code || contentId, 10);
   } else if (contentId) {
-    var dmmFallback = buildDmmCoverCandidatesFromParts({ code: contentId });
-    backdropPath = dmmFallback.backdropCandidates[0] || "";
+    backdropPath = buildDmmDigitalCoverCandidatesForId(contentId).backdropCandidates[0] || "";
     backdropPaths = buildDmmGallery(contentId, 10);
   }
   return { backdropPath: backdropPath, backdropPaths: backdropPaths };
@@ -2459,6 +2494,23 @@ function isInvalidCoverTarget(url) {
   return false;
 }
 
+function isLowResDmmPosterUrl(url) {
+  var u = String(url || "").toLowerCase();
+  if (!u) return false;
+  if (/ps\.jpe?g(\?|$)/i.test(u)) return true;
+  if (/[?&]w=147(?:&|$|[?#])/.test(u) && /[?&]h=200(?:&|$|[?#])/.test(u)) return true;
+  return false;
+}
+
+function resolvePosterUrlWithCatembyFallback(posterUrl, catembyCover) {
+  var poster = String(posterUrl || "").trim();
+  var fallback = String(catembyCover || "").trim();
+  if (poster && isLowResDmmPosterUrl(poster)) {
+    return fallback || poster;
+  }
+  return poster || fallback || "";
+}
+
 function pickFirstUsableCoverUrl(urls) {
   urls = compactUniqueUrls(urls || []);
   for (var i = 0; i < urls.length; i++) {
@@ -2500,7 +2552,10 @@ function buildListCoverBundle(code, videoId) {
   }
   var candidates = buildCoverCandidatesFromVideoId(code);
   var hdBackdrop = pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.backdropCandidates)) || catembyCover || "";
-  var hdPoster = pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)) || catembyCover || "";
+  var hdPoster = resolvePosterUrlWithCatembyFallback(
+    pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)),
+    catembyCover
+  );
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
 }
 
@@ -2696,9 +2751,10 @@ function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
   };
 }
 
-function buildDetailCoverBundle(code) {
+function buildDetailCoverBundle(code, videoId) {
   var hdCovers = buildCoverUrlsFromVideoId(code);
-  var hdPoster = hdCovers.posterUrl || "";
+  var catembyCover = videoId ? resolveCatembyStyleCoverUrl(videoId) : "";
+  var hdPoster = resolvePosterUrlWithCatembyFallback(hdCovers.posterUrl || "", catembyCover);
   var hdBackdrop = hdCovers.backdropUrl || hdPoster || "";
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
 }
@@ -3428,7 +3484,7 @@ async function parseDetailPage(html, link, params) {
   var genreItems = detailMeta.genreItems;
   var peoples = detailMeta.peoples;
 
-  var coverBundle = buildDetailCoverBundle(displayCode);
+  var coverBundle = buildDetailCoverBundle(displayCode, path.split("/").pop() || "");
   var allBackdropPaths = buildDetailBackdropPaths(displayCode);
   var trailers = parseTrailersFromHtml($, base, displayCode, coverBundle.backdropPath || coverBundle.posterPath);
 
