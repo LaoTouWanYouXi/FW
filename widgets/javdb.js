@@ -1595,7 +1595,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.1.1",
+  version: "2.1.2",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2764,24 +2764,23 @@ function resolvePortraitFallbackForList(portraitUrl) {
   return upgradeJavdbCoverUrl(portraitUrl);
 }
 
-function isDmmLargeLandscapeCoverUrl(url) {
-  var u = String(url || "").toLowerCase();
-  if (!u || isNowPrintingPosterTarget(u)) return false;
-  if (/dmm\.co\.jp/i.test(u) && /pl\.jpe?g(\?|$)/i.test(u)) return true;
-  if (/image\.mgstage\.com/i.test(u) && /pb_e_/.test(u)) return true;
-  return false;
-}
-
 function resolveDefaultListBackdropPath(code, fallbackCover, videoId) {
-  var pageUrl = upgradeJavdbImageUrl(fallbackCover);
-  if (pageUrl && isDmmLargeLandscapeCoverUrl(pageUrl)) return pageUrl;
-  if (pageUrl && isLandscapeListCoverUrl(pageUrl) && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
-  var urls = code ? pickSyncHdCoverUrls(code, "large") : [];
-  if (urls[0]) return urls[0];
   var catembyCover = resolveCatembyListCoverUrl(videoId);
   if (catembyCover) return catembyCover;
+  var javdbCover = buildJavdbCoverFromVideoId(videoId);
+  if (javdbCover) return javdbCover;
+  var pageUrl = upgradeJavdbImageUrl(fallbackCover);
+  if (pageUrl && isLandscapeListCoverUrl(pageUrl) && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
   if (pageUrl && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
   return fallbackCover || "";
+}
+
+function resolveDetailTopBackdropPath(fallbackCover, videoId, galleryUrls) {
+  var catembyCover = resolveCatembyListCoverUrl(videoId);
+  if (catembyCover) return catembyCover;
+  var galleryBackdrop = pickBestGalleryPosterUrl(galleryUrls || []);
+  if (galleryBackdrop) return galleryBackdrop;
+  return resolveDetailBackdropPath("", fallbackCover, videoId);
 }
 
 function extractBackgroundImageUrl(style) {
@@ -3670,7 +3669,10 @@ async function parseDetailPage(html, link, params) {
   var peoples = detailMeta.peoples;
 
   var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
-  var backdropPath = coverBundle.backdropPath || fallbackCover;
+  var backdropPath =
+    resolveDetailTopBackdropPath(fallbackCover, videoId, backdropPaths) ||
+    coverBundle.backdropPath ||
+    fallbackCover;
   var detailPoster =
     coverMode === "hd"
       ? (await detailPosterPromise) || buildFastDetailPoster(cover, fallbackCover)
