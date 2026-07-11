@@ -1595,7 +1595,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.0.8",
+  version: "2.0.9",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2719,21 +2719,24 @@ function resolvePortraitFallbackForList(portraitUrl) {
   return upgradeJavdbCoverUrl(portraitUrl);
 }
 
-function isRankingsDailyDmmLargeList(params) {
-  return String((params && params.listCoverStyle) || "") === "dmm-large";
+function isRankingsDailyDmmPortraitList(params) {
+  return String((params && params.listCoverStyle) || "") === "dmm-portrait";
 }
 
 function resolveDefaultListBackdropPath(code, fallbackCover, videoId) {
   var catembyCover = resolveCatembyListCoverUrl(videoId);
   if (catembyCover) return catembyCover;
+  var fromId = buildJavdbCoverFromVideoId(videoId);
+  if (fromId) return fromId;
+  var portrait = upgradeJavdbCoverUrl(fallbackCover);
+  if (portrait && isPortraitListCoverUrl(portrait)) return portrait;
   var pageUrl = upgradeJavdbImageUrl(fallbackCover);
-  if (pageUrl && isLandscapeListCoverUrl(pageUrl) && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
   if (pageUrl && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
   return fallbackCover || "";
 }
 
-function resolveDmmLargeListBackdropPath(code, fallbackCover, videoId) {
-  var urls = code ? pickSyncHdCoverUrls(code, "large") : [];
+function resolveDmmPortraitHdListBackdropPath(code, fallbackCover, videoId) {
+  var urls = code ? pickSyncHdCoverUrls(code, "small") : [];
   if (urls[0]) return urls[0];
   return resolveDefaultListBackdropPath(code, fallbackCover, videoId);
 }
@@ -2786,8 +2789,12 @@ function extractListCardCover($, box, base) {
     });
   }
 
-  for (var i = 0; i < candidates.length; i++) {
-    if (isLandscapeListCoverUrl(candidates[i])) return candidates[i];
+  for (var pi = 0; pi < candidates.length; pi++) {
+    if (isPortraitListCoverUrl(candidates[pi])) return upgradeJavdbCoverUrl(candidates[pi]);
+  }
+  for (var ui = 0; ui < candidates.length; ui++) {
+    var upgraded = upgradeJavdbCoverUrl(candidates[ui]);
+    if (upgraded) return upgraded;
   }
   return candidates[0] || "";
 }
@@ -2818,8 +2825,8 @@ function isJdbstaticImageUrl(url) {
 
 function resolveListBackdropPath(code, fallbackCover, videoId, params) {
   params = params || {};
-  if (isRankingsDailyDmmLargeList(params)) {
-    return resolveDmmLargeListBackdropPath(code, fallbackCover, videoId);
+  if (isRankingsDailyDmmPortraitList(params)) {
+    return resolveDmmPortraitHdListBackdropPath(code, fallbackCover, videoId);
   }
   return resolveDefaultListBackdropPath(code, fallbackCover, videoId);
 }
@@ -3077,8 +3084,8 @@ function enrichMovieItems(rawItems, params) {
     var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId, forList: true }, params);
     var backdropPath = covers.listBackdrop || "";
     if (!backdropPath) {
-      backdropPath = isRankingsDailyDmmLargeList(params)
-        ? resolveDmmLargeListBackdropPath(raw.code, raw.fallbackCover, raw.videoId)
+      backdropPath = isRankingsDailyDmmPortraitList(params)
+        ? resolveDmmPortraitHdListBackdropPath(raw.code, raw.fallbackCover, raw.videoId)
         : resolveDefaultListBackdropPath(raw.code, raw.fallbackCover, raw.videoId);
     }
     items.push(Object.assign(
@@ -3754,7 +3761,7 @@ async function loadLatest(params) {
 async function loadRankings(params) {
   var period = String((params && params.period) || "daily");
   var listParams = Object.assign({}, params || {});
-  if (period === "daily") listParams.listCoverStyle = "dmm-large";
+  if (period === "daily") listParams.listCoverStyle = "dmm-portrait";
   return loadBrowseList("/rankings/movies?period=" + encodeURIComponent(period), listParams);
 }
 
