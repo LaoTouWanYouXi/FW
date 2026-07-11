@@ -1595,7 +1595,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.1.0",
+  version: "2.1.1",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2282,24 +2282,71 @@ function buildMgstageCoverCandidatesFromParts(parts, rule) {
   };
 }
 
+function buildDmmContentIdCandidates(code) {
+  var ids = [];
+  function add(value) {
+    var id = String(value || "").toLowerCase().trim();
+    if (!id || ids.indexOf(id) >= 0) return;
+    ids.push(id);
+  }
+  var parts = parseJavCodeParts(code);
+  if (parts) {
+    add(parts.code);
+    add(parts.plainCode);
+  }
+  add(buildDmmContentIdFromDvdId(code));
+  return ids;
+}
+
 function buildDmmCoverCandidatesFromParts(parts) {
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
-  var contentId = String(parts.code || "").toLowerCase();
-  if (!contentId) return { posterCandidates: [], backdropCandidates: [] };
-  var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
-  var picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
+  var contentIds = [];
+  function addId(value) {
+    var id = String(value || "").toLowerCase().trim();
+    if (!id || contentIds.indexOf(id) >= 0) return;
+    contentIds.push(id);
+  }
+  addId(parts.code);
+  addId(parts.plainCode);
+  if (!contentIds.length) return { posterCandidates: [], backdropCandidates: [] };
+  var posterCandidates = [];
+  var backdropCandidates = [];
+  for (var i = 0; i < contentIds.length; i++) {
+    var contentId = contentIds[i];
+    var picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
+    var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
+    posterCandidates.push(picsBase + "/" + contentId + "ps.jpg", awsBase + "/" + contentId + "ps.jpg");
+    backdropCandidates.push(picsBase + "/" + contentId + "pl.jpg", awsBase + "/" + contentId + "pl.jpg");
+  }
   return {
-    posterCandidates: compactUniqueUrls([awsBase + "/" + contentId + "ps.jpg", picsBase + "/" + contentId + "ps.jpg"]),
-    backdropCandidates: compactUniqueUrls([awsBase + "/" + contentId + "pl.jpg", picsBase + "/" + contentId + "pl.jpg"]),
+    posterCandidates: compactUniqueUrls(posterCandidates),
+    backdropCandidates: compactUniqueUrls(backdropCandidates),
+  };
+}
+
+function buildDmmCoverCandidatesFromCode(code) {
+  var parts = parseJavCodeParts(code);
+  if (parts && MGSTAGE_COVER_RULES[parts.prefix]) {
+    return buildMgstageCoverCandidatesFromParts(parts, MGSTAGE_COVER_RULES[parts.prefix]);
+  }
+  var posterCandidates = [];
+  var backdropCandidates = [];
+  var contentIds = buildDmmContentIdCandidates(code);
+  for (var i = 0; i < contentIds.length; i++) {
+    var contentId = contentIds[i];
+    var picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
+    var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
+    posterCandidates.push(picsBase + "/" + contentId + "ps.jpg", awsBase + "/" + contentId + "ps.jpg");
+    backdropCandidates.push(picsBase + "/" + contentId + "pl.jpg", awsBase + "/" + contentId + "pl.jpg");
+  }
+  return {
+    posterCandidates: compactUniqueUrls(posterCandidates),
+    backdropCandidates: compactUniqueUrls(backdropCandidates),
   };
 }
 
 function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
-  var parts = parseJavCodeParts(videoIdOrTitle);
-  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
-  var rule = MGSTAGE_COVER_RULES[parts.prefix];
-  if (rule) return buildMgstageCoverCandidatesFromParts(parts, rule);
-  return buildDmmCoverCandidatesFromParts(parts);
+  return buildDmmCoverCandidatesFromCode(videoIdOrTitle);
 }
 
 function buildCoverUrlsFromVideoId(videoIdOrTitle) {
@@ -2318,9 +2365,7 @@ function pickSyncHdCoverUrls(code, posterSize) {
   if (posterSize === "small") {
     return compactUniqueUrls(candidates.posterCandidates || []).slice(0, 2);
   }
-  return compactUniqueUrls(
-    (candidates.backdropCandidates || []).concat(candidates.posterCandidates || [])
-  ).slice(0, 2);
+  return compactUniqueUrls(candidates.backdropCandidates || []).slice(0, 8);
 }
 
 function cleanDvdId(raw) {
@@ -2719,13 +2764,22 @@ function resolvePortraitFallbackForList(portraitUrl) {
   return upgradeJavdbCoverUrl(portraitUrl);
 }
 
+function isDmmLargeLandscapeCoverUrl(url) {
+  var u = String(url || "").toLowerCase();
+  if (!u || isNowPrintingPosterTarget(u)) return false;
+  if (/dmm\.co\.jp/i.test(u) && /pl\.jpe?g(\?|$)/i.test(u)) return true;
+  if (/image\.mgstage\.com/i.test(u) && /pb_e_/.test(u)) return true;
+  return false;
+}
+
 function resolveDefaultListBackdropPath(code, fallbackCover, videoId) {
+  var pageUrl = upgradeJavdbImageUrl(fallbackCover);
+  if (pageUrl && isDmmLargeLandscapeCoverUrl(pageUrl)) return pageUrl;
+  if (pageUrl && isLandscapeListCoverUrl(pageUrl) && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
   var urls = code ? pickSyncHdCoverUrls(code, "large") : [];
   if (urls[0]) return urls[0];
   var catembyCover = resolveCatembyListCoverUrl(videoId);
   if (catembyCover) return catembyCover;
-  var pageUrl = upgradeJavdbImageUrl(fallbackCover);
-  if (pageUrl && isLandscapeListCoverUrl(pageUrl) && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
   if (pageUrl && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
   return fallbackCover || "";
 }
