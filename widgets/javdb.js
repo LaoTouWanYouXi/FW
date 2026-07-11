@@ -4,7 +4,7 @@
  */
 
 var JAVDB_SORT_FILTER = ["published", "score", "fav"];
-var GLOBAL_PARAM_KEYS = ["baseUrl", "locale", "coverMode", "dmmPosterSize"];
+var GLOBAL_PARAM_KEYS = ["baseUrl", "locale"];
 
 function syncGlobalParams(params) {
   params = params || {};
@@ -33,8 +33,6 @@ function getEffectiveParams(params) {
   }
   if (!out.baseUrl) out.baseUrl = JAVDB_DEFAULT_BASE;
   if (!out.locale) out.locale = "zh";
-  if (!out.coverMode) out.coverMode = "fast";
-  if (!out.dmmPosterSize) out.dmmPosterSize = "large";
   return out;
 }
 
@@ -1619,26 +1617,6 @@ WidgetMetadata = {
       ],
       value: "zh",
     },
-    {
-      name: "coverMode",
-      title: "\u5c01\u9762\u6a21\u5f0f",
-      type: "enumeration",
-      enumOptions: [
-        { title: "\u5feb\u901f\uff08JavDB \u9875\u9762\u5c01\u9762\uff09", value: "fast" },
-        { title: "\u9ad8\u6e05\uff08DMM \u76f4\u94fe\u6821\u9a8c\uff0c\u5931\u8d25\u7528 JavDB\uff09", value: "hd" },
-      ],
-      value: "fast",
-    },
-    {
-      name: "dmmPosterSize",
-      title: "DMM \u5c01\u9762\u89c4\u683c",
-      type: "enumeration",
-      enumOptions: [
-        { title: "\u5927\u56fe (pl)", value: "large" },
-        { title: "\u5c0f\u5c01\u9762 (ps)", value: "small" },
-      ],
-      value: "large",
-    },
   ],
   modules: [
     {
@@ -2312,17 +2290,6 @@ function buildCoverUrlsFromVideoId(videoIdOrTitle) {
   };
 }
 
-function pickSyncHdCoverUrls(code, posterSize) {
-  posterSize = String(posterSize || "large").toLowerCase();
-  var candidates = buildCoverCandidatesFromVideoId(code);
-  if (posterSize === "small") {
-    return compactUniqueUrls(candidates.posterCandidates || []).slice(0, 2);
-  }
-  return compactUniqueUrls(
-    (candidates.backdropCandidates || []).concat(candidates.posterCandidates || [])
-  ).slice(0, 2);
-}
-
 function cleanDvdId(raw) {
   return String(raw || "")
     .replace(/\s+/g, " ")
@@ -2413,220 +2380,6 @@ function upgradeJavdbImageUrl(url) {
   return upgradeJavdbCoverUrl(value);
 }
 
-function isLowResGalleryUrl(url) {
-  var u = String(url || "").toLowerCase();
-  if (u.indexOf("/thumbs/") >= 0) return true;
-  if (/_s\.(jpe?g|webp|png)(\?|$)/i.test(u)) return true;
-  return false;
-}
-
-var DETAIL_GALLERY_LIMIT = 12;
-var COVER_VERIFY_MIN_BYTES = 15360;
-var COVER_VERIFY_TIMEOUT_MS = 1500;
-
-function normalizePosterUrl(url) {
-  var cover = String(url || "").trim();
-  if (!cover) return "";
-  var at = cover.indexOf("@");
-  if (at >= 0) cover = cover.slice(0, at);
-  return cover;
-}
-
-function buildDetailPosterUrlFromJavdb(coverUrl) {
-  return normalizePosterUrl(coverUrl);
-}
-
-function isNowPrintingPosterTarget(url) {
-  return String(url || "").toLowerCase().indexOf("now_printing") >= 0;
-}
-
-function isTrustedHdCoverUrl(url) {
-  var u = String(url || "").trim();
-  if (!u || isNowPrintingPosterTarget(u)) return false;
-  if (/dmm\.co\.jp/i.test(u) && /(?:pl|ps)\.jpe?g(\?|$)/i.test(u)) return true;
-  if (/awsimgsrc\.dmm\.co\.jp/i.test(u) && /(?:pl|ps)\.jpe?g(\?|$)/i.test(u)) return true;
-  if (/image\.mgstage\.com/i.test(u) && /(?:pf_[eo]|pb_e_)/i.test(u)) return true;
-  return false;
-}
-
-function parseCoverContentLength(resp) {
-  var headers = (resp && resp.headers) || {};
-  var raw = headers["content-length"] || headers["Content-Length"] || "";
-  var size = parseInt(String(raw), 10);
-  return isNaN(size) ? 0 : size;
-}
-
-function isCoverVerifyResponseOk(resp) {
-  var status = resp && Number(resp.status || resp.statusCode || 0);
-  return !status || status < 400;
-}
-
-function posterResponseSize(data) {
-  if (!data) return 0;
-  if (typeof data === "string") return data.length;
-  if (typeof data.length === "number") return data.length;
-  if (typeof data.byteLength === "number") return data.byteLength;
-  return 0;
-}
-
-function posterRequestHeaders(params) {
-  return {
-    "User-Agent": JAVDB_UA,
-    Referer: javdbBase(params) + "/",
-    Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-  };
-}
-
-function extractPosterFinalUrl(resp, url) {
-  var respObj = resp && resp.request && resp.request.res;
-  if (respObj && respObj.responseUrl) return String(respObj.responseUrl);
-  if (resp && resp.responseURL) return String(resp.responseURL);
-  if (resp && resp.request && resp.request.uri && resp.request.uri.href) {
-    return String(resp.request.uri.href);
-  }
-  if (resp && resp.config && resp.config.url) return String(resp.config.url);
-  return String(url || "");
-}
-
-async function verifyCoverUrl(url, params) {
-  if (!url || isNowPrintingPosterTarget(url)) return "";
-  if (isTrustedHdCoverUrl(url)) return url;
-  var headers = posterRequestHeaders(params);
-  try {
-    var headResp = await Widget.http.get(url, {
-      method: "HEAD",
-      timeout: COVER_VERIFY_TIMEOUT_MS,
-      headers: headers,
-      allow_redirects: true,
-    });
-    var headFinalUrl = extractPosterFinalUrl(headResp, url);
-    if (isNowPrintingPosterTarget(headFinalUrl)) return "";
-    if (!isCoverVerifyResponseOk(headResp)) return "";
-    var headSize = parseCoverContentLength(headResp);
-    if (headSize >= COVER_VERIFY_MIN_BYTES) return url;
-    if (headSize > 0 && headSize < COVER_VERIFY_MIN_BYTES) return "";
-  } catch (err) {}
-
-  try {
-    var rangeResp = await Widget.http.get(url, {
-      timeout: COVER_VERIFY_TIMEOUT_MS,
-      headers: Object.assign({}, headers, { Range: "bytes=0-" + String(COVER_VERIFY_MIN_BYTES - 1) }),
-      allow_redirects: true,
-    });
-    var rangeFinalUrl = extractPosterFinalUrl(rangeResp, url);
-    if (isNowPrintingPosterTarget(rangeFinalUrl)) return "";
-    if (!isCoverVerifyResponseOk(rangeResp)) return "";
-    if (parseCoverContentLength(rangeResp) >= COVER_VERIFY_MIN_BYTES) return url;
-    if (posterResponseSize(rangeResp && rangeResp.data) >= COVER_VERIFY_MIN_BYTES) return url;
-    return "";
-  } catch (err) {
-    return "";
-  }
-}
-
-async function resolveFirstVerifiedCoverUrl(urls, params) {
-  urls = compactUniqueUrls(urls || []).slice(0, 2);
-  if (!urls.length) return "";
-  if (urls.length === 1) return verifyCoverUrl(urls[0], params);
-
-  return new Promise(function (resolve) {
-    var settled = false;
-    var remaining = urls.length;
-    function finish(result) {
-      if (settled) return;
-      if (result) {
-        settled = true;
-        resolve(result);
-        return;
-      }
-      remaining--;
-      if (remaining <= 0) resolve("");
-    }
-    for (var i = 0; i < urls.length; i++) {
-      verifyCoverUrl(urls[i], params).then(finish);
-    }
-  });
-}
-
-function resolveJavdbDetailPosterFallback(javdbCover, pageCover, galleryUrls) {
-  var fromPage = buildDetailPosterUrlFromJavdb(pageCover);
-  var fromFallback = buildDetailPosterUrlFromJavdb(javdbCover);
-  if (fromPage) return fromPage;
-  if (fromFallback) return fromFallback;
-  return pickBestGalleryPosterUrl(galleryUrls || []);
-}
-
-function pickBestGalleryPosterUrl(galleryUrls) {
-  var urls = galleryUrls || [];
-  for (var i = 0; i < urls.length; i++) {
-    var upgraded = upgradeJavdbSampleUrl(String(urls[i] || "").trim());
-    if (upgraded && !isLowResGalleryUrl(upgraded)) return upgraded;
-  }
-  return "";
-}
-
-function buildDetailPosterUrl(coverUrl, code) {
-  var fromJavdb = buildDetailPosterUrlFromJavdb(coverUrl);
-  if (fromJavdb) return fromJavdb;
-  return "";
-}
-
-function buildFastDetailPoster(pageCover, fallbackCover) {
-  var source = String(pageCover || "").trim() || String(fallbackCover || "").trim();
-  return buildDetailPosterUrlFromJavdb(source);
-}
-
-async function resolveDetailPosterUrl(javdbCover, code, params, options) {
-  options = options || {};
-  params = getEffectiveParams(params || {});
-  var posterSize = String(params.dmmPosterSize || "large");
-  var syncUrls = compactUniqueUrls(code ? pickSyncHdCoverUrls(code, posterSize) : []);
-
-  for (var i = 0; i < syncUrls.length; i++) {
-    if (isTrustedHdCoverUrl(syncUrls[i])) return syncUrls[i];
-  }
-
-  if (syncUrls.length) {
-    var verified = await resolveFirstVerifiedCoverUrl(syncUrls, params);
-    if (verified) return verified;
-  }
-
-  return resolveJavdbDetailPosterFallback(javdbCover, options.pageCover, options.galleryUrls);
-}
-
-function collectPageGalleryUrls($, base) {
-  var urls = [];
-  var seen = {};
-
-  function push(raw) {
-    var href = absUrl(String(raw || "").trim(), base);
-    if (!href || seen[href]) return;
-    if (href.indexOf("/samples/") < 0 && href.indexOf("jdbstatic.com/samples") < 0) return;
-    var upgraded = upgradeJavdbSampleUrl(href);
-    if (!upgraded || isLowResGalleryUrl(upgraded)) return;
-    seen[upgraded] = true;
-    urls.push(upgraded);
-  }
-
-  $("a.tile-item[data-fancybox='gallery'], a[data-fancybox='gallery'].tile-item").each(function () {
-    push(attrOf($, $(this), "href"));
-    push(attrOf($, $(this), "data-src"));
-  });
-
-  return urls.slice(0, DETAIL_GALLERY_LIMIT);
-}
-
-function buildDetailBackdropPaths(pageUrls, displayCode, params, options) {
-  options = options || {};
-  var pageBackdrops = normalizeBackdropPaths(pageUrls, options);
-  if (pageBackdrops.length) return pageBackdrops;
-
-  if (options.coverUrl) {
-    return [options.coverUrl];
-  }
-  return [];
-}
-
 function buildDmmPreviewUrl(contentId) {
   var id = String(contentId || "").toLowerCase();
   if (!id) return "";
@@ -2674,25 +2427,6 @@ function parseTrailersFromHtml($, base, displayCode, coverUrl) {
 }
 
 
-function normalizeBackdropPaths(urls, options) {
-  options = options || {};
-  var coverUrl = String(options.coverUrl || "").trim();
-  var result = [];
-  var seen = {};
-  for (var i = 0; i < (urls || []).length; i++) {
-    var raw = String(urls[i] || "").trim();
-    if (!raw) continue;
-    if (isLowResGalleryUrl(raw)) continue;
-    var upgraded = upgradeJavdbSampleUrl(raw);
-    if (!upgraded || seen[upgraded]) continue;
-    if (coverUrl && upgraded === coverUrl) continue;
-    if (isLowResGalleryUrl(upgraded)) continue;
-    seen[upgraded] = true;
-    result.push(upgraded);
-  }
-  return result.slice(0, DETAIL_GALLERY_LIMIT);
-}
-
 function isPortraitListCoverUrl(url) {
   var u = String(url || "").toLowerCase();
   if (!u) return false;
@@ -2713,29 +2447,6 @@ function isLandscapeListCoverUrl(url) {
   if (/pl\.jpe?g(\?|$)/i.test(u)) return true;
   if (/pb_e_/.test(u)) return true;
   return !isPortraitListCoverUrl(u);
-}
-
-function resolvePortraitFallbackForList(portraitUrl) {
-  return upgradeJavdbCoverUrl(portraitUrl);
-}
-
-function isRankingsDailyDmmLargeList(params) {
-  return String((params && params.listCoverStyle) || "") === "dmm-large";
-}
-
-function resolveDefaultListBackdropPath(code, fallbackCover, videoId) {
-  var catembyCover = resolveCatembyListCoverUrl(videoId);
-  if (catembyCover) return catembyCover;
-  var pageUrl = upgradeJavdbImageUrl(fallbackCover);
-  if (pageUrl && isLandscapeListCoverUrl(pageUrl) && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
-  if (pageUrl && !isJdbstaticImageUrl(pageUrl)) return pageUrl;
-  return fallbackCover || "";
-}
-
-function resolveDmmLargeListBackdropPath(code, fallbackCover, videoId) {
-  var urls = code ? pickSyncHdCoverUrls(code, "large") : [];
-  if (urls[0]) return urls[0];
-  return resolveDefaultListBackdropPath(code, fallbackCover, videoId);
 }
 
 function extractBackgroundImageUrl(style) {
@@ -2816,19 +2527,6 @@ function isJdbstaticImageUrl(url) {
   return /jdbstatic\.com/i.test(String(url || ""));
 }
 
-function resolveListBackdropPath(code, fallbackCover, videoId, params) {
-  params = params || {};
-  if (isRankingsDailyDmmLargeList(params)) {
-    return resolveDmmLargeListBackdropPath(code, fallbackCover, videoId);
-  }
-  return resolveDefaultListBackdropPath(code, fallbackCover, videoId);
-}
-
-function resolveDetailBackdropPath(code, fallbackCover, videoId) {
-  var javdbCover = resolveJavdbCoverUrl(fallbackCover, videoId);
-  return javdbCover || fallbackCover || "";
-}
-
 function buildJavdbCoverFromVideoId(videoId) {
   var id = String(videoId || "").trim();
   if (!id || id.length < 2) return "";
@@ -2840,6 +2538,31 @@ function resolveJavdbCoverUrl(fallbackCover, videoId) {
   var upgraded = upgradeJavdbImageUrl(fallbackCover);
   var fromId = buildJavdbCoverFromVideoId(videoId);
   return upgraded || fromId || fallbackCover || "";
+}
+
+function resolvePageCover(fallbackCover, videoId) {
+  return resolveJavdbCoverUrl(fallbackCover, videoId) || upgradeJavdbImageUrl(fallbackCover) || "";
+}
+
+function buildCoverBundle(code, fallbackCover, options, params) {
+  options = options || {};
+  var pageCover = resolvePageCover(fallbackCover, options.videoId);
+  var hdCovers = buildCoverUrlsFromVideoId(code);
+  var hdPoster = hdCovers.posterUrl || pageCover;
+  var hdBackdrop = hdCovers.backdropUrl || pageCover;
+  return {
+    listBackdrop: hdBackdrop,
+    backdropPath: hdBackdrop,
+    posterPath: hdPoster,
+    detailPoster: hdPoster,
+    coverUrl: hdBackdrop,
+    image: hdBackdrop,
+  };
+}
+
+function buildDetailBackdropPaths(displayCode) {
+  var jtMeta = fetchJavTrailersMeta(displayCode);
+  return compactUniqueUrls([jtMeta.backdropPath].concat(jtMeta.backdropPaths || [])).filter(Boolean);
 }
 
 function extractBestImageUrl($, node, base) {
@@ -2861,30 +2584,6 @@ function extractBestImageUrl($, node, base) {
     }
   }
   return upgradeJavdbImageUrl(absUrl(best, base));
-}
-
-function buildCoverBundle(code, fallbackCover, options, params) {
-  options = options || {};
-  var videoId = options.videoId;
-  var forList = !!options.forList;
-  var javdbCover = resolveJavdbCoverUrl(fallbackCover, videoId);
-  var listBackdrop = resolveListBackdropPath(code, fallbackCover, videoId, params);
-  var detailBackdrop = resolveDetailBackdropPath(code, fallbackCover, videoId);
-  var javdbPoster = buildDetailPosterUrl(javdbCover, code) || javdbCover || "";
-  if (forList) {
-    return {
-      listBackdrop: listBackdrop,
-      backdropPath: listBackdrop,
-      posterPath: "",
-      detailPoster: "",
-    };
-  }
-  return {
-    listBackdrop: listBackdrop,
-    backdropPath: detailBackdrop,
-    posterPath: javdbPoster,
-    detailPoster: buildDetailPosterUrl(javdbCover, code),
-  };
 }
 
 function enrichDetailLinks(item, pageUrl, displayCode, cover, currentPath, params) {
@@ -3074,20 +2773,18 @@ function enrichMovieItems(rawItems, params) {
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId, forList: true }, params);
-    var backdropPath = covers.listBackdrop || "";
-    if (!backdropPath) {
-      backdropPath = isRankingsDailyDmmLargeList(params)
-        ? resolveDmmLargeListBackdropPath(raw.code, raw.fallbackCover, raw.videoId)
-        : resolveDefaultListBackdropPath(raw.code, raw.fallbackCover, raw.videoId);
-    }
+    var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId }, params);
     items.push(Object.assign(
       {
         id: raw.id,
         type: raw.type,
         mediaType: raw.mediaType,
         title: raw.title,
-        backdropPath: backdropPath,
+        backdropPath: covers.backdropPath,
+        posterPath: covers.posterPath,
+        detailPoster: covers.detailPoster,
+        coverUrl: covers.coverUrl,
+        image: covers.image,
         rating: raw.rating,
         releaseDate: raw.releaseDate,
         link: raw.link,
@@ -3605,42 +3302,21 @@ async function parseDetailPage(html, link, params) {
     rating = parseRatingText(textOf($, scoreNode.parent()));
   }
 
-  var backdropPaths = collectPageGalleryUrls($, base);
-
   var cover = extractBestImageUrl($, $("img.video-cover").first(), base);
-  if (!cover && backdropPaths.length) cover = absUrl(backdropPaths[0], base);
 
   var displayCode = resolveMatchCode(code, title, description);
   var displayTitle = formatDisplayTitle(displayCode, title);
   var matchFields = buildGuangyaMatchFields(displayCode, title || displayTitle, description);
   var fallbackCover = cover || resolveJavdbCoverUrl("", videoId);
   params = getEffectiveParams(params);
-  var coverMode = String(params.coverMode || "fast");
-  var detailPosterPromise =
-    coverMode === "hd"
-      ? resolveDetailPosterUrl(fallbackCover, displayCode, params, {
-          videoId: videoId,
-          pageCover: cover,
-          galleryUrls: backdropPaths,
-        })
-      : null;
 
   var detailMeta = parseDetailMeta($, base);
   var genreItems = detailMeta.genreItems;
   var peoples = detailMeta.peoples;
 
   var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
-  var backdropPath = coverBundle.backdropPath || fallbackCover;
-  var detailPoster =
-    coverMode === "hd"
-      ? (await detailPosterPromise) || buildFastDetailPoster(cover, fallbackCover)
-      : buildFastDetailPoster(cover, fallbackCover);
-  var posterPath = detailPoster || buildDetailPosterUrlFromJavdb(fallbackCover) || "";
-
-  var allBackdropPaths = buildDetailBackdropPaths(backdropPaths, displayCode, params, {
-    coverUrl: fallbackCover,
-  });
-  var trailers = parseTrailersFromHtml($, base, displayCode, backdropPath || fallbackCover);
+  var allBackdropPaths = buildDetailBackdropPaths(displayCode);
+  var trailers = parseTrailersFromHtml($, base, displayCode, coverBundle.backdropPath || fallbackCover);
 
   return enrichDetailLinks(
     Object.assign(
@@ -3649,10 +3325,11 @@ async function parseDetailPage(html, link, params) {
         type: "url",
         mediaType: "movie",
         title: displayTitle || displayCode || path.split("/").pop(),
-        backdropPath: backdropPath,
-        posterPath: posterPath,
-        coverUrl: backdropPath,
-        detailPoster: detailPoster,
+        backdropPath: coverBundle.backdropPath,
+        posterPath: coverBundle.posterPath,
+        coverUrl: coverBundle.coverUrl,
+        image: coverBundle.image,
+        detailPoster: coverBundle.detailPoster,
         backdropPaths: allBackdropPaths,
         trailers: trailers,
         releaseDate: releaseDate,
@@ -3666,7 +3343,7 @@ async function parseDetailPage(html, link, params) {
     ),
     pageUrl,
     displayCode,
-    backdropPath,
+    coverBundle.backdropPath,
     path,
     params
   );
@@ -3753,9 +3430,7 @@ async function loadLatest(params) {
 
 async function loadRankings(params) {
   var period = String((params && params.period) || "daily");
-  var listParams = Object.assign({}, params || {});
-  if (period === "daily") listParams.listCoverStyle = "dmm-large";
-  return loadBrowseList("/rankings/movies?period=" + encodeURIComponent(period), listParams);
+  return loadBrowseList("/rankings/movies?period=" + encodeURIComponent(period), params || {});
 }
 
 async function loadMovies(params) {
