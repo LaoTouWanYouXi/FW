@@ -15,12 +15,24 @@ const CATEGORY_ID_TITLE_SEP = "~";
 const JDBSTATIC_BASE = "https://c0.jdbstatic.com";
 
 const MOVIE_TYPE_CODE = { censored: "0", uncensored: "1", western: "2", fc2: "3", all: "0" };
+const MOVIE_TYPE_ENUM = [
+  { title: "全部", value: "all" },
+  { title: "有码", value: "censored" },
+  { title: "无码", value: "uncensored" },
+  { title: "欧美", value: "western" },
+  { title: "FC2", value: "fc2" },
+];
 const CATEGORY_KIND_CODE = { actors: "a", makers: "m", series: "s", tags: "0", directors: "d", codes: "c" };
 const LIST_FILTER_CODE = { all: "", playable: "p", magnet: "m", subtitle: "c" };
 const SORT_API_MAP = {
   published: { sort_by: "release", order_by: "desc" },
   score: { sort_by: "score", order_by: "desc" },
   fav: { sort_by: "fav", order_by: "desc" },
+};
+const SEARCH_SORT_MAP = {
+  published: "release",
+  score: "score",
+  fav: "fav",
 };
 
 // 演员/片商/标签：由站点 API 拉取后静态写入（2026-07-10）
@@ -1539,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.4.7",
+  version: "1.4.9",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1632,7 +1644,7 @@ WidgetMetadata = {
       id: "actors",
       title: "演员",
       functionName: "loadPage",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: categoryModuleParams({
         paramName: "peopleId",
         itemTitle: "选择演员",
@@ -1644,7 +1656,7 @@ WidgetMetadata = {
       id: "makers",
       title: "片商",
       functionName: "loadPage",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: categoryModuleParams({
         paramName: "genreId",
         itemTitle: "选择片商",
@@ -1656,7 +1668,7 @@ WidgetMetadata = {
       id: "tag_main",
       title: "基本",
       functionName: "loadPage",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: categoryModuleParams({
         paramName: "genreId",
         itemTitle: "选择标签",
@@ -1668,7 +1680,7 @@ WidgetMetadata = {
       id: "tag_subject",
       title: "主题",
       functionName: "loadPage",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: categoryModuleParams({
         paramName: "genreId",
         itemTitle: "选择标签",
@@ -1680,7 +1692,7 @@ WidgetMetadata = {
       id: "tag_role",
       title: "角色",
       functionName: "loadPage",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: categoryModuleParams({
         paramName: "genreId",
         itemTitle: "选择标签",
@@ -1692,7 +1704,7 @@ WidgetMetadata = {
       id: "tag_cloth",
       title: "服装",
       functionName: "loadPage",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: categoryModuleParams({
         paramName: "genreId",
         itemTitle: "选择标签",
@@ -1704,7 +1716,7 @@ WidgetMetadata = {
       id: "tag_body",
       title: "体型",
       functionName: "loadPage",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: categoryModuleParams({
         paramName: "genreId",
         itemTitle: "选择标签",
@@ -1716,7 +1728,7 @@ WidgetMetadata = {
       id: "tag_behavior",
       title: "行为",
       functionName: "loadPage",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: categoryModuleParams({
         paramName: "genreId",
         itemTitle: "选择标签",
@@ -1728,7 +1740,7 @@ WidgetMetadata = {
       id: "tag_play_method",
       title: "玩法",
       functionName: "loadPage",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: categoryModuleParams({
         paramName: "genreId",
         itemTitle: "选择标签",
@@ -1740,7 +1752,7 @@ WidgetMetadata = {
       id: "tag_category",
       title: "类别",
       functionName: "loadPage",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: categoryModuleParams({
         paramName: "genreId",
         itemTitle: "选择标签",
@@ -2009,6 +2021,50 @@ function normalizeRankPeriod(period) {
   return "daily";
 }
 
+const MOVIE_TYPE_BY_CODE = { "0": "censored", "1": "uncensored", "2": "western", "3": "fc2" };
+
+function resolveMovieType(raw) {
+  let text = extractEnumValue(raw, [MOVIE_TYPE_ENUM]);
+  if (!text) text = String(raw || "").trim();
+  if (text && Object.prototype.hasOwnProperty.call(MOVIE_TYPE_BY_CODE, text)) {
+    return MOVIE_TYPE_BY_CODE[text];
+  }
+  text = text.toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(MOVIE_TYPE_CODE, text)) return text;
+  return "all";
+}
+
+function shouldUseCategorySearch(movieType) {
+  return movieType === "uncensored" || movieType === "western" || movieType === "fc2";
+}
+
+function resolveSearchSortBy(sortBy) {
+  const key = String(sortBy || "published").toLowerCase();
+  return SEARCH_SORT_MAP[key] || SEARCH_SORT_MAP.published;
+}
+
+function lookupEnumTitle(itemId, enumOptions) {
+  const id = String(itemId || "").trim();
+  if (!id || !enumOptions) return "";
+  for (let i = 0; i < enumOptions.length; i++) {
+    const opt = enumOptions[i];
+    if (!opt) continue;
+    if (opt.value === id || opt.title === id) return String(opt.title || opt.value || "");
+  }
+  return "";
+}
+
+function resolveCategorySearchKeyword(kind, itemId, params) {
+  const title = safeText(params.categoryTitle);
+  if (title) return title;
+  const preferLists = enumOptionsForKind(kind);
+  for (let i = 0; i < preferLists.length; i++) {
+    const found = lookupEnumTitle(itemId, preferLists[i]);
+    if (found) return found;
+  }
+  return String(itemId || "").trim();
+}
+
 function buildCategoryFilter(kind, itemId, movieType, listFilter) {
   const kindCode = CATEGORY_KIND_CODE[kind] || "0";
   const typePart = MOVIE_TYPE_CODE[movieType || "all"] || "0";
@@ -2018,13 +2074,25 @@ function buildCategoryFilter(kind, itemId, movieType, listFilter) {
   return filterBy;
 }
 
-async function fetchTagMovies(tagName, params) {
+async function fetchSearchMovies(keyword, params) {
   const page = Number(params.page || params.from || 1);
-  const movieType = String(params.movie_type || "all");
-  const query = { q: tagName, page, type: "movie" };
-  if (movieType && movieType !== "all") query.filter_by = movieType;
+  const movieType = resolveMovieType(params.movie_type);
+  const query = {
+    q: keyword,
+    page,
+    type: "movie",
+    movie_filter_by: "all",
+    movie_sort_by: resolveSearchSortBy(params.sort_by),
+  };
+  if (movieType !== "all") {
+    query.movie_type = MOVIE_TYPE_CODE[movieType] || "0";
+  }
   const data = await apiGet("/v2/search", query);
   return data.movies || [];
+}
+
+async function fetchTagMovies(tagName, params) {
+  return fetchSearchMovies(tagName, params);
 }
 
 function resolveSortQuery(sortBy) {
@@ -2713,17 +2781,24 @@ async function loadPage(params) {
     const ctx = resolveCategoryContext(params);
     if (!ctx.itemId) throw new Error("请选择分类项");
 
-    const movieType = params.movie_type || "all";
+    const movieType = resolveMovieType(params.movie_type);
     if (ctx.kind === "tags") {
       const movies = await fetchTagMovies(ctx.itemId, params);
+      return enrichListMovies(movies);
+    }
+
+    if (shouldUseCategorySearch(movieType)) {
+      const keyword = resolveCategorySearchKeyword(ctx.kind, ctx.itemId, params);
+      const movies = await fetchSearchMovies(keyword, params);
       return enrichListMovies(movies);
     }
 
     const filterBy = buildCategoryFilter(ctx.kind, ctx.itemId, movieType, params.list_filter || "all");
     const movies = await fetchCategoryMovies(filterBy, params);
     if (!movies.length && ctx.kind === "makers") {
-      const searchData = await apiGet("/v2/search", { q: ctx.itemId, page: Number(params.page || 1), type: "movie" });
-      return enrichListMovies(searchData.movies || []);
+      const keyword = resolveCategorySearchKeyword(ctx.kind, ctx.itemId, params);
+      const fallbackMovies = await fetchSearchMovies(keyword, params);
+      return enrichListMovies(fallbackMovies);
     }
     return enrichListMovies(movies);
   } catch (error) {
