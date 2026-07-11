@@ -2401,9 +2401,46 @@ function isInvalidCoverTarget(url) {
   var u = String(url || "").toLowerCase();
   if (!u) return true;
   if (u.indexOf("now_printing") >= 0) return true;
-  if (u.indexOf("/noimage/") >= 0) return true;
+  if (u.indexOf("noimage") >= 0) return true;
   if (/adult_pl\.jpg(\?|$)/i.test(u)) return true;
   return false;
+}
+
+function readResponseByte(data, index) {
+  if (!data || index < 0) return -1;
+  if (typeof data === "string") return data.charCodeAt(index) & 0xff;
+  if (typeof data.length === "number" && data.length > index) return Number(data[index]) & 0xff;
+  return -1;
+}
+
+function isPlaceholderImageResponse(resp, data, size) {
+  size = size || posterResponseSize(data);
+  if (size > 0 && size <= 4000) return true;
+  if (typeof data === "string") {
+    var head = data.slice(0, 64).replace(/^\s+/, "").toLowerCase();
+    if (head.indexOf("<!doctype") === 0 || head.indexOf("<html") === 0 || head.indexOf("<?xml") === 0) return true;
+  }
+  var headers = (resp && resp.headers) || {};
+  var contentType = String(headers["content-type"] || headers["Content-Type"] || "").toLowerCase();
+  if (contentType.indexOf("text/html") >= 0 || contentType.indexOf("text/xml") >= 0 || contentType.indexOf("application/xml") >= 0) {
+    return true;
+  }
+  var b0 = readResponseByte(data, 0);
+  var b1 = readResponseByte(data, 1);
+  if (b0 === 0xff && b1 === 0xd8) return false;
+  if (b0 === 0x89 && b1 === 0x50) return false;
+  if (b0 === 0x47 && b1 === 0x49) return false;
+  if (b0 === 0x3c) return true;
+  if (contentType.indexOf("image/") >= 0) return false;
+  return size > 0 && b0 >= 0;
+}
+
+function pickVerifiedCoverUrl(requestUrl, finalUrl) {
+  var final = String(finalUrl || "").trim();
+  var original = String(requestUrl || "").trim();
+  if (final && !isInvalidCoverTarget(final)) return final;
+  if (original && !isInvalidCoverTarget(original)) return original;
+  return "";
 }
 
 function parseCoverContentLength(resp) {
@@ -2456,12 +2493,14 @@ async function verifyCoverUrl(url, params, minBytes) {
       allow_redirects: true,
     });
     var finalUrl = extractPosterFinalUrl(resp, url);
-    if (isInvalidCoverTarget(finalUrl)) return "";
+    if (isInvalidCoverTarget(finalUrl) || isInvalidCoverTarget(url)) return "";
     if (!isCoverVerifyResponseOk(resp)) return "";
+    var data = resp && resp.data;
     var size = parseCoverContentLength(resp);
-    if (!size) size = posterResponseSize(resp && resp.data);
+    if (!size) size = posterResponseSize(data);
+    if (isPlaceholderImageResponse(resp, data, size)) return "";
     if (size > 0 && size < minBytes) return "";
-    return url;
+    return pickVerifiedCoverUrl(url, finalUrl);
   } catch (err) {
     return "";
   }
@@ -2630,6 +2669,22 @@ function buildJavdbCoverFromVideoId(videoId) {
   return "https://c0.jdbstatic.com/covers/" + prefix + "/" + id + ".jpg";
 }
 
+function buildJdbstaticThumbUrl(videoId) {
+  var id = String(videoId || "").trim();
+  if (!id || id.length < 2) return "";
+  return "https://c0.jdbstatic.com/thumbs/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+}
+
+function resolveCatembyStyleCoverUrl(videoId) {
+  var id = String(videoId || "").trim();
+  if (!id) return "";
+  var jdbCover = normalizeJavdbCoverUrl(buildJavdbCoverFromVideoId(id));
+  if (jdbCover) return jdbCover;
+  var jdbThumb = normalizeJavdbCoverUrl(buildJdbstaticThumbUrl(id));
+  if (jdbThumb) return jdbThumb;
+  return resolveCatembyListCoverUrl(id) || "";
+}
+
 function resolveJavdbCoverUrl(fallbackCover, videoId) {
   var fromId = normalizeJavdbCoverUrl(buildJavdbCoverFromVideoId(videoId));
   var upgraded = normalizeJavdbCoverUrl(upgradeJavdbImageUrl(fallbackCover));
@@ -2662,18 +2717,19 @@ function buildDetailCoverBundle(code) {
 async function resolveListCoverBundle(code, fallbackCover, options, params) {
   options = options || {};
   params = getEffectiveParams(params || {});
-  var pageCover = resolvePageCover(fallbackCover, options.videoId);
+  var videoId = options.videoId;
+  var catembyCover = resolveCatembyStyleCoverUrl(videoId);
   var candidates = buildCoverCandidatesFromVideoId(code);
   var posterUrls = candidates.posterCandidates || [];
   var backdropUrls = candidates.backdropCandidates || [];
 
   if (!posterUrls.length && !backdropUrls.length) {
-    return buildCoverBundleFromUrls(pageCover, pageCover);
+    return buildCoverBundleFromUrls(catembyCover, catembyCover);
   }
 
   var hdBackdrop = await resolveFirstVerifiedCoverUrl(backdropUrls, params, COVER_VERIFY_MIN_BYTES);
   var hdPoster = await resolveFirstVerifiedCoverUrl(posterUrls, params, POSTER_VERIFY_MIN_BYTES);
-  return buildCoverBundleFromUrls(hdPoster || pageCover, hdBackdrop || pageCover);
+  return buildCoverBundleFromUrls(hdPoster || catembyCover, hdBackdrop || catembyCover);
 }
 
 function buildDetailBackdropPaths(displayCode) {
@@ -2841,14 +2897,11 @@ function parseListItems(html, params) {
     var subTitle = textOf($, box.find(".video-title").first());
     var rawTitle = box.attr("title") || subTitle || titleText;
     var matchCode = resolveMatchCode(titleText, rawTitle);
-    var fallbackCover = extractListCardCover($, box, base);
-    if (!fallbackCover) fallbackCover = resolveCatembyListCoverUrl(videoId);
     rawItems.push({
       id: matchCode || videoId,
       type: "url",
       mediaType: "movie",
       title: formatDisplayTitle(matchCode, rawTitle) || String(rawTitle || videoId).replace(/\s+/g, " ").trim(),
-      fallbackCover: fallbackCover,
       rating: parseRatingText(textOf($, box.find(".score").first())),
       releaseDate: textOf($, box.find(".meta").first()) || "",
       link: encodeLink(path),
@@ -2868,7 +2921,7 @@ async function enrichMovieItems(rawItems, params) {
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = await resolveListCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId }, params);
+    var covers = await resolveListCoverBundle(raw.code, "", { videoId: raw.videoId }, params);
     items.push(Object.assign(
       {
         id: raw.id,
