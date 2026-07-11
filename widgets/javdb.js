@@ -1593,7 +1593,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.1.2",
+  version: "2.1.3",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2234,18 +2234,30 @@ function parseJavCodeParts(title) {
     REBD: "h_346",
     REBDB: "h_346",
     GSHRB: "h_346",
+    IESP: "h_173",
   };
   var number3 = match[2];
   while (number3.length < 3) number3 = "0" + number3;
+  var makerPrefix = String(numMap[prefix] || "");
+  var numberPlain = String(parseInt(match[2], 10));
+  var code =
+    makerPrefix.indexOf("h_") === 0
+      ? makerPrefix + prefixLower + numberPlain
+      : makerPrefix + prefixLower + number5;
   return {
     prefix: prefix,
     prefixLower: prefixLower,
     number: match[2],
     number3: number3,
     number5: number5,
-    code: String(numMap[prefix] || "") + prefixLower + number5,
+    code: code,
     plainCode: prefixLower + number5,
+    isMono: makerPrefix.indexOf("h_") === 0,
   };
+}
+
+function isDmmMonoContentId(contentId) {
+  return /^h_\d/i.test(String(contentId || ""));
 }
 
 function buildMgstageCoverCandidatesFromParts(parts, rule) {
@@ -2260,7 +2272,25 @@ function buildMgstageCoverCandidatesFromParts(parts, rule) {
   };
 }
 
-function buildDmmCoverCandidatesFromParts(parts) {
+function buildDmmMonoCoverCandidatesFromParts(parts) {
+  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
+  var contentId = String(parts.code || "").toLowerCase();
+  if (!contentId) return { posterCandidates: [], backdropCandidates: [] };
+  var picsBase = "https://pics.dmm.co.jp/mono/movie/adult/" + contentId;
+  var awsBase = "https://awsimgsrc.dmm.co.jp/pics/mono/movie/adult/" + contentId;
+  return {
+    posterCandidates: compactUniqueUrls([
+      picsBase + "/" + contentId + "ps.jpg",
+      awsBase + "/" + contentId + "ps.jpg",
+    ]),
+    backdropCandidates: compactUniqueUrls([
+      picsBase + "/" + contentId + "pl.jpg",
+      awsBase + "/" + contentId + "pl.jpg",
+    ]),
+  };
+}
+
+function buildDmmDigitalCoverCandidatesFromParts(parts) {
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
   var contentId = String(parts.code || "").toLowerCase();
   if (!contentId) return { posterCandidates: [], backdropCandidates: [] };
@@ -2275,6 +2305,14 @@ function buildDmmCoverCandidatesFromParts(parts) {
     ]),
     backdropCandidates: compactUniqueUrls([awsBase + "/" + contentId + "pl.jpg", picsBase + "/" + contentId + "pl.jpg"]),
   };
+}
+
+function buildDmmCoverCandidatesFromParts(parts) {
+  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
+  if (parts.isMono || isDmmMonoContentId(parts.code)) {
+    return buildDmmMonoCoverCandidatesFromParts(parts);
+  }
+  return buildDmmDigitalCoverCandidatesFromParts(parts);
 }
 
 function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
@@ -2319,8 +2357,11 @@ function buildDmmGallery(contentId, count) {
   var id = String(contentId || "").toLowerCase();
   if (!id) return [];
   var urls = [];
+  var base = isDmmMonoContentId(id)
+    ? "https://pics.dmm.co.jp/mono/movie/adult/" + id + "/"
+    : "https://pics.dmm.co.jp/digital/video/" + id + "/";
   for (var i = 1; i <= count; i++) {
-    urls.push("https://pics.dmm.co.jp/digital/video/" + id + "/" + id + "jp-" + i + ".jpg");
+    urls.push(base + id + "jp-" + i + ".jpg");
   }
   return urls;
 }
@@ -2351,9 +2392,13 @@ function fetchJavTrailersMeta(dvdId) {
     var mg = buildMgstageCoverCandidatesFromParts(parts, MGSTAGE_COVER_RULES[parts.prefix]);
     backdropPath = mg.backdropCandidates[0] || "";
     backdropPaths = buildMgstageGalleryFromDvdId(dvdId, 10);
-  } else if (contentId) {
-    var dmm = buildDmmCoverCandidatesFromParts(parts || { code: contentId });
+  } else if (parts) {
+    var dmm = buildDmmCoverCandidatesFromParts(parts);
     backdropPath = dmm.backdropCandidates[0] || "";
+    backdropPaths = buildDmmGallery(parts.code || contentId, 10);
+  } else if (contentId) {
+    var dmmFallback = buildDmmCoverCandidatesFromParts({ code: contentId });
+    backdropPath = dmmFallback.backdropCandidates[0] || "";
     backdropPaths = buildDmmGallery(contentId, 10);
   }
   return { backdropPath: backdropPath, backdropPaths: backdropPaths };
@@ -2425,7 +2470,11 @@ function isDmmListCoverUnreliable(code) {
 
 function filterTrustedCdnUrls(urls) {
   return (urls || []).filter(function (url) {
-    return /awsimgsrc\.dmm\.co\.jp|image\.mgstage\.com/i.test(String(url || ""));
+    var value = String(url || "");
+    if (/image\.mgstage\.com/i.test(value)) return true;
+    if (/awsimgsrc\.dmm\.co\.jp/i.test(value)) return true;
+    if (/pics\.dmm\.co\.jp\/mono\/movie\/adult\//i.test(value)) return true;
+    return false;
   });
 }
 
