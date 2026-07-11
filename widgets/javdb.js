@@ -2677,6 +2677,18 @@ function resolvePortraitFallbackForList(portraitUrl) {
   return upgradeJavdbCoverUrl(portraitUrl);
 }
 
+function isRankingsDailyPortraitList(params) {
+  return String((params && params.listCoverStyle) || "") === "portrait";
+}
+
+function resolvePortraitListBackdropPath(fallbackCover, videoId) {
+  var fromId = buildJavdbCoverFromVideoId(videoId);
+  if (fromId) return fromId;
+  var portrait = resolvePortraitFallbackForList(fallbackCover);
+  if (portrait) return portrait;
+  return upgradeJavdbCoverUrl(fallbackCover) || fallbackCover || "";
+}
+
 function extractBackgroundImageUrl(style) {
   var match = String(style || "").match(/url\(['"]?([^'")]+)/i);
   return match ? match[1] : "";
@@ -2689,7 +2701,9 @@ function isUselessListCoverUrl(url) {
   return false;
 }
 
-function extractListCardCover($, box, base) {
+function extractListCardCover($, box, base, params) {
+  params = params || {};
+  var portraitMode = isRankingsDailyPortraitList(params);
   var candidates = [];
   var scopes = [box];
   var item = box.closest(".item");
@@ -2725,6 +2739,17 @@ function extractListCardCover($, box, base) {
     });
   }
 
+  if (portraitMode) {
+    for (var pi = 0; pi < candidates.length; pi++) {
+      if (isPortraitListCoverUrl(candidates[pi])) return upgradeJavdbCoverUrl(candidates[pi]);
+    }
+    for (var pj = 0; pj < candidates.length; pj++) {
+      var upgradedPortrait = upgradeJavdbCoverUrl(candidates[pj]);
+      if (upgradedPortrait) return upgradedPortrait;
+    }
+    return candidates[0] || "";
+  }
+
   for (var i = 0; i < candidates.length; i++) {
     if (isLandscapeListCoverUrl(candidates[i])) return candidates[i];
   }
@@ -2757,6 +2782,9 @@ function isJdbstaticImageUrl(url) {
 
 function resolveListBackdropPath(code, fallbackCover, videoId, params) {
   params = params || {};
+  if (isRankingsDailyPortraitList(params)) {
+    return resolvePortraitListBackdropPath(fallbackCover, videoId);
+  }
   var catembyCover = resolveCatembyListCoverUrl(videoId);
   if (catembyCover) return catembyCover;
   var pageUrl = upgradeJavdbImageUrl(fallbackCover);
@@ -2988,7 +3016,7 @@ function parseListItems(html, params) {
     var subTitle = textOf($, box.find(".video-title").first());
     var rawTitle = box.attr("title") || subTitle || titleText;
     var matchCode = resolveMatchCode(titleText, rawTitle);
-    var fallbackCover = extractListCardCover($, box, base);
+    var fallbackCover = extractListCardCover($, box, base, params);
     if (!fallbackCover) fallbackCover = resolveCatembyListCoverUrl(videoId);
     rawItems.push({
       id: matchCode || videoId,
@@ -3016,8 +3044,12 @@ function enrichMovieItems(rawItems, params) {
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
     var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId, forList: true }, params);
-    var backdropPath =
-      covers.listBackdrop || resolveCatembyListCoverUrl(raw.videoId) || raw.fallbackCover || "";
+    var backdropPath = covers.listBackdrop || "";
+    if (!backdropPath) {
+      backdropPath = isRankingsDailyPortraitList(params)
+        ? resolvePortraitListBackdropPath(raw.fallbackCover, raw.videoId)
+        : resolveCatembyListCoverUrl(raw.videoId) || raw.fallbackCover || "";
+    }
     items.push(Object.assign(
       {
         id: raw.id,
@@ -3685,7 +3717,9 @@ async function loadLatest(params) {
 
 async function loadRankings(params) {
   var period = String((params && params.period) || "daily");
-  return loadBrowseList("/rankings/movies?period=" + encodeURIComponent(period), params || {});
+  var listParams = Object.assign({}, params || {});
+  if (period === "daily") listParams.listCoverStyle = "portrait";
+  return loadBrowseList("/rankings/movies?period=" + encodeURIComponent(period), listParams);
 }
 
 async function loadMovies(params) {
