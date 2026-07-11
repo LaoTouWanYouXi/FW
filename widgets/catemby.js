@@ -1539,7 +1539,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.4.6",
+  version: "1.4.7",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -2012,10 +2012,19 @@ function normalizeRankPeriod(period) {
 function buildCategoryFilter(kind, itemId, movieType, listFilter) {
   const kindCode = CATEGORY_KIND_CODE[kind] || "0";
   const typePart = MOVIE_TYPE_CODE[movieType || "all"] || "0";
-  let filterBy = kindCode + ":" + typePart + ":" + itemId;
+  let filterBy = typePart + ":" + kindCode + ":" + itemId;
   const extra = LIST_FILTER_CODE[listFilter || "all"];
-  if (extra) filterBy += ":" + extra;
+  filterBy += extra ? ":" + extra : ":";
   return filterBy;
+}
+
+async function fetchTagMovies(tagName, params) {
+  const page = Number(params.page || params.from || 1);
+  const movieType = String(params.movie_type || "all");
+  const query = { q: tagName, page, type: "movie" };
+  if (movieType && movieType !== "all") query.filter_by = movieType;
+  const data = await apiGet("/v2/search", query);
+  return data.movies || [];
 }
 
 function resolveSortQuery(sortBy) {
@@ -2705,6 +2714,11 @@ async function loadPage(params) {
     if (!ctx.itemId) throw new Error("请选择分类项");
 
     const movieType = params.movie_type || "all";
+    if (ctx.kind === "tags") {
+      const movies = await fetchTagMovies(ctx.itemId, params);
+      return enrichListMovies(movies);
+    }
+
     const filterBy = buildCategoryFilter(ctx.kind, ctx.itemId, movieType, params.list_filter || "all");
     const movies = await fetchCategoryMovies(filterBy, params);
     if (!movies.length && ctx.kind === "makers") {

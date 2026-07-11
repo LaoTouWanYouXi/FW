@@ -2073,7 +2073,7 @@ async function fetchSearchMovieList(params, keyword) {
   var page = Number(params.page || 1);
   if (page > 1) url += "&page=" + page;
   var html = await fetchHtml(url, params);
-  var items = enrichMovieItems(parseListItems(html, params), params);
+  var items = await enrichMovieItems(parseListItems(html, params), params);
   if (!items.length) throw new Error("未找到相关影片");
   return items;
 }
@@ -2380,6 +2380,86 @@ function upgradeJavdbImageUrl(url) {
   return upgradeJavdbCoverUrl(value);
 }
 
+var COVER_VERIFY_MIN_BYTES = 8000;
+var COVER_VERIFY_TIMEOUT_MS = 1500;
+
+function isInvalidCoverTarget(url) {
+  var u = String(url || "").toLowerCase();
+  if (!u) return true;
+  if (u.indexOf("now_printing") >= 0) return true;
+  if (u.indexOf("/noimage/") >= 0) return true;
+  return false;
+}
+
+function parseCoverContentLength(resp) {
+  var headers = (resp && resp.headers) || {};
+  var raw = headers["content-length"] || headers["Content-Length"] || "";
+  var size = parseInt(String(raw), 10);
+  return isNaN(size) ? 0 : size;
+}
+
+function isCoverVerifyResponseOk(resp) {
+  var status = resp && Number(resp.status || resp.statusCode || 0);
+  return !status || status < 400;
+}
+
+function posterResponseSize(data) {
+  if (!data) return 0;
+  if (typeof data === "string") return data.length;
+  if (typeof data.length === "number") return data.length;
+  if (typeof data.byteLength === "number") return data.byteLength;
+  return 0;
+}
+
+function posterRequestHeaders(params) {
+  return {
+    "User-Agent": JAVDB_UA,
+    Referer: javdbBase(params) + "/",
+    Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+  };
+}
+
+function extractPosterFinalUrl(resp, url) {
+  var respObj = resp && resp.request && resp.request.res;
+  if (respObj && respObj.responseUrl) return String(respObj.responseUrl);
+  if (resp && resp.responseURL) return String(resp.responseURL);
+  if (resp && resp.request && resp.request.uri && resp.request.uri.href) {
+    return String(resp.request.uri.href);
+  }
+  if (resp && resp.config && resp.config.url) return String(resp.config.url);
+  return String(url || "");
+}
+
+async function verifyCoverUrl(url, params) {
+  if (!url || isInvalidCoverTarget(url)) return "";
+  params = getEffectiveParams(params || {});
+  try {
+    var resp = await Widget.http.get(url, {
+      timeout: COVER_VERIFY_TIMEOUT_MS,
+      headers: posterRequestHeaders(params),
+      allow_redirects: true,
+    });
+    var finalUrl = extractPosterFinalUrl(resp, url);
+    if (isInvalidCoverTarget(finalUrl)) return "";
+    if (!isCoverVerifyResponseOk(resp)) return "";
+    var size = parseCoverContentLength(resp);
+    if (!size) size = posterResponseSize(resp && resp.data);
+    if (size > 0 && size < COVER_VERIFY_MIN_BYTES) return "";
+    return url;
+  } catch (err) {
+    return "";
+  }
+}
+
+async function resolveFirstVerifiedCoverUrl(urls, params) {
+  urls = compactUniqueUrls(urls || []).slice(0, 4);
+  for (var i = 0; i < urls.length; i++) {
+    var verified = await verifyCoverUrl(urls[i], params);
+    if (verified) return verified;
+  }
+  return "";
+}
+
 function buildDmmPreviewUrl(contentId) {
   var id = String(contentId || "").toLowerCase();
   if (!id) return "";
@@ -2544,12 +2624,7 @@ function resolvePageCover(fallbackCover, videoId) {
   return resolveJavdbCoverUrl(fallbackCover, videoId) || upgradeJavdbImageUrl(fallbackCover) || "";
 }
 
-function buildCoverBundle(code, fallbackCover, options, params) {
-  options = options || {};
-  var pageCover = resolvePageCover(fallbackCover, options.videoId);
-  var hdCovers = buildCoverUrlsFromVideoId(code);
-  var hdPoster = hdCovers.posterUrl || pageCover;
-  var hdBackdrop = hdCovers.backdropUrl || pageCover;
+function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
   return {
     listBackdrop: hdBackdrop,
     backdropPath: hdBackdrop,
@@ -2560,9 +2635,32 @@ function buildCoverBundle(code, fallbackCover, options, params) {
   };
 }
 
-function buildDetailBackdropPaths(displayCode) {
+async function resolveCoverBundle(code, fallbackCover, options, params) {
+  options = options || {};
+  params = getEffectiveParams(params || {});
+  var pageCover = resolvePageCover(fallbackCover, options.videoId);
+  var candidates = buildCoverCandidatesFromVideoId(code);
+  var posterUrls = candidates.posterCandidates || [];
+  var backdropUrls = candidates.backdropCandidates || [];
+
+  if (!posterUrls.length && !backdropUrls.length) {
+    return buildCoverBundleFromUrls(pageCover, pageCover);
+  }
+
+  var hdBackdrop = await resolveFirstVerifiedCoverUrl(backdropUrls, params);
+  var hdPoster = await resolveFirstVerifiedCoverUrl(posterUrls, params);
+  return buildCoverBundleFromUrls(hdPoster || pageCover, hdBackdrop || pageCover);
+}
+
+async function buildDetailBackdropPaths(displayCode, params) {
   var jtMeta = fetchJavTrailersMeta(displayCode);
-  return compactUniqueUrls([jtMeta.backdropPath].concat(jtMeta.backdropPaths || [])).filter(Boolean);
+  var urls = compactUniqueUrls([jtMeta.backdropPath].concat(jtMeta.backdropPaths || []));
+  var verified = [];
+  for (var i = 0; i < urls.length && verified.length < 12; i++) {
+    var ok = await verifyCoverUrl(urls[i], params);
+    if (ok) verified.push(ok);
+  }
+  return verified;
 }
 
 function extractBestImageUrl($, node, base) {
@@ -2768,12 +2866,12 @@ function parseListItems(html, params) {
   return rawItems;
 }
 
-function enrichMovieItems(rawItems, params) {
+async function enrichMovieItems(rawItems, params) {
   params = params || {};
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = buildCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId }, params);
+    var covers = await resolveCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId }, params);
     items.push(Object.assign(
       {
         id: raw.id,
@@ -3314,8 +3412,8 @@ async function parseDetailPage(html, link, params) {
   var genreItems = detailMeta.genreItems;
   var peoples = detailMeta.peoples;
 
-  var coverBundle = buildCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
-  var allBackdropPaths = buildDetailBackdropPaths(displayCode);
+  var coverBundle = await resolveCoverBundle(displayCode, fallbackCover, { videoId: videoId }, params);
+  var allBackdropPaths = await buildDetailBackdropPaths(displayCode, params);
   var trailers = parseTrailersFromHtml($, base, displayCode, coverBundle.backdropPath || fallbackCover);
 
   return enrichDetailLinks(
@@ -3356,7 +3454,7 @@ async function fetchMovieList(path, params) {
   if (isBrowseMovieListPath(basePath)) {
     var browseUrl = buildPageUrl(javdbBase(params), basePath, params);
     var browseHtml = await fetchHtml(browseUrl, params);
-    var browseItems = enrichMovieItems(parseListItems(browseHtml, params), params);
+    var browseItems = await enrichMovieItems(parseListItems(browseHtml, params), params);
     if (!browseItems.length) throw new Error("未解析到影片列表");
     return browseItems;
   }
@@ -3375,7 +3473,7 @@ async function fetchMovieList(path, params) {
     try {
       var url = buildPageUrl(javdbBase(params), candidates[i], params);
       var html = await fetchHtml(url, params);
-      var items = enrichMovieItems(parseListItems(html, params), params);
+      var items = await enrichMovieItems(parseListItems(html, params), params);
       if (items.length) return items;
       if (isCategoryErrorHtml(html)) {
         lastError = new Error("分类页面不可用: " + candidates[i]);
