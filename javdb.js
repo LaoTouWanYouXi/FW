@@ -1593,7 +1593,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.0.8",
+  version: "2.2.1",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2073,7 +2073,7 @@ async function fetchSearchMovieList(params, keyword) {
   var page = Number(params.page || 1);
   if (page > 1) url += "&page=" + page;
   var html = await fetchHtml(url, params);
-  var items = await enrichMovieItems(parseListItems(html, params), params);
+  var items = enrichMovieItems(parseListItems(html, params), params);
   if (!items.length) throw new Error("未找到相关影片");
   return items;
 }
@@ -2206,6 +2206,33 @@ function compactUniqueUrls(urls) {
   return result;
 }
 
+var DMM_MONO_PLAIN_PREFIXES = {
+  IESP: 1,
+};
+
+var DMM_NUM_MAP = {
+  WSA: "2",
+  FSDSS: "1",
+  FCDSS: "1",
+  FNS: "1",
+  FTHTD: "1",
+  FALENO: "1",
+  FGAN: "1",
+  FSNF: "1",
+  FLAV: "1",
+  DLDSS: "1",
+  ABP: "118",
+  CHN: "118",
+  STARS: "1",
+  STAR: "1",
+  START: "1",
+  SODS: "1",
+  REBD: "h_346",
+  REBDB: "h_346",
+  GSHRB: "h_346",
+  IESP: "1",
+};
+
 function parseJavCodeParts(title) {
   var raw = String(title || "").toUpperCase();
   var match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
@@ -2214,38 +2241,49 @@ function parseJavCodeParts(title) {
   var prefixLower = prefix.toLowerCase();
   var number5 = match[2];
   while (number5.length < 5) number5 = "0" + number5;
-  var numMap = {
-    WSA: "2",
-    FSDSS: "1",
-    FCDSS: "1",
-    FNS: "1",
-    FTHTD: "1",
-    FALENO: "1",
-    FGAN: "1",
-    FSNF: "1",
-    FLAV: "1",
-    DLDSS: "1",
-    ABP: "118",
-    CHN: "118",
-    STARS: "1",
-    STAR: "1",
-    START: "1",
-    SODS: "1",
-    REBD: "h_346",
-    REBDB: "h_346",
-    GSHRB: "h_346",
-  };
   var number3 = match[2];
   while (number3.length < 3) number3 = "0" + number3;
+  var makerPrefix = String(DMM_NUM_MAP[prefix] || "");
+  var numberPlain = String(parseInt(match[2], 10));
   return {
     prefix: prefix,
     prefixLower: prefixLower,
     number: match[2],
     number3: number3,
     number5: number5,
-    code: String(numMap[prefix] || "") + prefixLower + number5,
+    numberPlain: numberPlain,
+    makerPrefix: makerPrefix,
+    code: makerPrefix + prefixLower + number5,
     plainCode: prefixLower + number5,
   };
+}
+
+function buildDmmCidContentIds(parts) {
+  if (!parts) return [];
+  var makerPrefix = String(parts.makerPrefix || "");
+  var cid = makerPrefix + parts.prefixLower + parts.number5;
+  var ordered = [cid];
+  if (makerPrefix && (makerPrefix.indexOf("h_") === 0 || DMM_MONO_PLAIN_PREFIXES[parts.prefix])) {
+    ordered.push(makerPrefix + parts.prefixLower + parts.numberPlain);
+  }
+  return compactUniqueUrls(
+    ordered.filter(function (item) {
+      return !!item;
+    })
+  );
+}
+
+function buildDmmContentIdVariants(parts) {
+  return buildDmmCidContentIds(parts);
+}
+
+function isDmmMonoContentId(contentId) {
+  var id = String(contentId || "").toLowerCase();
+  var hMatch = id.match(/^h_\d+[a-z0-9]+?(\d+)$/);
+  if (hMatch) return hMatch[1].length < 5;
+  var oneMatch = id.match(/^1([a-z]+)(\d+)$/);
+  if (oneMatch) return oneMatch[2].length < 5;
+  return false;
 }
 
 function buildMgstageCoverCandidatesFromParts(parts, rule) {
@@ -2260,20 +2298,50 @@ function buildMgstageCoverCandidatesFromParts(parts, rule) {
   };
 }
 
+function buildDmmMonoCoverCandidatesForId(contentId) {
+  var id = String(contentId || "").toLowerCase();
+  if (!id) return { posterCandidates: [], backdropCandidates: [] };
+  var awsBase = "https://awsimgsrc.dmm.co.jp/pics/mono/movie/adult/" + id;
+  return {
+    posterCandidates: compactUniqueUrls([awsBase + "/" + id + "ps.jpg"]),
+    backdropCandidates: compactUniqueUrls([awsBase + "/" + id + "pl.jpg"]),
+  };
+}
+
+function buildDmmDigitalCoverCandidatesForId(contentId) {
+  var id = String(contentId || "").toLowerCase();
+  if (!id) return { posterCandidates: [], backdropCandidates: [] };
+  var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id;
+  return {
+    posterCandidates: compactUniqueUrls([awsBase + "/" + id + "ps.jpg", awsBase + "/" + id + "jp-1.jpg"]),
+    backdropCandidates: compactUniqueUrls([awsBase + "/" + id + "pl.jpg"]),
+  };
+}
+
+function appendDmmCoverCandidates(target, contentId) {
+  var id = String(contentId || "").toLowerCase();
+  if (!id || !target) return;
+  var digital = buildDmmDigitalCoverCandidatesForId(id);
+  var mono = isDmmMonoContentId(id) ? buildDmmMonoCoverCandidatesForId(id) : { posterCandidates: [], backdropCandidates: [] };
+  if (isDmmMonoContentId(id)) {
+    target.posterCandidates = target.posterCandidates.concat(mono.posterCandidates, digital.posterCandidates);
+    target.backdropCandidates = target.backdropCandidates.concat(mono.backdropCandidates, digital.backdropCandidates);
+  } else {
+    target.posterCandidates = target.posterCandidates.concat(digital.posterCandidates, mono.posterCandidates);
+    target.backdropCandidates = target.backdropCandidates.concat(digital.backdropCandidates, mono.backdropCandidates);
+  }
+}
+
 function buildDmmCoverCandidatesFromParts(parts) {
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
-  var contentId = String(parts.code || "").toLowerCase();
-  if (!contentId) return { posterCandidates: [], backdropCandidates: [] };
-  var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
-  var picsBase = "https://pics.dmm.co.jp/digital/video/" + contentId;
+  var ids = buildDmmContentIdVariants(parts);
+  var result = { posterCandidates: [], backdropCandidates: [] };
+  for (var i = 0; i < ids.length; i++) {
+    appendDmmCoverCandidates(result, ids[i]);
+  }
   return {
-    posterCandidates: compactUniqueUrls([
-      awsBase + "/" + contentId + "ps.jpg",
-      picsBase + "/" + contentId + "ps.jpg",
-      awsBase + "/" + contentId + "jp-1.jpg",
-      picsBase + "/" + contentId + "jp-1.jpg",
-    ]),
-    backdropCandidates: compactUniqueUrls([awsBase + "/" + contentId + "pl.jpg", picsBase + "/" + contentId + "pl.jpg"]),
+    posterCandidates: compactUniqueUrls(result.posterCandidates),
+    backdropCandidates: compactUniqueUrls(result.backdropCandidates),
   };
 }
 
@@ -2319,8 +2387,9 @@ function buildDmmGallery(contentId, count) {
   var id = String(contentId || "").toLowerCase();
   if (!id) return [];
   var urls = [];
+  var base = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id + "/";
   for (var i = 1; i <= count; i++) {
-    urls.push("https://pics.dmm.co.jp/digital/video/" + id + "/" + id + "jp-" + i + ".jpg");
+    urls.push(base + id + "jp-" + i + ".jpg");
   }
   return urls;
 }
@@ -2351,9 +2420,13 @@ function fetchJavTrailersMeta(dvdId) {
     var mg = buildMgstageCoverCandidatesFromParts(parts, MGSTAGE_COVER_RULES[parts.prefix]);
     backdropPath = mg.backdropCandidates[0] || "";
     backdropPaths = buildMgstageGalleryFromDvdId(dvdId, 10);
-  } else if (contentId) {
-    var dmm = buildDmmCoverCandidatesFromParts(parts || { code: contentId });
+  } else if (parts) {
+    var dmm = buildDmmCoverCandidatesFromParts(parts);
     backdropPath = dmm.backdropCandidates[0] || "";
+    var galleryIds = buildDmmContentIdVariants(parts);
+    backdropPaths = buildDmmGallery(galleryIds[0] || parts.code || contentId, 10);
+  } else if (contentId) {
+    backdropPath = buildDmmDigitalCoverCandidatesForId(contentId).backdropCandidates[0] || "";
     backdropPaths = buildDmmGallery(contentId, 10);
   }
   return { backdropPath: backdropPath, backdropPaths: backdropPaths };
@@ -2385,10 +2458,6 @@ function upgradeJavdbImageUrl(url) {
   return upgradeJavdbCoverUrl(value);
 }
 
-var COVER_VERIFY_MIN_BYTES = 8000;
-var POSTER_VERIFY_MIN_BYTES = 35000;
-var COVER_VERIFY_TIMEOUT_MS = 1500;
-
 function normalizeJavdbCoverUrl(url) {
   var cover = String(url || "").trim();
   if (!cover) return "";
@@ -2401,79 +2470,77 @@ function isInvalidCoverTarget(url) {
   var u = String(url || "").toLowerCase();
   if (!u) return true;
   if (u.indexOf("now_printing") >= 0) return true;
-  if (u.indexOf("/noimage/") >= 0) return true;
+  if (u.indexOf("noimage") >= 0) return true;
   if (/adult_pl\.jpg(\?|$)/i.test(u)) return true;
   return false;
 }
 
-function parseCoverContentLength(resp) {
-  var headers = (resp && resp.headers) || {};
-  var raw = headers["content-length"] || headers["Content-Length"] || "";
-  var size = parseInt(String(raw), 10);
-  return isNaN(size) ? 0 : size;
+function isLowResDmmPosterUrl(url) {
+  var u = String(url || "").toLowerCase();
+  if (!u) return false;
+  if (/[?&]w=147(?:&|$|[?#])/.test(u) && /[?&]h=200(?:&|$|[?#])/.test(u)) return true;
+  if (/pics\.dmm\.co\.jp\/.*ps\.jpe?g(\?|$)/i.test(u)) return true;
+  if (/pics\.dmm\.com\/.*ps\.jpe?g(\?|$)/i.test(u)) return true;
+  return false;
 }
 
-function isCoverVerifyResponseOk(resp) {
-  var status = resp && Number(resp.status || resp.statusCode || 0);
-  return !status || status < 400;
-}
-
-function posterResponseSize(data) {
-  if (!data) return 0;
-  if (typeof data === "string") return data.length;
-  if (typeof data.length === "number") return data.length;
-  if (typeof data.byteLength === "number") return data.byteLength;
-  return 0;
-}
-
-function posterRequestHeaders(params) {
-  return {
-    "User-Agent": JAVDB_UA,
-    Referer: javdbBase(params) + "/",
-    Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-  };
-}
-
-function extractPosterFinalUrl(resp, url) {
-  var respObj = resp && resp.request && resp.request.res;
-  if (respObj && respObj.responseUrl) return String(respObj.responseUrl);
-  if (resp && resp.responseURL) return String(resp.responseURL);
-  if (resp && resp.request && resp.request.uri && resp.request.uri.href) {
-    return String(resp.request.uri.href);
+function resolvePosterUrlWithCatembyFallback(posterUrl, videoId) {
+  var poster = String(posterUrl || "").trim();
+  if (!poster) return "";
+  if (isLowResDmmPosterUrl(poster)) {
+    return resolveCatembySmallCoverUrl(videoId) || poster;
   }
-  if (resp && resp.config && resp.config.url) return String(resp.config.url);
-  return String(url || "");
+  return poster;
 }
 
-async function verifyCoverUrl(url, params, minBytes) {
-  if (!url || isInvalidCoverTarget(url)) return "";
-  minBytes = minBytes || COVER_VERIFY_MIN_BYTES;
-  params = getEffectiveParams(params || {});
-  try {
-    var resp = await Widget.http.get(url, {
-      timeout: COVER_VERIFY_TIMEOUT_MS,
-      headers: posterRequestHeaders(params),
-      allow_redirects: true,
-    });
-    var finalUrl = extractPosterFinalUrl(resp, url);
-    if (isInvalidCoverTarget(finalUrl)) return "";
-    if (!isCoverVerifyResponseOk(resp)) return "";
-    var size = parseCoverContentLength(resp);
-    if (!size) size = posterResponseSize(resp && resp.data);
-    if (size > 0 && size < minBytes) return "";
-    return url;
-  } catch (err) {
-    return "";
-  }
-}
-
-async function resolveFirstVerifiedCoverUrl(urls, params, minBytes) {
-  urls = compactUniqueUrls(urls || []).slice(0, 4);
+function pickFirstUsableCoverUrl(urls) {
+  urls = compactUniqueUrls(urls || []);
   for (var i = 0; i < urls.length; i++) {
-    var verified = await verifyCoverUrl(urls[i], params, minBytes);
-    if (verified) return verified;
+    if (!isInvalidCoverTarget(urls[i])) return urls[i];
   }
   return "";
+}
+
+var DMM_LIST_UNRELIABLE_PREFIXES = {
+  MXGS: 1,
+  DLDSS: 1,
+  SDNT: 1,
+  SABA: 1,
+  DTT: 1,
+};
+
+function isDmmListCoverUnreliable(code) {
+  var parts = parseJavCodeParts(code);
+  return !!(parts && DMM_LIST_UNRELIABLE_PREFIXES[parts.prefix]);
+}
+
+function filterTrustedCdnUrls(urls) {
+  return (urls || []).filter(function (url) {
+    var value = String(url || "");
+    if (/image\.mgstage\.com/i.test(value)) return true;
+    if (/awsimgsrc\.dmm\.co\.jp/i.test(value)) return true;
+    return false;
+  });
+}
+
+function buildListCoverBundle(code, videoId) {
+  var catembyCover = resolveCatembyStyleCoverUrl(videoId);
+  if (!code) {
+    return buildCoverBundleFromUrls(catembyCover, catembyCover);
+  }
+  if (isDmmListCoverUnreliable(code)) {
+    return buildCoverBundleFromUrls(catembyCover, catembyCover);
+  }
+  var candidates = buildCoverCandidatesFromVideoId(code);
+  var hdBackdrop = pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.backdropCandidates)) || catembyCover || "";
+  var hdPoster =
+    resolvePosterUrlWithCatembyFallback(
+      pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)),
+      videoId
+    ) ||
+    catembyCover ||
+    "";
+  return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
 }
 
 function buildDmmPreviewUrl(contentId) {
@@ -2613,6 +2680,14 @@ function buildCatembySiteThumbUrl(videoId) {
   return CATEMBY_CDN_BASE + "/small_covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
 }
 
+function resolveCatembySmallCoverUrl(videoId) {
+  var id = String(videoId || "").trim();
+  if (!id) return "";
+  var siteThumb = buildCatembySiteThumbUrl(id);
+  if (siteThumb) return siteThumb;
+  return normalizeJavdbCoverUrl(buildJdbstaticThumbUrl(id)) || "";
+}
+
 function resolveCatembyListCoverUrl(videoId) {
   var siteCover = buildCatembySiteCoverUrl(videoId);
   if (siteCover) return siteCover;
@@ -2628,6 +2703,22 @@ function buildJavdbCoverFromVideoId(videoId) {
   if (!id || id.length < 2) return "";
   var prefix = id.slice(0, 2).toLowerCase();
   return "https://c0.jdbstatic.com/covers/" + prefix + "/" + id + ".jpg";
+}
+
+function buildJdbstaticThumbUrl(videoId) {
+  var id = String(videoId || "").trim();
+  if (!id || id.length < 2) return "";
+  return "https://c0.jdbstatic.com/thumbs/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+}
+
+function resolveCatembyStyleCoverUrl(videoId) {
+  var id = String(videoId || "").trim();
+  if (!id) return "";
+  var jdbCover = normalizeJavdbCoverUrl(buildJavdbCoverFromVideoId(id));
+  if (jdbCover) return jdbCover;
+  var jdbThumb = normalizeJavdbCoverUrl(buildJdbstaticThumbUrl(id));
+  if (jdbThumb) return jdbThumb;
+  return resolveCatembyListCoverUrl(id) || "";
 }
 
 function resolveJavdbCoverUrl(fallbackCover, videoId) {
@@ -2652,28 +2743,13 @@ function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
   };
 }
 
-function buildDetailCoverBundle(code) {
+function buildDetailCoverBundle(code, videoId) {
   var hdCovers = buildCoverUrlsFromVideoId(code);
-  var hdPoster = hdCovers.posterUrl || "";
+  var catembyCover = videoId ? resolveCatembyStyleCoverUrl(videoId) : "";
+  var hdPoster =
+    resolvePosterUrlWithCatembyFallback(hdCovers.posterUrl || "", videoId) || catembyCover || "";
   var hdBackdrop = hdCovers.backdropUrl || hdPoster || "";
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
-}
-
-async function resolveListCoverBundle(code, fallbackCover, options, params) {
-  options = options || {};
-  params = getEffectiveParams(params || {});
-  var pageCover = resolvePageCover(fallbackCover, options.videoId);
-  var candidates = buildCoverCandidatesFromVideoId(code);
-  var posterUrls = candidates.posterCandidates || [];
-  var backdropUrls = candidates.backdropCandidates || [];
-
-  if (!posterUrls.length && !backdropUrls.length) {
-    return buildCoverBundleFromUrls(pageCover, pageCover);
-  }
-
-  var hdBackdrop = await resolveFirstVerifiedCoverUrl(backdropUrls, params, COVER_VERIFY_MIN_BYTES);
-  var hdPoster = await resolveFirstVerifiedCoverUrl(posterUrls, params, POSTER_VERIFY_MIN_BYTES);
-  return buildCoverBundleFromUrls(hdPoster || pageCover, hdBackdrop || pageCover);
 }
 
 function buildDetailBackdropPaths(displayCode) {
@@ -2841,14 +2917,11 @@ function parseListItems(html, params) {
     var subTitle = textOf($, box.find(".video-title").first());
     var rawTitle = box.attr("title") || subTitle || titleText;
     var matchCode = resolveMatchCode(titleText, rawTitle);
-    var fallbackCover = extractListCardCover($, box, base);
-    if (!fallbackCover) fallbackCover = resolveCatembyListCoverUrl(videoId);
     rawItems.push({
       id: matchCode || videoId,
       type: "url",
       mediaType: "movie",
       title: formatDisplayTitle(matchCode, rawTitle) || String(rawTitle || videoId).replace(/\s+/g, " ").trim(),
-      fallbackCover: fallbackCover,
       rating: parseRatingText(textOf($, box.find(".score").first())),
       releaseDate: textOf($, box.find(".meta").first()) || "",
       link: encodeLink(path),
@@ -2863,12 +2936,12 @@ function parseListItems(html, params) {
   return rawItems;
 }
 
-async function enrichMovieItems(rawItems, params) {
+function enrichMovieItems(rawItems, params) {
   params = params || {};
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = await resolveListCoverBundle(raw.code, raw.fallbackCover, { videoId: raw.videoId }, params);
+    var covers = buildListCoverBundle(raw.code, raw.videoId);
     items.push(Object.assign(
       {
         id: raw.id,
@@ -3404,7 +3477,7 @@ async function parseDetailPage(html, link, params) {
   var genreItems = detailMeta.genreItems;
   var peoples = detailMeta.peoples;
 
-  var coverBundle = buildDetailCoverBundle(displayCode);
+  var coverBundle = buildDetailCoverBundle(displayCode, path.split("/").pop() || "");
   var allBackdropPaths = buildDetailBackdropPaths(displayCode);
   var trailers = parseTrailersFromHtml($, base, displayCode, coverBundle.backdropPath || coverBundle.posterPath);
 
@@ -3446,7 +3519,7 @@ async function fetchMovieList(path, params) {
   if (isBrowseMovieListPath(basePath)) {
     var browseUrl = buildPageUrl(javdbBase(params), basePath, params);
     var browseHtml = await fetchHtml(browseUrl, params);
-    var browseItems = await enrichMovieItems(parseListItems(browseHtml, params), params);
+    var browseItems = enrichMovieItems(parseListItems(browseHtml, params), params);
     if (!browseItems.length) throw new Error("未解析到影片列表");
     return browseItems;
   }
@@ -3465,7 +3538,7 @@ async function fetchMovieList(path, params) {
     try {
       var url = buildPageUrl(javdbBase(params), candidates[i], params);
       var html = await fetchHtml(url, params);
-      var items = await enrichMovieItems(parseListItems(html, params), params);
+      var items = enrichMovieItems(parseListItems(html, params), params);
       if (items.length) return items;
       if (isCategoryErrorHtml(html)) {
         lastError = new Error("分类页面不可用: " + candidates[i]);
