@@ -2073,7 +2073,7 @@ async function fetchSearchMovieList(params, keyword) {
   var page = Number(params.page || 1);
   if (page > 1) url += "&page=" + page;
   var html = await fetchHtml(url, params);
-  var items = enrichMovieItems(parseListItems(html, params), params);
+  var items = await enrichMovieItems(parseListItems(html, params), params);
   if (!items.length) throw new Error("未找到相关影片");
   return items;
 }
@@ -2194,6 +2194,12 @@ var MGSTAGE_COVER_RULES = {
   "390JAC": { maker: "jackson" },
 };
 
+var MGSTAGE_PREFIXES = new Set(["ABF", "ABW", "ABP", "CHN", "PPT", "MAAN"]);
+
+var DMM_DIRECT_PREFIXES = new Set(["SNIS", "SNOS", "SONE", "SSIS", "SSNI", "STARS", "START", "SODS", "FSDSS", "FCDSS", "FNS", "FTHTD", "FSNF", "FLAV", "NHDTC", "KUSE", "MOGI", "FTAV", "WSA", "MIDV", "MIDA", "MIDE", "MIDD", "DASS", "HIKA", "MKMP", "MADM", "IPZZ", "IPZ", "IPX", "NGOD", "SDNM", "AVSA", "MNGS", "WAAA", "OFES", "OFJE", "OAE", "SIVR", "HSODA", "JUFE", "MUKA", "MIMK", "HMN", "ROYD", "SDHS", "JUR", "CAWD", "REBD", "ADN", "ATID", "JUL", "JUMS", "JUQ", "LULU", "MEYD", "MIAA", "MIAB", "MIRD", "PRED", "URE", "YUJ", "CJOD", "EBWH", "JYMA", "MDHR", "DVAJ", "ACHJ"]);
+var DMM_DIRECT_BLOCKED_CODES = new Set(["START-227", "IPZZ-899", "START-334", "START-302", "START-349", "START-339", "START-310", "START-314", "START-287", "START-273", "START-266", "START-304", "START-285", "START-276", "START-135", "START-062", "START-023", "START-014", "STARS-977", "STARS-917", "STARS-915", "STARS-91501", "SDNM-39101"]);
+var DMM_CONTENT_ID_OVERRIDES = {};
+
 function compactUniqueUrls(urls) {
   var seen = {};
   var result = [];
@@ -2213,6 +2219,7 @@ var DMM_MONO_PLAIN_PREFIXES = {
 var DMM_NUM_MAP = {
   WSA: "2",
   FSDSS: "1",
+  SDNM: "1",
   FCDSS: "1",
   FNS: "1",
   FTHTD: "1",
@@ -2231,40 +2238,104 @@ var DMM_NUM_MAP = {
   REBDB: "h_346",
   GSHRB: "h_346",
   IESP: "1",
+  MBDD: "h_346",
 };
+
+function normalizeDmmPrefix(prefix) {
+  var normalized = String(prefix || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (normalized === "NATR") normalized = "NKKD";
+  if (normalized === "NKKD") normalized = "KCP";
+  if (normalized === "NAIM") normalized = "MISM";
+  if (normalized === "NACX") normalized = "MXGS";
+  if (normalized === "NAAC") normalized = "MADC";
+  if (normalized.indexOf("4K") === 0) {
+    var after = normalized.slice(2);
+    if (DMM_NUM_MAP[after]) return after;
+    if (/^[A-Z]{2,}$/.test(after)) return after;
+    if (!/\d/.test(normalized) && /^[A-Z]+$/.test(after)) return after;
+  }
+  return normalized;
+}
+
+function isDirectDmmSeries(value) {
+  var raw = String(value || "").toUpperCase().replace(/\s+/g, "");
+  var match = raw.match(/\b([A-Z]{2,6})-?(\d{2,5})([A-Z]?)\b/);
+  if (!match) return false;
+  var prefix = normalizeDmmPrefix(match[1]);
+  var number = match[2];
+  var code = prefix + "-" + number;
+  if (DMM_DIRECT_BLOCKED_CODES.has(code)) return false;
+  return DMM_DIRECT_PREFIXES.has(prefix);
+}
+
+function buildDmmContentIdFromParts(parts) {
+  if (!parts || !parts.prefix) return "";
+  var prefix = normalizeDmmPrefix(parts.prefix);
+  var suffix = String(parts.suffix || "").toUpperCase();
+  var n = parts.numberPlain || String(parseInt(parts.number || "0", 10));
+  if (n === "NaN" || n === "0") return "";
+  var number5 = (parts.prefixLower || prefix.toLowerCase()) + suffix.toLowerCase();
+  if (parts.number5 && /^\d{5}$/.test(parts.number5)) {
+    number5 = parts.number5;
+  } else {
+    var numStr = String(parts.number || n);
+    while (numStr.length < 5) numStr = "0" + numStr;
+    number5 = numStr;
+  }
+  var fullCode = prefix + "-" + n + suffix;
+  if (DMM_CONTENT_ID_OVERRIDES && DMM_CONTENT_ID_OVERRIDES[fullCode]) {
+    return DMM_CONTENT_ID_OVERRIDES[fullCode];
+  }
+  var prefixLower = prefix.toLowerCase();
+  var suffixLower = suffix.toLowerCase();
+  if (DMM_NUM_MAP[prefix]) {
+    return DMM_NUM_MAP[prefix] + prefixLower + number5 + suffixLower;
+  }
+  if (/^SD[A-Z]{2,3}$/.test(prefix)) {
+    return "1" + prefixLower + number5 + suffixLower;
+  }
+  return prefixLower + number5 + suffixLower;
+}
 
 function parseJavCodeParts(title) {
   var raw = String(title || "").toUpperCase();
-  var match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
+  var match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})([A-Z]?)\b/);
   if (!match) return null;
   var prefix = match[1];
   var prefixLower = prefix.toLowerCase();
+  var suffix = match[3] || "";
+  var suffixLower = suffix.toLowerCase();
   var number5 = match[2];
   while (number5.length < 5) number5 = "0" + number5;
   var number3 = match[2];
   while (number3.length < 3) number3 = "0" + number3;
-  var makerPrefix = String(DMM_NUM_MAP[prefix] || "");
+  var normPrefix = normalizeDmmPrefix(prefix);
+  var makerPrefix = String(DMM_NUM_MAP[normPrefix] || "");
+  if (!makerPrefix && /^SD[A-Z]{2,3}$/.test(normPrefix)) makerPrefix = "1";
   var numberPlain = String(parseInt(match[2], 10));
   return {
     prefix: prefix,
     prefixLower: prefixLower,
+    suffix: suffix,
+    suffixLower: suffixLower,
     number: match[2],
     number3: number3,
     number5: number5,
     numberPlain: numberPlain,
     makerPrefix: makerPrefix,
-    code: makerPrefix + prefixLower + number5,
-    plainCode: prefixLower + number5,
+    code: makerPrefix + prefixLower + number5 + suffixLower,
+    plainCode: prefixLower + number5 + suffixLower,
   };
 }
 
 function buildDmmCidContentIds(parts) {
   if (!parts) return [];
   var makerPrefix = String(parts.makerPrefix || "");
-  var cid = makerPrefix + parts.prefixLower + parts.number5;
+  var suffixLower = String(parts.suffixLower || "");
+  var cid = makerPrefix + parts.prefixLower + parts.number5 + suffixLower;
   var ordered = [cid];
   if (makerPrefix && (makerPrefix.indexOf("h_") === 0 || DMM_MONO_PLAIN_PREFIXES[parts.prefix])) {
-    ordered.push(makerPrefix + parts.prefixLower + parts.numberPlain);
+    ordered.push(makerPrefix + parts.prefixLower + parts.numberPlain + suffixLower);
   }
   return compactUniqueUrls(
     ordered.filter(function (item) {
@@ -2302,9 +2373,10 @@ function buildDmmMonoCoverCandidatesForId(contentId) {
   var id = String(contentId || "").toLowerCase();
   if (!id) return { posterCandidates: [], backdropCandidates: [] };
   var awsBase = "https://awsimgsrc.dmm.co.jp/pics/mono/movie/adult/" + id;
+  var picsBase = "https://pics.dmm.co.jp/mono/movie/adult/" + id;
   return {
-    posterCandidates: compactUniqueUrls([awsBase + "/" + id + "ps.jpg"]),
-    backdropCandidates: compactUniqueUrls([awsBase + "/" + id + "pl.jpg"]),
+    posterCandidates: compactUniqueUrls([awsBase + "/" + id + "ps.jpg", picsBase + "/" + id + "ps.jpg"]),
+    backdropCandidates: compactUniqueUrls([awsBase + "/" + id + "pl.jpg", picsBase + "/" + id + "pl.jpg"]),
   };
 }
 
@@ -2312,9 +2384,10 @@ function buildDmmDigitalCoverCandidatesForId(contentId) {
   var id = String(contentId || "").toLowerCase();
   if (!id) return { posterCandidates: [], backdropCandidates: [] };
   var awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id;
+  var picsBase = "https://pics.dmm.co.jp/digital/video/" + id;
   return {
-    posterCandidates: compactUniqueUrls([awsBase + "/" + id + "ps.jpg", awsBase + "/" + id + "jp-1.jpg"]),
-    backdropCandidates: compactUniqueUrls([awsBase + "/" + id + "pl.jpg"]),
+    posterCandidates: compactUniqueUrls([awsBase + "/" + id + "ps.jpg", picsBase + "/" + id + "ps.jpg", awsBase + "/" + id + "jp-1.jpg"]),
+    backdropCandidates: compactUniqueUrls([awsBase + "/" + id + "pl.jpg", picsBase + "/" + id + "pl.jpg"]),
   };
 }
 
@@ -2349,8 +2422,9 @@ function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
   var parts = parseJavCodeParts(videoIdOrTitle);
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
   var rule = MGSTAGE_COVER_RULES[parts.prefix];
-  if (rule) return buildMgstageCoverCandidatesFromParts(parts, rule);
-  return buildDmmCoverCandidatesFromParts(parts);
+  if (rule && MGSTAGE_PREFIXES.has(parts.prefix)) return buildMgstageCoverCandidatesFromParts(parts, rule);
+  if (isDirectDmmSeries(videoIdOrTitle)) return buildDmmCoverCandidatesFromParts(parts);
+  return { posterCandidates: [], backdropCandidates: [] };
 }
 
 function buildCoverUrlsFromVideoId(videoIdOrTitle) {
@@ -2475,6 +2549,70 @@ function isInvalidCoverTarget(url) {
   return false;
 }
 
+/* ── 方案4：DMM 尺寸参数 + 占位图检测 ─────────────────────── */
+
+// 给 DMM 图片 URL 附加尺寸参数（CDN 缩放 + 用于占位图探测）
+function appendDmmSizeParams(url, w, h) {
+  var u = String(url || "").trim();
+  if (!u) return "";
+  // 已有尺寸参数则不重复添加
+  if (/[?&][wh]=\d/.test(u)) return u;
+  // 只对 DMM CDN 图片添加
+  if (!/dmm\.co(m|\.jp)/i.test(u) && !/awsimgsrc/i.test(u)) return u;
+  var sep = u.indexOf("?") >= 0 ? "&" : "?";
+  return u + sep + "w=" + (w || 800) + "&h=" + (h || 1200);
+}
+
+// 检测图片是否为占位图（通过 Image 预加载读取 naturalWidth/Height）
+// 返回 Promise<boolean>：true = 占位图/无效，false = 正常图片
+function checkImageIsPlaceholder(url, timeoutMs) {
+  timeoutMs = timeoutMs || 2000;
+  return new Promise(function (resolve) {
+    if (!url) return resolve(true);
+    var img = new Image();
+    var settled = false;
+    function done(result) {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    }
+    var timer = setTimeout(function () {
+      done(false); // 超时视为正常（避免阻塞）
+    }, timeoutMs);
+    img.onload = function () {
+      clearTimeout(timer);
+      var w = img.naturalWidth;
+      var h = img.naturalHeight;
+      // 占位图特征：极小尺寸（DMM 占位通常 1×1、60×80 等）
+      if (w <= 1 || h <= 1) return done(true);
+      if (w <= 10 && h <= 10) return done(true);
+      // DMM 常见最小真实封面约 300×420，保守取 100×140 以下视为占位
+      if (w < 100 && h < 140) return done(true);
+      done(false);
+    };
+    img.onerror = function () {
+      clearTimeout(timer);
+      done(true); // 加载失败视为无效
+    };
+    img.src = url;
+  });
+}
+
+// 从候选列表中异步选取第一个非占位图 URL
+// 检测超时（单张 maxWaitMs）后直接跳过，不阻塞
+async function pickFirstRealCoverUrl(urls, maxWaitMs) {
+  maxWaitMs = maxWaitMs || 1500;
+  urls = compactUniqueUrls(urls || []);
+  for (var i = 0; i < urls.length; i++) {
+    if (isInvalidCoverTarget(urls[i])) continue;
+    // 给 DMM 图片附加尺寸参数
+    var sizedUrl = appendDmmSizeParams(urls[i], 800, 1200);
+    var isPlaceholder = await checkImageIsPlaceholder(sizedUrl, maxWaitMs);
+    if (!isPlaceholder) return sizedUrl;
+  }
+  return "";
+}
+
 function isLowResDmmPosterUrl(url) {
   var u = String(url || "").toLowerCase();
   if (!u) return false;
@@ -2523,23 +2661,34 @@ function filterTrustedCdnUrls(urls) {
   });
 }
 
-function buildListCoverBundle(code, videoId) {
+async function buildListCoverBundle(code, videoId) {
   var catembyCover = resolveCatembyStyleCoverUrl(videoId);
+  var cleanCode = code ? cleanDvdId(code) : "";
+  var fourhoiPoster = cleanCode ? "https://fourhoi.com/" + cleanCode + "/cover-t.jpg" : "";
+  var fourhoiBackdrop = cleanCode ? "https://fourhoi.com/" + cleanCode + "/cover.jpg" : "";
   if (!code) {
-    return buildCoverBundleFromUrls(catembyCover, catembyCover);
+    return buildCoverBundleFromUrls(catembyCover || fourhoiPoster || "", catembyCover || fourhoiBackdrop || "");
   }
   if (isDmmListCoverUnreliable(code)) {
-    return buildCoverBundleFromUrls(catembyCover, catembyCover);
+    return buildCoverBundleFromUrls(catembyCover || fourhoiPoster || "", catembyCover || fourhoiBackdrop || "");
   }
   var candidates = buildCoverCandidatesFromVideoId(code);
-  var hdBackdrop = pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.backdropCandidates)) || catembyCover || "";
-  var hdPoster =
-    resolvePosterUrlWithCatembyFallback(
-      pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)),
-      videoId
-    ) ||
-    catembyCover ||
-    "";
+  var trustedPoster = filterTrustedCdnUrls(candidates.posterCandidates);
+  var trustedBackdrop = filterTrustedCdnUrls(candidates.backdropCandidates);
+  if (fourhoiPoster) trustedPoster = trustedPoster.concat([fourhoiPoster]);
+  if (fourhoiBackdrop) trustedBackdrop = trustedBackdrop.concat([fourhoiBackdrop]);
+  if (catembyCover) {
+    trustedPoster = trustedPoster.concat([catembyCover]);
+    trustedBackdrop = trustedBackdrop.concat([catembyCover]);
+  }
+
+  var hdPoster = await pickFirstRealCoverUrl(trustedPoster, 1500);
+  if (!hdPoster) hdPoster = fourhoiPoster || catembyCover || "";
+  else hdPoster = resolvePosterUrlWithCatembyFallback(hdPoster, videoId) || hdPoster;
+
+  var hdBackdrop = await pickFirstRealCoverUrl(trustedBackdrop, 1500);
+  if (!hdBackdrop) hdBackdrop = fourhoiBackdrop || hdPoster || catembyCover || "";
+
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
 }
 
@@ -2743,12 +2892,28 @@ function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
   };
 }
 
-function buildDetailCoverBundle(code, videoId) {
+async function buildDetailCoverBundle(code, videoId) {
   var hdCovers = buildCoverUrlsFromVideoId(code);
   var catembyCover = videoId ? resolveCatembyStyleCoverUrl(videoId) : "";
-  var hdPoster =
-    resolvePosterUrlWithCatembyFallback(hdCovers.posterUrl || "", videoId) || catembyCover || "";
-  var hdBackdrop = hdCovers.backdropUrl || hdPoster || "";
+  var cleanCode = code ? cleanDvdId(code) : "";
+  var fourhoiPoster = cleanCode ? "https://fourhoi.com/" + cleanCode + "/cover-t.jpg" : "";
+  var fourhoiBackdrop = cleanCode ? "https://fourhoi.com/" + cleanCode + "/cover.jpg" : "";
+  var posterPool = (hdCovers.posterCandidates || []).slice();
+  var backdropPool = (hdCovers.backdropCandidates || []).slice();
+  if (fourhoiPoster) posterPool.push(fourhoiPoster);
+  if (fourhoiBackdrop) backdropPool.push(fourhoiBackdrop);
+  if (catembyCover) {
+    posterPool.push(catembyCover);
+    backdropPool.push(catembyCover);
+  }
+
+  var hdPoster = await pickFirstRealCoverUrl(posterPool, 1500);
+  if (!hdPoster) hdPoster = fourhoiPoster || catembyCover || "";
+  else hdPoster = resolvePosterUrlWithCatembyFallback(hdPoster, videoId) || hdPoster;
+
+  var hdBackdrop = await pickFirstRealCoverUrl(backdropPool, 1500);
+  if (!hdBackdrop) hdBackdrop = fourhoiBackdrop || hdPoster || catembyCover || "";
+
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
 }
 
@@ -2936,12 +3101,12 @@ function parseListItems(html, params) {
   return rawItems;
 }
 
-function enrichMovieItems(rawItems, params) {
+async function enrichMovieItems(rawItems, params) {
   params = params || {};
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
     var raw = rawItems[i];
-    var covers = buildListCoverBundle(raw.code, raw.videoId);
+    var covers = await buildListCoverBundle(raw.code, raw.videoId);
     items.push(Object.assign(
       {
         id: raw.id,
@@ -3477,7 +3642,7 @@ async function parseDetailPage(html, link, params) {
   var genreItems = detailMeta.genreItems;
   var peoples = detailMeta.peoples;
 
-  var coverBundle = buildDetailCoverBundle(displayCode, path.split("/").pop() || "");
+  var coverBundle = await buildDetailCoverBundle(displayCode, path.split("/").pop() || "");
   var allBackdropPaths = buildDetailBackdropPaths(displayCode);
   var trailers = parseTrailersFromHtml($, base, displayCode, coverBundle.backdropPath || coverBundle.posterPath);
 
@@ -3519,7 +3684,7 @@ async function fetchMovieList(path, params) {
   if (isBrowseMovieListPath(basePath)) {
     var browseUrl = buildPageUrl(javdbBase(params), basePath, params);
     var browseHtml = await fetchHtml(browseUrl, params);
-    var browseItems = enrichMovieItems(parseListItems(browseHtml, params), params);
+    var browseItems = await enrichMovieItems(parseListItems(browseHtml, params), params);
     if (!browseItems.length) throw new Error("未解析到影片列表");
     return browseItems;
   }
@@ -3538,7 +3703,7 @@ async function fetchMovieList(path, params) {
     try {
       var url = buildPageUrl(javdbBase(params), candidates[i], params);
       var html = await fetchHtml(url, params);
-      var items = enrichMovieItems(parseListItems(html, params), params);
+      var items = await enrichMovieItems(parseListItems(html, params), params);
       if (items.length) return items;
       if (isCategoryErrorHtml(html)) {
         lastError = new Error("分类页面不可用: " + candidates[i]);
