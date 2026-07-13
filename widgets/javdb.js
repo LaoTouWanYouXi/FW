@@ -1593,7 +1593,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.5.2",
+  version: "2.5.3",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2369,49 +2369,14 @@ async function prefetchDmmProbeCovers(codes, params) {
   var base = getDmmProbeWorkerBase(params);
   if (!base) return;
 
-  var chunkSize = 20;
-  for (var start = 0; start < pending.length; start += chunkSize) {
-    var chunk = pending.slice(start, start + chunkSize);
-    try {
-      var res = await Widget.http.post(
-        base + "/probe",
-        JSON.stringify({ codes: chunk, force: false, variants: false }),
-        {
-          headers: Object.assign({ "Content-Type": "application/json" }, getDmmProbeWorkerHeaders(params)),
-          timeout: DMM_PROBE_WORKER_TIMEOUT_MS * 2,
-          allow_redirects: true,
-        }
-      );
-      var status = Number(res && (res.status || res.statusCode) || 0);
-      if (!res || status >= 400 || !res.data) continue;
-      var payload = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
-      var rows = (payload && payload.results) || [];
-      var hit = {};
-      for (var j = 0; j < rows.length; j++) {
-        var row = rows[j];
-        if (!row || !row.code) continue;
-        var rowCode = String(row.code).trim().toUpperCase();
-        hit[rowCode] = true;
-        var probe = null;
-        if (row.ok && row.best) {
-          probe = {
-            contentId: String(row.best.contentId || ""),
-            posterUrl: String(row.best.posterUrl || ""),
-            backdropUrl: String(row.best.backdropUrl || ""),
-          };
-        }
-        DMM_PROBE_WORKER_CACHE[rowCode] = probe;
-        saveDmmProbeToStorage(rowCode, probe);
-      }
-      for (var k = 0; k < chunk.length; k++) {
-        var missingCode = chunk[k];
-        if (!hit[missingCode]) await fetchDmmProbeCover(missingCode, params);
-      }
-    } catch (err) {
-      for (var f = 0; f < chunk.length; f++) {
-        await fetchDmmProbeCover(chunk[f], params);
-      }
+  var concurrency = 6;
+  for (var start = 0; start < pending.length; start += concurrency) {
+    var chunk = pending.slice(start, start + concurrency);
+    var tasks = [];
+    for (var i = 0; i < chunk.length; i++) {
+      tasks.push(fetchDmmProbeCover(chunk[i], params));
     }
+    await Promise.all(tasks);
   }
 }
 
