@@ -2188,7 +2188,6 @@ var MGSTAGE_COVER_RULES = {
   ABW: { maker: "prestige" },
   ABP: { maker: "prestige" },
   CHN: { maker: "prestige" },
-  JUFE: { maker: "prestige" },
   MAAN: { maker: "prestige" },
   PPT: { maker: "prestige" },
   "390JAC": { maker: "jackson" },
@@ -2210,61 +2209,111 @@ var DMM_MONO_PLAIN_PREFIXES = {
   IESP: 1,
 };
 
-var DMM_NUM_MAP = {
+// DMM 系列白名单——只有这些前缀才拼 DMM 封面 URL（对齐 MissAV.js）
+var DMM_DIRECT_PREFIXES = {
+  SNIS: 1, SNOS: 1, SONE: 1, SSIS: 1, SSNI: 1, STARS: 1, START: 1, SODS: 1,
+  FSDSS: 1, FCDSS: 1, FNS: 1, FTHTD: 1, FSNF: 1, FLAV: 1, NHDTC: 1, KUSE: 1,
+  MOGI: 1, FTAV: 1, WSA: 1, MIDV: 1, MIDA: 1, MIDE: 1, MIDD: 1, DASS: 1, HIKA: 1,
+  MKMP: 1, MADM: 1, IPZZ: 1, IPZ: 1, IPX: 1, NGOD: 1, SDNM: 1, AVSA: 1, MNGS: 1,
+  WAAA: 1, OFES: 1, OFJE: 1, OAE: 1, SIVR: 1, HSODA: 1, JUFE: 1, MUKA: 1, MIMK: 1,
+  HMN: 1, ROYD: 1, SDHS: 1, JUR: 1, CAWD: 1, REBD: 1, ADN: 1, ATID: 1, JUL: 1, JUMS: 1,
+  JUQ: 1, LULU: 1, MEYD: 1, MIAA: 1, MIAB: 1, MIRD: 1, PRED: 1, URE: 1, YUJ: 1,
+  CJOD: 1, EBWH: 1, JYMA: 1, MDHR: 1, DVAJ: 1, ACHJ: 1,
+};
+
+var DMM_DIRECT_BLOCKED_CODES = {
+  "START-227": 1, "IPZZ-899": 1, "START-334": 1, "START-302": 1, "START-349": 1,
+  "START-339": 1, "START-310": 1, "START-314": 1, "START-287": 1, "START-273": 1,
+  "START-266": 1, "START-304": 1, "START-285": 1, "START-276": 1, "START-135": 1,
+  "START-062": 1, "START-023": 1, "START-014": 1, "STARS-977": 1, "STARS-917": 1,
+  "STARS-915": 1, "STARS-91501": 1, "SDNM-39101": 1,
+};
+
+var DMM_CONTENT_ID_OVERRIDES = {};
+
+// DMM contentId 数字前缀映射（对齐 MissAV.js）
+var DMM_CONTENT_PREFIX_MAP = {
   WSA: "2",
-  FSDSS: "1",
-  FCDSS: "1",
-  FNS: "1",
-  FTHTD: "1",
-  FALENO: "1",
-  FGAN: "1",
-  FSNF: "1",
-  FLAV: "1",
-  DLDSS: "1",
+  FSDSS: "1", FCDSS: "1", FNS: "1", FTHTD: "1",
+  FALENO: "1", FGAN: "1", FSNF: "1", FLAV: "1",
+  NAAC: "h_706",
+  NHDTC: "1",
+  KUSE: "1",
+  MBDD: "301",
+  SDNM: "1",
+  STARS: "1", STAR: "1", START: "1",
+  SODS: "1",
+  REBD: "h_346", REBDB: "h_346", GSHRB: "h_346",
+  MOGI: "1",
+  FTAV: "1",
   ABP: "118",
   CHN: "118",
-  STARS: "1",
-  STAR: "1",
-  START: "1",
-  SODS: "1",
-  REBD: "h_346",
-  REBDB: "h_346",
-  GSHRB: "h_346",
   IESP: "1",
 };
 
+function normalizeDmmPrefix(prefix) {
+  var p = String(prefix || "").toUpperCase();
+  if (p === "REBDB") return "REBD";
+  return p;
+}
+
+function isDirectDmmSeries(parts) {
+  if (!parts) return false;
+  if (DMM_DIRECT_BLOCKED_CODES[parts.prefix + "-" + parts.number]) return false;
+  return !!DMM_DIRECT_PREFIXES[normalizeDmmPrefix(parts.prefix)];
+}
+
+function buildDmmContentIdFromParts(parts) {
+  if (!parts) return "";
+  var contentCode = parts.code ? String(parts.code).toUpperCase() : "";
+  if (contentCode && DMM_CONTENT_ID_OVERRIDES[contentCode]) return DMM_CONTENT_ID_OVERRIDES[contentCode];
+  var prefix = normalizeDmmPrefix(parts.prefix);
+  var numericPrefix = DMM_CONTENT_PREFIX_MAP[prefix] || "";
+  if (!numericPrefix && /^SD[A-Z]{2,3}$/.test(prefix)) {
+    return "1" + parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
+  }
+  return numericPrefix + parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
+}
+
 function parseJavCodeParts(title) {
   var raw = String(title || "").toUpperCase();
-  var match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})\b/);
+  var match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})([A-Z]?)\b/);
   if (!match) return null;
   var prefix = match[1];
   var prefixLower = prefix.toLowerCase();
+  var suffix = match[3] || "";
   var number5 = match[2];
   while (number5.length < 5) number5 = "0" + number5;
   var number3 = match[2];
   while (number3.length < 3) number3 = "0" + number3;
-  var makerPrefix = String(DMM_NUM_MAP[prefix] || "");
+  var normalizedPrefix = normalizeDmmPrefix(prefix);
+  var makerPrefix = String(DMM_CONTENT_PREFIX_MAP[normalizedPrefix] || "");
+  if (!makerPrefix && /^SD[A-Z]{2,3}$/.test(normalizedPrefix)) makerPrefix = "1";
   var numberPlain = String(parseInt(match[2], 10));
-  return {
+  var parts = {
     prefix: prefix,
     prefixLower: prefixLower,
     number: match[2],
     number3: number3,
     number5: number5,
     numberPlain: numberPlain,
+    suffix: suffix,
     makerPrefix: makerPrefix,
-    code: makerPrefix + prefixLower + number5,
     plainCode: prefixLower + number5,
   };
+  parts.code = buildDmmContentIdFromParts(parts) || (makerPrefix + prefixLower + number5);
+  return parts;
 }
 
 function buildDmmCidContentIds(parts) {
-  if (!parts) return [];
-  var makerPrefix = String(parts.makerPrefix || "");
-  var cid = makerPrefix + parts.prefixLower + parts.number5;
-  var ordered = [cid];
-  if (makerPrefix && (makerPrefix.indexOf("h_") === 0 || DMM_MONO_PLAIN_PREFIXES[parts.prefix])) {
-    ordered.push(makerPrefix + parts.prefixLower + parts.numberPlain);
+  if (!parts || !isDirectDmmSeries(parts)) return [];
+  var primaryId = buildDmmContentIdFromParts(parts);
+  if (!primaryId) return [];
+  var ordered = [primaryId];
+  var prefix = normalizeDmmPrefix(parts.prefix);
+  var numericPrefix = DMM_CONTENT_PREFIX_MAP[prefix] || "";
+  if (numericPrefix && (numericPrefix.indexOf("h_") === 0 || DMM_MONO_PLAIN_PREFIXES[parts.prefix])) {
+    ordered.push(numericPrefix + parts.prefixLower + parts.numberPlain);
   }
   return compactUniqueUrls(
     ordered.filter(function (item) {
@@ -2348,9 +2397,15 @@ function buildDmmCoverCandidatesFromParts(parts) {
 function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
   var parts = parseJavCodeParts(videoIdOrTitle);
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
+
+  if (isDirectDmmSeries(parts)) {
+    return buildDmmCoverCandidatesFromParts(parts);
+  }
+
   var rule = MGSTAGE_COVER_RULES[parts.prefix];
   if (rule) return buildMgstageCoverCandidatesFromParts(parts, rule);
-  return buildDmmCoverCandidatesFromParts(parts);
+
+  return { posterCandidates: [], backdropCandidates: [] };
 }
 
 function buildCoverUrlsFromVideoId(videoIdOrTitle) {
@@ -2374,6 +2429,11 @@ function cleanDvdId(raw) {
 }
 
 function buildDmmContentIdFromDvdId(dvdId) {
+  var parts = parseJavCodeParts(cleanDvdId(dvdId));
+  if (parts && isDirectDmmSeries(parts)) {
+    var contentId = buildDmmContentIdFromParts(parts);
+    if (contentId) return contentId;
+  }
   var clean = cleanDvdId(dvdId).toLowerCase();
   var match = clean.match(/^([a-z]+)[-_ ]*0*(\d+)$/i);
   if (!match) return clean.replace(/[^a-z0-9]/gi, "");
@@ -2412,22 +2472,18 @@ function buildMgstageGalleryFromDvdId(dvdId, count) {
 function fetchJavTrailersMeta(dvdId) {
   var empty = { backdropPath: "", backdropPaths: [] };
   if (!dvdId) return empty;
-  var contentId = buildDmmContentIdFromDvdId(dvdId);
   var parts = parseJavCodeParts(dvdId);
   var backdropPath = "";
   var backdropPaths = [];
-  if (parts && MGSTAGE_COVER_RULES[parts.prefix]) {
-    var mg = buildMgstageCoverCandidatesFromParts(parts, MGSTAGE_COVER_RULES[parts.prefix]);
-    backdropPath = mg.backdropCandidates[0] || "";
-    backdropPaths = buildMgstageGalleryFromDvdId(dvdId, 10);
-  } else if (parts) {
+  if (parts && isDirectDmmSeries(parts)) {
     var dmm = buildDmmCoverCandidatesFromParts(parts);
     backdropPath = dmm.backdropCandidates[0] || "";
     var galleryIds = buildDmmContentIdVariants(parts);
-    backdropPaths = buildDmmGallery(galleryIds[0] || parts.code || contentId, 10);
-  } else if (contentId) {
-    backdropPath = buildDmmDigitalCoverCandidatesForId(contentId).backdropCandidates[0] || "";
-    backdropPaths = buildDmmGallery(contentId, 10);
+    backdropPaths = buildDmmGallery(galleryIds[0] || parts.code || "", 10);
+  } else if (parts && MGSTAGE_COVER_RULES[parts.prefix]) {
+    var mg = buildMgstageCoverCandidatesFromParts(parts, MGSTAGE_COVER_RULES[parts.prefix]);
+    backdropPath = mg.backdropCandidates[0] || "";
+    backdropPaths = buildMgstageGalleryFromDvdId(dvdId, 10);
   }
   return { backdropPath: backdropPath, backdropPaths: backdropPaths };
 }
@@ -2580,9 +2636,12 @@ function parseTrailersFromHtml($, base, displayCode, coverUrl) {
   }
 
   if (displayCode) {
-    var fallback = buildDmmPreviewUrl(buildDmmContentIdFromDvdId(displayCode));
-    if (fallback) {
-      return [{ coverUrl: coverUrl || "", url: fallback }];
+    var previewParts = parseJavCodeParts(displayCode);
+    if (previewParts && isDirectDmmSeries(previewParts)) {
+      var fallback = buildDmmPreviewUrl(buildDmmContentIdFromParts(previewParts));
+      if (fallback) {
+        return [{ coverUrl: coverUrl || "", url: fallback }];
+      }
     }
   }
 
