@@ -4,15 +4,6 @@
   "icon": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/9331.jpeg",
   "widgets": [
     {
-      "id": "forward.123pan",
-      "title": "123云盘-番号",
-      "description": "123云盘-番号",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.0",
-      "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/pan123_jav.js"
-    },
-    {
       "id": "forward.guangyajav",
       "title": "光鸭-番号",
       "description": "光鸭-番号",
@@ -192,15 +183,6 @@
       "version": "1.1.5",
       "author": "海带",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/pornhub_int.js"
-    },
-    {
-      "id": "xvideos_int",
-      "title": "XVideos",
-      "description": "網路收集到的模塊",
-      "requiredVersion": "0.0.1",
-      "version": "0.9.6",
-      "author": "網路",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/xvideos_int.js"
     }
   ]
 }
