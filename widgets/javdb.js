@@ -1593,7 +1593,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.5.0",
+  version: "2.5.2",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2214,8 +2214,51 @@ var DMM_MONO_PLAIN_PREFIXES = {
 var DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
 var DMM_PROBE_WORKER_CACHE = {};
 var DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
+var DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
+var DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
+var DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
 
 var DMM_CONTENT_ID_OVERRIDES = {};
+
+function dmmProbeStorageKey(code) {
+  return DMM_PROBE_STORAGE_PREFIX + String(code || "").trim().toUpperCase();
+}
+
+function loadDmmProbeFromStorage(code) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return undefined;
+  try {
+    var raw = Widget.storage.get(dmmProbeStorageKey(code));
+    if (!raw) return undefined;
+    var entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!entry || !entry.savedAt) return undefined;
+    var ttl = entry.ok ? DMM_PROBE_STORAGE_TTL_OK_MS : DMM_PROBE_STORAGE_TTL_FAIL_MS;
+    if (Date.now() - Number(entry.savedAt) > ttl) return undefined;
+    if (!entry.ok) return null;
+    return {
+      contentId: String(entry.contentId || ""),
+      posterUrl: String(entry.posterUrl || ""),
+      backdropUrl: String(entry.backdropUrl || ""),
+    };
+  } catch (err) {
+    return undefined;
+  }
+}
+
+function saveDmmProbeToStorage(code, probe) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return;
+  var entry = {
+    ok: !!probe,
+    savedAt: Date.now(),
+  };
+  if (probe) {
+    entry.contentId = probe.contentId || "";
+    entry.posterUrl = probe.posterUrl || "";
+    entry.backdropUrl = probe.backdropUrl || "";
+  }
+  Widget.storage.set(dmmProbeStorageKey(code), JSON.stringify(entry));
+}
 
 function getDmmProbeWorkerBase(params) {
   params = params || {};
@@ -2236,20 +2279,29 @@ function getDmmProbeWorkerHeaders(params) {
   return headers;
 }
 
-function parseDmmProbeWorkerPayload(res) {
-  if (!res || res.data === undefined || res.data === null) return null;
+function parseDmmProbeWorkerResponse(res) {
+  if (!res || res.data === undefined || res.data === null) {
+    return { probe: undefined, knownMiss: false };
+  }
   var status = Number(res.status || res.statusCode || 0);
-  if (status >= 400) return null;
+  if (status >= 400) return { probe: undefined, knownMiss: false };
   try {
     var data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
-    if (!data || !data.ok || !data.best) return null;
-    return {
-      contentId: String(data.best.contentId || ""),
-      posterUrl: String(data.best.posterUrl || ""),
-      backdropUrl: String(data.best.backdropUrl || ""),
-    };
+    if (!data) return { probe: undefined, knownMiss: false };
+    if (data.ok && data.best) {
+      return {
+        probe: {
+          contentId: String(data.best.contentId || ""),
+          posterUrl: String(data.best.posterUrl || ""),
+          backdropUrl: String(data.best.backdropUrl || ""),
+        },
+        knownMiss: false,
+      };
+    }
+    if (data.ok === false) return { probe: null, knownMiss: true };
+    return { probe: undefined, knownMiss: false };
   } catch (err) {
-    return null;
+    return { probe: undefined, knownMiss: false };
   }
 }
 
@@ -2258,6 +2310,12 @@ async function fetchDmmProbeCover(code, params) {
   if (!code) return null;
   if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) {
     return DMM_PROBE_WORKER_CACHE[code];
+  }
+
+  var stored = loadDmmProbeFromStorage(code);
+  if (stored !== undefined) {
+    DMM_PROBE_WORKER_CACHE[code] = stored;
+    return stored;
   }
 
   var parts = parseJavCodeParts(code);
@@ -2279,26 +2337,82 @@ async function fetchDmmProbeCover(code, params) {
       timeout: DMM_PROBE_WORKER_TIMEOUT_MS,
       allow_redirects: true,
     });
-    var parsed = parseDmmProbeWorkerPayload(res);
-    DMM_PROBE_WORKER_CACHE[code] = parsed;
-    return parsed;
+    var parsed = parseDmmProbeWorkerResponse(res);
+    if (parsed.probe !== undefined || parsed.knownMiss) {
+      DMM_PROBE_WORKER_CACHE[code] = parsed.probe;
+      saveDmmProbeToStorage(code, parsed.probe);
+      return parsed.probe;
+    }
+    return null;
   } catch (err) {
-    DMM_PROBE_WORKER_CACHE[code] = null;
     return null;
   }
 }
 
 async function prefetchDmmProbeCovers(codes, params) {
-  var tasks = [];
+  var pending = [];
   var seen = {};
   for (var i = 0; i < (codes || []).length; i++) {
     var code = String(codes[i] || "").trim().toUpperCase();
-    if (!code || seen[code] || Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) continue;
+    if (!code || seen[code]) continue;
     seen[code] = true;
-    tasks.push(fetchDmmProbeCover(code, params));
+    if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) continue;
+    var storedProbe = loadDmmProbeFromStorage(code);
+    if (storedProbe !== undefined) {
+      DMM_PROBE_WORKER_CACHE[code] = storedProbe;
+      continue;
+    }
+    pending.push(code);
   }
-  if (!tasks.length) return;
-  await Promise.all(tasks);
+  if (!pending.length) return;
+
+  var base = getDmmProbeWorkerBase(params);
+  if (!base) return;
+
+  var chunkSize = 20;
+  for (var start = 0; start < pending.length; start += chunkSize) {
+    var chunk = pending.slice(start, start + chunkSize);
+    try {
+      var res = await Widget.http.post(
+        base + "/probe",
+        JSON.stringify({ codes: chunk, force: false, variants: false }),
+        {
+          headers: Object.assign({ "Content-Type": "application/json" }, getDmmProbeWorkerHeaders(params)),
+          timeout: DMM_PROBE_WORKER_TIMEOUT_MS * 2,
+          allow_redirects: true,
+        }
+      );
+      var status = Number(res && (res.status || res.statusCode) || 0);
+      if (!res || status >= 400 || !res.data) continue;
+      var payload = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+      var rows = (payload && payload.results) || [];
+      var hit = {};
+      for (var j = 0; j < rows.length; j++) {
+        var row = rows[j];
+        if (!row || !row.code) continue;
+        var rowCode = String(row.code).trim().toUpperCase();
+        hit[rowCode] = true;
+        var probe = null;
+        if (row.ok && row.best) {
+          probe = {
+            contentId: String(row.best.contentId || ""),
+            posterUrl: String(row.best.posterUrl || ""),
+            backdropUrl: String(row.best.backdropUrl || ""),
+          };
+        }
+        DMM_PROBE_WORKER_CACHE[rowCode] = probe;
+        saveDmmProbeToStorage(rowCode, probe);
+      }
+      for (var k = 0; k < chunk.length; k++) {
+        var missingCode = chunk[k];
+        if (!hit[missingCode]) await fetchDmmProbeCover(missingCode, params);
+      }
+    } catch (err) {
+      for (var f = 0; f < chunk.length; f++) {
+        await fetchDmmProbeCover(chunk[f], params);
+      }
+    }
+  }
 }
 
 function lookupDmmProbeCover(code) {
