@@ -281,7 +281,7 @@ const TAG_ENUM_OPTIONS = [
 WidgetMetadata = {
   id: "forward.kanav",
   title: "KanAV",
-  version: "1.0.6",
+  version: "1.0.7",
   requiredVersion: "0.0.1",
   description: "KanAV \u89c6\u9891\u6e90",
   author: "\u8001\u5934",
@@ -339,6 +339,12 @@ const PLAY_HEADERS = {
   "Referer": CDN_REFERER,
   "Origin": "https://kanav.ad",
   "Accept": "*/*",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+};
+const DETAIL_HEADERS = {
+  "User-Agent": UA,
+  "Referer": BASE + "/",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 };
 
@@ -845,8 +851,7 @@ function buildCoverCandidatesFromVideoId(videoIdOrTitle, dmmProbe, options) {
   let candidates = buildMgstageCoverCandidatesFromVideoId(videoIdOrTitle);
   if (candidates.posterCandidates.length || candidates.backdropCandidates.length) return candidates;
   candidates = { posterCandidates: [], backdropCandidates: [] };
-  const skipGuessed = options.skipGuessedDmm || dmmProbe === null;
-  if (!skipGuessed) {
+  if (options.allowGuessedDmm) {
     const parts = parseJavCodeParts(videoIdOrTitle);
     if (parts && parts.code) appendDmmCoverCandidates(candidates, parts.code);
   }
@@ -970,14 +975,7 @@ function buildListCoverBundle(code, siteFallback, dmmProbe) {
   const fallback = String(siteFallback || "").trim();
   if (!code || !isValidJavCatalogCode(code)) return buildCoverBundleFromUrls(fallback, fallback);
   const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(code);
-  const hasVerifiedProbe = !!(probe && (probe.posterUrl || probe.backdropUrl));
-  const allowLocalMapped = hasMappedDmmPrefix(code);
-  if (fallback && !hasVerifiedProbe && probe === null && !allowLocalMapped) {
-    return buildCoverBundleFromUrls(fallback, fallback);
-  }
-  const candidates = buildCoverCandidatesFromVideoId(code, probe, {
-    skipGuessedDmm: !hasVerifiedProbe && !allowLocalMapped,
-  });
+  const candidates = buildCoverCandidatesFromVideoId(code, probe);
   const hdBackdrop =
     pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.backdropCandidates)) ||
     fallback ||
@@ -999,11 +997,11 @@ function buildDetailCoverBundle(code, siteFallback, dmmProbe, options) {
   const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(code);
   const hasVerifiedProbe = !!(probe && (probe.posterUrl || probe.backdropUrl));
   const allowLocalMapped = hasMappedDmmPrefix(code);
-  if (fallback && !hasVerifiedProbe && (options.skipGuessedDmm || probe === null) && !allowLocalMapped) {
+  if (fallback && !hasVerifiedProbe && probe === null && !allowLocalMapped) {
     return buildCoverBundleFromUrls(fallback, fallback);
   }
   const candidates = buildCoverCandidatesFromVideoId(code, probe, Object.assign({}, options, {
-    skipGuessedDmm: options.skipGuessedDmm || (!hasVerifiedProbe && !allowLocalMapped && probe === null),
+    allowGuessedDmm: options.allowGuessedDmm || (!hasVerifiedProbe && allowLocalMapped),
   }));
   const hdBackdrop =
     pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.backdropCandidates)) ||
@@ -1080,7 +1078,6 @@ function buildDetailCoverBundleFromDmm(code, siteFallback, dmmProbe, options) {
 
 async function enrichKanavListWithDmmCovers(items, params) {
   return enrichItemsWithDmmCovers(items, params || {}, {
-    prefetchRemote: false,
     getCode: function (item) {
       return extractKanavMovieCode(item.title || "");
     },
@@ -1107,11 +1104,7 @@ async function applyDmmToDetailExtras(extras, title, params) {
     hasSiteCover ? DMM_PROBE_DETAIL_BUDGET_MS : 0
   );
   const dmmProbe = probeResult.probe;
-  const coverOptions =
-    probeResult.timedOut && hasSiteCover
-      ? { skipGuessedDmm: true }
-      : {};
-  const bundle = buildDetailCoverBundleFromDmm(code, siteFallback, dmmProbe, coverOptions);
+  const bundle = buildDetailCoverBundleFromDmm(code, siteFallback, dmmProbe, {});
   const dmmBackdropPaths = buildDetailBackdropPaths(code, dmmProbe);
   const useDmmBackdrop =
     bundle.backdropPath &&
@@ -1198,13 +1191,15 @@ function parseDetailExtras(html, link) {
 function buildDetailItem(link, videoUrl, customHeaders, extras) {
   const item = {
     id: link,
-    type: "url",
+    type: "detail",
     link,
-    videoUrl,
-    playerType: "system",
     mediaType: "movie",
-    customHeaders,
+    customHeaders: customHeaders || PLAY_HEADERS,
   };
+  if (videoUrl) {
+    item.videoUrl = videoUrl;
+    item.playerType = /\.m3u8(\?|$)/i.test(videoUrl) ? "ijk" : "system";
+  }
   if (!extras) return item;
   if (extras.title) item.title = extras.title;
   if (extras.description) item.description = extras.description;
@@ -1379,118 +1374,139 @@ async function loadHookup(params)    { return loadCategory("31", params); }
 async function loadStreamer(params)  { return loadCategory("32", params); }
 async function loadAnime(params)     { return loadCategory("20", params); }
 
+function parseJsonObjectFromScriptBlock(block) {
+  if (!block) return null;
+  const startIdx = block.indexOf("{");
+  const endIdx = block.lastIndexOf("}");
+  if (startIdx < 0 || endIdx <= startIdx) return null;
+  try {
+    return JSON.parse(block.substring(startIdx, endIdx + 1));
+  } catch (e) {
+    return null;
+  }
+}
+
+function parsePlayerDataFromHtml(html) {
+  if (!html) return null;
+
+  const patterns = [
+    /var\s+player_aaaa\s*=\s*([\s\S]*?)<\/script>/i,
+    /var\s+(player_\w+)\s*=\s*([\s\S]*?)<\/script>/gi,
+    /var\s+MacPlayerConfig\s*=\s*([\s\S]*?)<\/script>/i,
+  ];
+
+  let data = parseJsonObjectFromScriptBlock(
+    (html.match(patterns[0]) || [])[1]
+  );
+  if (data && (data.url || data.link || data.vurl)) return data;
+
+  let match;
+  const generic = patterns[1];
+  while ((match = generic.exec(html)) !== null) {
+    data = parseJsonObjectFromScriptBlock(match[2]);
+    if (data && (data.url || data.link || data.vurl)) return data;
+  }
+
+  data = parseJsonObjectFromScriptBlock((html.match(patterns[2]) || [])[1]);
+  if (data && (data.url || data.link || data.vurl)) return data;
+
+  try {
+    const $ = Widget.html.load(html);
+    $("script").each((_, el) => {
+      if (data) return;
+      const scriptText = $(el).text() || "";
+      if (!/player_/i.test(scriptText) && !/MacPlayerConfig/i.test(scriptText)) return;
+      const parsed = parseJsonObjectFromScriptBlock(scriptText);
+      if (parsed && (parsed.url || parsed.link || parsed.vurl)) data = parsed;
+    });
+  } catch (e) {}
+
+  return data || null;
+}
+
+function decodeMacPlayerUrl(playerData) {
+  if (!playerData) return "";
+  const rawUrl = String(playerData.url || playerData.vurl || "").trim();
+  if (!rawUrl) return "";
+  const encrypt = Number(playerData.encrypt || 0);
+  if (encrypt === 0) return rawUrl;
+  if (encrypt === 1) return b64Decode(rawUrl);
+  return safeUriDecode(b64Decode(rawUrl));
+}
+
+async function fetchDetailHtml(link) {
+  const res = await Widget.http.get(String(link), { headers: DETAIL_HEADERS });
+  return typeof res.data === "string" ? res.data : String(res.data);
+}
+
+async function resolvePlaybackFromHtml(html, pageUrl, depth) {
+  depth = depth || 0;
+  if (!html || depth > 2) return "";
+
+  const playerData = parsePlayerDataFromHtml(html);
+  let videoUrl = decodeMacPlayerUrl(playerData);
+
+  if (!videoUrl && playerData && playerData.link) {
+    videoUrl = resolveAbsoluteUrl(pageUrl, playerData.link);
+  }
+
+  if (videoUrl && !isDirectStreamUrl(videoUrl)) {
+    const queryVideo = extractVideoUrlFromQuery(videoUrl);
+    if (queryVideo) return queryVideo;
+
+    if (/^https?:\/\//i.test(videoUrl)) {
+      try {
+        const embedRes = await Widget.http.get(videoUrl, {
+          headers: Object.assign({}, DETAIL_HEADERS, { Referer: CDN_REFERER }),
+        });
+        const embedHtml = typeof embedRes.data === "string" ? embedRes.data : String(embedRes.data || "");
+        const extracted = extractVideoUrlFromHtml(embedHtml);
+        if (extracted) return extracted;
+        const nested = await resolvePlaybackFromHtml(embedHtml, videoUrl, depth + 1);
+        if (nested) return nested;
+      } catch (e) {}
+    } else if (/\/vod\/play\//i.test(videoUrl) || videoUrl.indexOf("/index.php") >= 0) {
+      try {
+        const playUrl = resolveAbsoluteUrl(pageUrl, videoUrl);
+        const playHtml = await fetchDetailHtml(playUrl);
+        const nested = await resolvePlaybackFromHtml(playHtml, playUrl, depth + 1);
+        if (nested) return nested;
+      } catch (e) {}
+    }
+  }
+
+  if (videoUrl && isDirectStreamUrl(videoUrl)) return videoUrl;
+
+  const inline = extractVideoUrlFromHtml(html);
+  if (inline && isDirectStreamUrl(inline)) return inline;
+
+  return "";
+}
+
 async function loadDetail(link) {
-  const res = await Widget.http.get(String(link), { headers: { "User-Agent": UA } });
-  const html = typeof res.data === "string" ? res.data : String(res.data);
-  let extras = parseDetailExtras(html, link);
-  extras = await applyDmmToDetailExtras(extras, extras.title, {});
-
   const cached = readVideoCache(link);
-  if (cached) return buildDetailItem(link, cached.videoUrl, cached.customHeaders, extras);
+  const html = await fetchDetailHtml(link);
+  let extras = parseDetailExtras(html, link);
 
-  // --- Extract player_aaaa JSON from HTML ---
-  // Strategy: find the <script> block containing "var player_aaaa=", then locate
-  // the JSON boundaries (first '{' to last '}') within that block. This avoids
-  // the non-greedy regex pitfall where nested objects (vod_data: {...}) cause
-  // the match to stop at the inner '}' instead of the outer one.
-  let playerData = null;
-
-  // Primary: extract content between "var player_aaaa=" and "</script>", find JSON boundaries
-  const scriptMatch = html.match(/var\s+player_aaaa\s*=\s*([\s\S]*?)<\/script>/);
-  if (scriptMatch) {
-    const content = scriptMatch[1];
-    const startIdx = content.indexOf("{");
-    const endIdx = content.lastIndexOf("}");
-    if (startIdx >= 0 && endIdx > startIdx) {
-      const jsonStr = content.substring(startIdx, endIdx + 1);
-      try {
-        playerData = JSON.parse(jsonStr);
-      } catch (e) {
-        // JSON parse failed, try fallback
-      }
-    }
-  }
-
-  // Fallback 1: original regex (works when no nested braces)
-  if (!playerData) {
-    const playerMatch = html.match(/var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*;?\s*(?:<\/script>|$)/);
-    if (playerMatch) {
-      try {
-        playerData = JSON.parse(playerMatch[1]);
-      } catch (e) {
-        const jsonMatch = playerMatch[1].match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try { playerData = JSON.parse(jsonMatch[0]); } catch (e2) {}
-        }
-      }
-    }
-  }
-
-  // Fallback 2: cheerio :contains approach
-  if (!playerData) {
-    try {
-      const $ = Widget.html.load(html);
-      const scriptText = $("script:contains(player_aaaa)").text() || "";
-      const startIdx2 = scriptText.indexOf("{");
-      const endIdx2 = scriptText.lastIndexOf("}");
-      if (startIdx2 >= 0 && endIdx2 > startIdx2) {
-        try { playerData = JSON.parse(scriptText.substring(startIdx2, endIdx2 + 1)); } catch (e) {}
-      }
-      if (!playerData) {
-        const jsonMatch = scriptText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try { playerData = JSON.parse(jsonMatch[0]); } catch (e) {}
-        }
-      }
-    } catch (e) {}
-  }
-
-  if (!playerData || !playerData.url) return null;
-
-  // --- Decode URL based on encrypt value ---
-  // MacCMS encrypt values:
-  //   0 = plain text URL (no encoding)
-  //   1 = base64 encoded
-  //   2 = URL-encoded then base64 encoded
-  const encrypt = playerData.encrypt || 0;
-  const encodedUrl = playerData.url;
-  let videoUrl;
-
-  if (encrypt === 0) {
-    // Plain URL, use as-is
-    videoUrl = encodedUrl;
-  } else if (encrypt === 1) {
-    // Base64 only
-    videoUrl = b64Decode(encodedUrl);
-  } else {
-    // encrypt === 2 (or default): URL-encoded then base64
-    videoUrl = safeUriDecode(b64Decode(encodedUrl));
-  }
-
-  if (isDirectStreamUrl(videoUrl)) {
-    return deliverDetail(link, videoUrl, extras);
-  }
-
-  const queryVideo = extractVideoUrlFromQuery(videoUrl);
-  if (queryVideo) {
-    return deliverDetail(link, queryVideo, extras);
-  }
-
-  if (videoUrl && videoUrl.startsWith("http")) {
-    try {
-      const embedRes = await Widget.http.get(videoUrl, {
-        headers: { "User-Agent": UA, "Referer": CDN_REFERER },
+  const playbackPromise = cached
+    ? Promise.resolve({ videoUrl: cached.videoUrl, customHeaders: cached.customHeaders })
+    : resolvePlaybackFromHtml(html, link, 0).then(function (videoUrl) {
+        return { videoUrl: videoUrl, customHeaders: null };
       });
-      const embedHtml = typeof embedRes.data === "string" ? embedRes.data : JSON.stringify(embedRes.data);
-      const extracted = extractVideoUrlFromHtml(embedHtml);
-      if (extracted && isDirectStreamUrl(extracted)) {
-        return deliverDetail(link, extracted, extras);
-      }
-      if (extracted) videoUrl = extracted;
-    } catch (e) {}
+  const extrasPromise = applyDmmToDetailExtras(extras, extras.title, {});
+
+  const parallel = await Promise.all([playbackPromise, extrasPromise]);
+  const playback = parallel[0];
+  extras = parallel[1];
+
+  if (playback.videoUrl) {
+    if (cached) {
+      return buildDetailItem(link, playback.videoUrl, playback.customHeaders, extras);
+    }
+    return deliverDetail(link, playback.videoUrl, extras);
   }
 
-  return deliverDetail(link, videoUrl, extras);
+  return buildDetailItem(link, "", PLAY_HEADERS, extras);
 }
 
 

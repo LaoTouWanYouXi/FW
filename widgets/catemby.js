@@ -12,7 +12,7 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const LINK_PREFIX = "catemby:";
 const CATEGORY_ID_TITLE_SEP = "~";
-const JDBSTATIC_BASE = "https://c0.jdbstatic.com";
+const CATEMBY_CDN_BASE = "https://tp.spfcas.com/rhe951l4q";
 
 const MOVIE_TYPE_CODE = { censored: "0", uncensored: "1", western: "2", fc2: "3", all: "0" };
 const MOVIE_TYPE_ENUM = [
@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.5.0",
+  version: "1.5.2",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -2153,6 +2153,7 @@ const DMM_CONTENT_PREFIX_MAP = {
   IESP: "1",
   DLDSS: "1",
   NACT: "h_237",
+  "3DSVR": "1",
 };
 
 function getMgstageCoverRule(parts) {
@@ -2386,6 +2387,9 @@ function buildDmmContentIdFromParts(parts) {
   if (!numericPrefix && /^SD[A-Z]{2,3}$/.test(prefix)) {
     return "1" + parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
   }
+  if (!numericPrefix && /^[0-9]/.test(prefix)) {
+    return "1" + parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
+  }
   return numericPrefix + parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
 }
 
@@ -2492,6 +2496,15 @@ function appendDmmCoverCandidates(target, contentId) {
   }
 }
 
+function appendDmmCoverCandidatesFromParts(target, parts) {
+  if (!parts || !target) return;
+  const primary = buildDmmContentIdFromParts(parts);
+  const prefix1 = "1" + parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
+  const plain = parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
+  const ids = compactUniqueUrls([primary, prefix1, plain]);
+  for (let i = 0; i < ids.length; i++) appendDmmCoverCandidates(target, ids[i]);
+}
+
 function buildMgstageCoverCandidatesFromVideoId(videoIdOrTitle) {
   const parts = parseJavCodeParts(videoIdOrTitle);
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
@@ -2517,10 +2530,9 @@ function buildCoverCandidatesFromVideoId(videoIdOrTitle, dmmProbe, options) {
   let candidates = buildMgstageCoverCandidatesFromVideoId(videoIdOrTitle);
   if (candidates.posterCandidates.length || candidates.backdropCandidates.length) return candidates;
   candidates = { posterCandidates: [], backdropCandidates: [] };
-  const skipGuessed = options.skipGuessedDmm || dmmProbe === null;
-  if (!skipGuessed) {
+  if (options.allowGuessedDmm) {
     const parts = parseJavCodeParts(videoIdOrTitle);
-    if (parts && parts.code) appendDmmCoverCandidates(candidates, parts.code);
+    if (parts) appendDmmCoverCandidatesFromParts(candidates, parts);
   }
   return appendDmmProbeCoverCandidates(candidates, dmmProbe);
 }
@@ -2715,23 +2727,40 @@ async function enrichItemsWithDmmCovers(items, params, options) {
   return out;
 }
 
-function resolveCatembySiteCoverUrl(videoId) {
-  const id = String(videoId || "").trim();
-  if (!id || id.length < 2) return "";
-  return JDBSTATIC_BASE + "/covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+function isJdbstaticUrl(url) {
+  return /jdbstatic\.com/i.test(String(url || ""));
 }
 
-function resolvePosterUrlWithCatembyFallback(posterUrl, videoId) {
+function buildCatembyCdnCoverUrl(movieId) {
+  const id = String(movieId || "").trim();
+  if (!id || id.length < 2) return "";
+  return CATEMBY_CDN_BASE + "/covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+}
+
+function buildCatembyCdnThumbUrl(movieId) {
+  const id = String(movieId || "").trim();
+  if (!id || id.length < 2) return "";
+  return CATEMBY_CDN_BASE + "/thumbs/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+}
+
+function resolveCatembySiteCoverUrl(videoId, siteFallback) {
+  const apiCover = String(siteFallback || "").trim();
+  if (apiCover && !isJdbstaticUrl(apiCover)) return apiCover;
+  return videoId ? buildCatembyCdnCoverUrl(videoId) : "";
+}
+
+function resolvePosterUrlWithCatembyFallback(posterUrl, videoId, siteFallback) {
   const poster = String(posterUrl || "").trim();
-  if (!poster) return resolveCatembySiteCoverUrl(videoId) || "";
-  if (isLowResDmmPosterUrl(poster)) {
-    return resolveCatembySiteCoverUrl(videoId) || poster;
+  const fallback = resolveCatembySiteCoverUrl(videoId, siteFallback);
+  if (!poster) return fallback || "";
+  if (isLowResDmmPosterUrl(poster) || isJdbstaticUrl(poster)) {
+    return fallback || poster;
   }
   return poster;
 }
 
-function buildCatembyListCoverBundle(code, videoId, dmmProbe) {
-  const catembyCover = videoId ? resolveCatembySiteCoverUrl(videoId) : "";
+function buildCatembyListCoverBundle(code, videoId, dmmProbe, siteFallback) {
+  const catembyCover = resolveCatembySiteCoverUrl(videoId, siteFallback);
   if (!code || !isValidJavCatalogCode(code)) return buildCoverBundleFromUrls(catembyCover, catembyCover);
   const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(code);
   const candidates = buildCoverCandidatesFromVideoId(code, probe);
@@ -2742,7 +2771,8 @@ function buildCatembyListCoverBundle(code, videoId, dmmProbe) {
   const hdPoster =
     resolvePosterUrlWithCatembyFallback(
       pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)),
-      videoId
+      videoId,
+      siteFallback
     ) ||
     catembyCover ||
     "";
@@ -2751,8 +2781,11 @@ function buildCatembyListCoverBundle(code, videoId, dmmProbe) {
 
 function buildCatembyDetailCoverBundle(code, videoId, dmmProbe, options) {
   options = options || {};
-  const catembyCover = videoId ? resolveCatembySiteCoverUrl(videoId) : "";
+  const catembyCover = resolveCatembySiteCoverUrl(videoId, options.siteFallback);
   const siteFallback = String(options.siteFallback || catembyCover || "").trim();
+  if (!siteFallback || isJdbstaticUrl(siteFallback)) {
+    options = Object.assign({}, options, { siteFallback: catembyCover });
+  }
   if (!code || !isValidJavCatalogCode(code)) {
     return buildCoverBundleFromUrls(siteFallback || catembyCover, siteFallback || catembyCover);
   }
@@ -2766,7 +2799,8 @@ function buildCatembyDetailCoverBundle(code, videoId, dmmProbe, options) {
   const hdPoster =
     resolvePosterUrlWithCatembyFallback(
       pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)),
-      videoId
+      videoId,
+      options.siteFallback || siteFallback
     ) ||
     siteFallback ||
     catembyCover ||
@@ -2787,42 +2821,30 @@ async function enrichListMovies(movies, params) {
   });
 }
 
-function buildJdbstaticThumbUrl(movieId) {
-  const id = String(movieId || "").trim();
-  if (!id || id.length < 2) return "";
-  return JDBSTATIC_BASE + "/thumbs/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
-}
-
-function buildJdbstaticCoverUrl(movieId) {
-  const id = String(movieId || "").trim();
-  if (!id || id.length < 2) return "";
-  return JDBSTATIC_BASE + "/covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
-}
-
 function resolveSiteCoverUrl(movie) {
   const apiCover = String(movie.cover_url || "").trim();
-  if (apiCover && !/^data:/i.test(apiCover)) return apiCover;
+  if (apiCover && !/^data:/i.test(apiCover) && !isJdbstaticUrl(apiCover)) return apiCover;
   return "";
 }
 
 function resolveSiteThumbUrl(movie) {
   const apiThumb = String(movie.thumb_url || "").trim();
-  if (apiThumb && !/^data:/i.test(apiThumb)) return apiThumb;
+  if (apiThumb && !/^data:/i.test(apiThumb) && !isJdbstaticUrl(apiThumb)) return apiThumb;
   return "";
 }
 
 function resolveListThumbUrl(movie) {
   const site = resolveSiteThumbUrl(movie);
   if (site) return site;
-  return buildJdbstaticThumbUrl(movie.id) || "";
+  return buildCatembyCdnThumbUrl(movie.id) || "";
 }
 
 function resolveListCoverUrl(movie) {
   const site = resolveSiteCoverUrl(movie);
   if (site) return site;
-  const cover = buildJdbstaticCoverUrl(movie.id);
-  if (cover) return cover;
-  return resolveListThumbUrl(movie);
+  const thumb = resolveSiteThumbUrl(movie);
+  if (thumb) return thumb;
+  return buildCatembyCdnCoverUrl(movie.id) || "";
 }
 
 function resolveDetailBackdropUrl(movie) {
@@ -3258,7 +3280,7 @@ function mapListMovie(movie, params) {
   const title = safeText(movie.title || rawCode || movie.id);
   const siteCover = resolveListCoverUrl(movie);
   const covers = code
-    ? buildCatembyListCoverBundle(code, movie.id, lookupDmmProbeCover(code))
+    ? buildCatembyListCoverBundle(code, movie.id, lookupDmmProbeCover(code), siteCover)
     : buildCoverBundleFromUrls(siteCover, siteCover);
   return {
     id: rawCode || movie.id,
@@ -3291,9 +3313,9 @@ function buildListDescription(movie) {
 
 function mapRelatedMovie(item, fallbackCover) {
   const cover =
-    item.cover_url ||
-    buildJdbstaticCoverUrl(item.id) ||
-    item.thumb_url ||
+    (item.cover_url && !isJdbstaticUrl(item.cover_url) ? item.cover_url : "") ||
+    (item.thumb_url && !isJdbstaticUrl(item.thumb_url) ? item.thumb_url : "") ||
+    buildCatembyCdnCoverUrl(item.id) ||
     fallbackCover ||
     "";
   const code = safeText(item.number || item.id);
@@ -3523,7 +3545,7 @@ async function loadDetail(link) {
     : Promise.resolve({ probe: null, timedOut: false });
   const [probeResult, fullVideo] = await Promise.all([probePromise, fullVideoPromise]);
   const dmmProbe = probeResult.probe;
-  const coverOptions = probeResult.timedOut && hasSiteCover ? { skipGuessedDmm: true, siteFallback: siteCoverUrl } : { siteFallback: siteCoverUrl };
+  const coverOptions = { siteFallback: siteCoverUrl };
   const coverBundle = code
     ? buildCatembyDetailCoverBundle(code, movie.id || movieId, dmmProbe, coverOptions)
     : buildCoverBundleFromUrls(siteCoverUrl, siteCoverUrl);

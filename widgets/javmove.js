@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.4.0",
+  version: "1.4.1",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -2373,8 +2373,7 @@ function buildCoverCandidatesFromVideoId(videoIdOrTitle, dmmProbe, options) {
   let candidates = buildMgstageCoverCandidatesFromVideoId(videoIdOrTitle);
   if (candidates.posterCandidates.length || candidates.backdropCandidates.length) return candidates;
   candidates = { posterCandidates: [], backdropCandidates: [] };
-  const skipGuessed = options.skipGuessedDmm || dmmProbe === null;
-  if (!skipGuessed) {
+  if (options.allowGuessedDmm) {
     const parts = parseJavCodeParts(videoIdOrTitle);
     if (parts && parts.code) appendDmmCoverCandidates(candidates, parts.code);
   }
@@ -2492,9 +2491,7 @@ function buildListCoverBundle(code, siteFallback, dmmProbe) {
   const fallback = String(siteFallback || "").trim();
   if (!code || !isValidJavCatalogCode(code)) return buildCoverBundleFromUrls(fallback, fallback);
   const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(code);
-  const hasVerifiedProbe = !!(probe && (probe.posterUrl || probe.backdropUrl));
-  if (fallback && !hasVerifiedProbe) return buildCoverBundleFromUrls(fallback, fallback);
-  const candidates = buildCoverCandidatesFromVideoId(code, probe, { skipGuessedDmm: !hasVerifiedProbe });
+  const candidates = buildCoverCandidatesFromVideoId(code, probe);
   const hdBackdrop =
     pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.backdropCandidates)) ||
     fallback ||
@@ -2546,7 +2543,6 @@ function pickHdCoverUrlLists(code, posterSize, dmmProbe) {
 
 async function enrichListWithDmmCovers(items, params) {
   return enrichItemsWithDmmCovers(items, params || {}, {
-    prefetchRemote: false,
     getCode: function (item) {
       return item.matchCode || resolveMovieCode("", item.title, item.title);
     },
