@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.3.13",
+  version: "1.4.0",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -2006,6 +2006,7 @@ const MGSTAGE_COVER_RULES = {
   "390JAC": { maker: "jackson" },
 };
 
+// DMM contentId 数字前缀映射（与 javdb.js 保持一致，修改时请同步各脚本及 dmm-cover-probe）
 const DMM_CONTENT_PREFIX_MAP = {
   WSA: "2",
   FSDSS: "1", FCDSS: "1", FNS: "1", FTHTD: "1",
@@ -2024,6 +2025,7 @@ const DMM_CONTENT_PREFIX_MAP = {
   CHN: "118",
   IESP: "1",
   DLDSS: "1",
+  NACT: "h_237",
 };
 
 function getMgstageCoverRule(parts) {
@@ -2128,6 +2130,10 @@ function parseDmmProbeWorkerResponse(res) {
 async function fetchDmmProbeCover(code, params) {
   code = String(code || "").trim().toUpperCase();
   if (!code) return null;
+  if (!isValidJavCatalogCode(code)) {
+    DMM_PROBE_WORKER_CACHE[code] = null;
+    return null;
+  }
   if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) {
     return DMM_PROBE_WORKER_CACHE[code];
   }
@@ -2163,9 +2169,20 @@ async function fetchDmmProbeCover(code, params) {
       saveDmmProbeToStorage(code, parsed.probe);
       return parsed.probe;
     }
+    DMM_PROBE_WORKER_CACHE[code] = null;
     return null;
   } catch (err) {
+    DMM_PROBE_WORKER_CACHE[code] = null;
     return null;
+  }
+}
+
+function hydrateDmmProbeCacheFromStorage(codes) {
+  for (let i = 0; i < (codes || []).length; i++) {
+    const code = String(codes[i] || "").trim().toUpperCase();
+    if (!code || Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) continue;
+    const stored = loadDmmProbeFromStorage(code);
+    if (stored !== undefined) DMM_PROBE_WORKER_CACHE[code] = stored;
   }
 }
 
@@ -2176,6 +2193,10 @@ async function prefetchDmmProbeCovers(codes, params) {
     const code = String(codes[i] || "").trim().toUpperCase();
     if (!code || seen[code]) continue;
     seen[code] = true;
+    if (!isValidJavCatalogCode(code)) {
+      DMM_PROBE_WORKER_CACHE[code] = null;
+      continue;
+    }
     if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) continue;
     const storedProbe = loadDmmProbeFromStorage(code);
     if (storedProbe !== undefined) {
@@ -2254,8 +2275,24 @@ function parseJavCodeParts(title) {
   return parts;
 }
 
+function isValidJavCatalogCode(code) {
+  const raw = String(code || "").trim();
+  if (!raw) return false;
+  const upper = raw.toUpperCase().replace(/\s+/g, " ");
+  if (/^\d{4,}$/.test(upper.replace(/[\s\-_]+/g, ""))) return false;
+  if (/^FC2(?:[- ]?PPV)?[- ]?\d{5,8}$/i.test(upper)) return true;
+  if (/^(?:CARIB|1PONDO|HEYZO|T28)[- ]?\d+/i.test(upper)) return true;
+  const parts = parseJavCodeParts(upper);
+  if (!parts) return false;
+  if (!/[A-Z]/.test(parts.prefix)) return false;
+  const num = parseInt(parts.number, 10);
+  if (!Number.isFinite(num) || num <= 0) return false;
+  return true;
+}
+
 function isDmmMonoContentId(contentId) {
   const id = String(contentId || "").toLowerCase();
+  if (/^h_\d+/.test(id)) return true;
   const hMatch = id.match(/^h_\d+[a-z0-9]+?(\d+)$/);
   if (hMatch) return hMatch[1].length < 5;
   const oneMatch = id.match(/^1([a-z]+)(\d+)$/);
@@ -2328,12 +2365,19 @@ function appendDmmProbeCoverCandidates(candidates, dmmProbe) {
   return candidates;
 }
 
-function buildCoverCandidatesFromVideoId(videoIdOrTitle, dmmProbe) {
+function buildCoverCandidatesFromVideoId(videoIdOrTitle, dmmProbe, options) {
+  options = options || {};
+  if (!isValidJavCatalogCode(videoIdOrTitle)) {
+    return { posterCandidates: [], backdropCandidates: [] };
+  }
   let candidates = buildMgstageCoverCandidatesFromVideoId(videoIdOrTitle);
   if (candidates.posterCandidates.length || candidates.backdropCandidates.length) return candidates;
   candidates = { posterCandidates: [], backdropCandidates: [] };
-  const parts = parseJavCodeParts(videoIdOrTitle);
-  if (parts && parts.code) appendDmmCoverCandidates(candidates, parts.code);
+  const skipGuessed = options.skipGuessedDmm || dmmProbe === null;
+  if (!skipGuessed) {
+    const parts = parseJavCodeParts(videoIdOrTitle);
+    if (parts && parts.code) appendDmmCoverCandidates(candidates, parts.code);
+  }
   return appendDmmProbeCoverCandidates(candidates, dmmProbe);
 }
 
@@ -2376,7 +2420,7 @@ function buildMgstageGalleryFromDvdId(dvdId, count) {
 
 function fetchJavTrailersMeta(dvdId, dmmProbe) {
   const empty = { backdropPath: "", backdropPaths: [] };
-  if (!dvdId) return empty;
+  if (!dvdId || !isValidJavCatalogCode(dvdId)) return empty;
   const parts = parseJavCodeParts(dvdId);
   let backdropPath = "";
   let backdropPaths = [];
@@ -2446,9 +2490,11 @@ function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
 
 function buildListCoverBundle(code, siteFallback, dmmProbe) {
   const fallback = String(siteFallback || "").trim();
-  if (!code) return buildCoverBundleFromUrls(fallback, fallback);
+  if (!code || !isValidJavCatalogCode(code)) return buildCoverBundleFromUrls(fallback, fallback);
   const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(code);
-  const candidates = buildCoverCandidatesFromVideoId(code, probe);
+  const hasVerifiedProbe = !!(probe && (probe.posterUrl || probe.backdropUrl));
+  if (fallback && !hasVerifiedProbe) return buildCoverBundleFromUrls(fallback, fallback);
+  const candidates = buildCoverCandidatesFromVideoId(code, probe, { skipGuessedDmm: !hasVerifiedProbe });
   const hdBackdrop =
     pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.backdropCandidates)) ||
     fallback ||
@@ -2465,6 +2511,7 @@ function buildListCoverBundle(code, siteFallback, dmmProbe) {
 
 function buildDetailCoverBundleFromDmm(code, siteFallback, dmmProbe) {
   const fallback = String(siteFallback || "").trim();
+  if (!code || !isValidJavCatalogCode(code)) return buildCoverBundleFromUrls(fallback, fallback);
   const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(code);
   const candidates = buildCoverCandidatesFromVideoId(code, probe);
   const hdPoster =
@@ -2499,6 +2546,7 @@ function pickHdCoverUrlLists(code, posterSize, dmmProbe) {
 
 async function enrichListWithDmmCovers(items, params) {
   return enrichItemsWithDmmCovers(items, params || {}, {
+    prefetchRemote: false,
     getCode: function (item) {
       return item.matchCode || resolveMovieCode("", item.title, item.title);
     },
@@ -2516,15 +2564,19 @@ async function enrichItemsWithDmmCovers(items, params, options) {
   const codes = [];
   for (let i = 0; i < (items || []).length; i++) {
     const code = String(getCode(items[i]) || "").trim().toUpperCase();
-    if (code) codes.push(code);
+    if (code && isValidJavCatalogCode(code)) codes.push(code);
   }
-  await prefetchDmmProbeCovers(codes, params);
+  if (options.prefetchRemote !== false) {
+    await prefetchDmmProbeCovers(codes, params);
+  } else {
+    hydrateDmmProbeCacheFromStorage(codes);
+  }
 
   const out = [];
   for (let i = 0; i < (items || []).length; i++) {
     const item = items[i];
     const code = String(getCode(item) || "").trim().toUpperCase();
-    if (!code) {
+    if (!code || !isValidJavCatalogCode(code)) {
       out.push(item);
       continue;
     }
@@ -2698,7 +2750,7 @@ async function resolveDetailCoverBundle(pageCover, code, params) {
   params = getEffectiveParams(params || {});
   const pagePoster = resolvePagePosterFallback(pageCover);
 
-  if (!code) {
+  if (!code || !isValidJavCatalogCode(code)) {
     return buildDetailCoverBundle(pageCover, code);
   }
 
@@ -3211,7 +3263,7 @@ function buildGenrePageUrl(genreUrl, page) {
   return url;
 }
 
-async function fetchGenreVideoList(genreRef, page) {
+async function fetchGenreVideoList(genreRef, page, params) {
   const baseUrl = normalizeGenreId(genreRef);
   if (!baseUrl) return [];
   const fetchUrl = buildGenrePageUrl(baseUrl, page);
@@ -3339,7 +3391,7 @@ async function loadGenreList(params) {
     params.genreId || params.link || params.id || ""
   );
   if (!genreId) return [];
-  return fetchGenreVideoList(genreId, params.page);
+  return fetchGenreVideoList(genreId, params.page, params);
 }
 
 async function loadGenres(params) {
