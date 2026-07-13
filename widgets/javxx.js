@@ -597,63 +597,508 @@ function isIcdnCoverUrl(url) {
   return /icdn[^/]*\/(?:img2\/|preview\/)/i.test(String(url || ""));
 }
 
-function buildDmmContentId(raw) {
-  const text = String(raw || "")
-    .toLowerCase()
-    .replace(/-(?:uncensored-leaked|chinese-subtitle|english-subtitle|censored|leaked|subtitle)$/gi, "");
-  if (/^fc2/i.test(text)) return "";
-  const codeMatch =
-    text.match(/^([a-z]{2,10})-?(\d{2,5})$/i) ||
-    text.match(/([a-z]{2,10})[-_]?0*(\d{2,5})/i);
-  if (!codeMatch) return "";
-  let number5 = String(parseInt(codeMatch[2], 10));
+const DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
+const DMM_PROBE_WORKER_CACHE = {};
+const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
+const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
+const DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
+const DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
+const DMM_CONTENT_ID_OVERRIDES = {};
+
+const MGSTAGE_COVER_RULES = {
+  ABF: { maker: "prestige" },
+  ABW: { maker: "prestige" },
+  ABP: { maker: "prestige" },
+  CHN: { maker: "prestige" },
+  JUFE: { maker: "prestige" },
+  MAAN: { maker: "prestige" },
+  PPT: { maker: "prestige" },
+  "390JAC": { maker: "jackson" },
+};
+
+const DMM_CONTENT_PREFIX_MAP = {
+  WSA: "2",
+  FSDSS: "1", FCDSS: "1", FNS: "1", FTHTD: "1",
+  FALENO: "1", FGAN: "1", FSNF: "1", FLAV: "1",
+  NAAC: "h_706",
+  NHDTC: "1",
+  KUSE: "1",
+  MBDD: "301",
+  SDNM: "1",
+  STARS: "1", STAR: "1", START: "1",
+  SODS: "1",
+  REBD: "h_346", REBDB: "h_346", GSHRB: "h_346",
+  MOGI: "1",
+  FTAV: "1",
+  ABP: "118",
+  CHN: "118",
+  IESP: "1",
+  DLDSS: "1",
+};
+
+function getMgstageCoverRule(parts) {
+  if (!parts) return null;
+  return MGSTAGE_COVER_RULES[parts.prefix] || null;
+}
+
+function dmmCompactUniqueUrls(urls) {
+  const seen = {};
+  const result = [];
+  for (let i = 0; i < (urls || []).length; i++) {
+    const value = String(urls[i] || "").trim();
+    if (!value || seen[value]) continue;
+    seen[value] = true;
+    result.push(value);
+  }
+  return result;
+}
+
+function dmmProbeStorageKey(code) {
+  return DMM_PROBE_STORAGE_PREFIX + String(code || "").trim().toUpperCase();
+}
+
+function loadDmmProbeFromStorage(code) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return undefined;
+  try {
+    const raw = Widget.storage.get(dmmProbeStorageKey(code));
+    if (!raw) return undefined;
+    const entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!entry || !entry.savedAt) return undefined;
+    const ttl = entry.ok ? DMM_PROBE_STORAGE_TTL_OK_MS : DMM_PROBE_STORAGE_TTL_FAIL_MS;
+    if (Date.now() - Number(entry.savedAt) > ttl) return undefined;
+    if (!entry.ok) return null;
+    return {
+      contentId: String(entry.contentId || ""),
+      posterUrl: String(entry.posterUrl || ""),
+      backdropUrl: String(entry.backdropUrl || ""),
+    };
+  } catch (err) {
+    return undefined;
+  }
+}
+
+function saveDmmProbeToStorage(code, probe) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return;
+  const entry = { ok: !!probe, savedAt: Date.now() };
+  if (probe) {
+    entry.contentId = probe.contentId || "";
+    entry.posterUrl = probe.posterUrl || "";
+    entry.backdropUrl = probe.backdropUrl || "";
+  }
+  Widget.storage.set(dmmProbeStorageKey(code), JSON.stringify(entry));
+}
+
+function getDmmProbeWorkerBase(params) {
+  params = params || {};
+  let base = params.dmmProbeWorker;
+  if (!base) {
+    const stored = Widget.storage.get("javdb.global.dmmProbeWorker");
+    if (stored) base = stored;
+  }
+  if (!base) base = DMM_PROBE_WORKER_BASE;
+  return String(base || "").replace(/\/+$/, "");
+}
+
+function getDmmProbeWorkerHeaders(params) {
+  const headers = { Accept: "application/json" };
+  let key = params && params.dmmProbeApiKey;
+  if (!key) key = Widget.storage.get("javdb.global.dmmProbeApiKey");
+  if (key) headers["X-Probe-Key"] = String(key);
+  return headers;
+}
+
+function parseDmmProbeWorkerResponse(res) {
+  if (!res || res.data === undefined || res.data === null) {
+    return { probe: undefined, knownMiss: false };
+  }
+  const status = Number(res.status || res.statusCode || 0);
+  if (status >= 400) return { probe: undefined, knownMiss: false };
+  try {
+    const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+    if (!data) return { probe: undefined, knownMiss: false };
+    if (data.ok && data.best) {
+      return {
+        probe: {
+          contentId: String(data.best.contentId || ""),
+          posterUrl: String(data.best.posterUrl || ""),
+          backdropUrl: String(data.best.backdropUrl || ""),
+        },
+        knownMiss: false,
+      };
+    }
+    if (data.ok === false) return { probe: null, knownMiss: true };
+    return { probe: undefined, knownMiss: false };
+  } catch (err) {
+    return { probe: undefined, knownMiss: false };
+  }
+}
+
+async function fetchDmmProbeCover(code, params) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return null;
+  if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) {
+    return DMM_PROBE_WORKER_CACHE[code];
+  }
+
+  const stored = loadDmmProbeFromStorage(code);
+  if (stored !== undefined) {
+    DMM_PROBE_WORKER_CACHE[code] = stored;
+    return stored;
+  }
+
+  const parts = parseJavCodeParts(code);
+  if (!parts || getMgstageCoverRule(parts)) {
+    DMM_PROBE_WORKER_CACHE[code] = null;
+    return null;
+  }
+
+  const base = getDmmProbeWorkerBase(params);
+  if (!base) {
+    DMM_PROBE_WORKER_CACHE[code] = null;
+    return null;
+  }
+
+  try {
+    const url = base + "/cover?code=" + encodeURIComponent(code);
+    const res = await Widget.http.get(url, {
+      headers: getDmmProbeWorkerHeaders(params),
+      timeout: DMM_PROBE_WORKER_TIMEOUT_MS,
+      allow_redirects: true,
+    });
+    const parsed = parseDmmProbeWorkerResponse(res);
+    if (parsed.probe !== undefined || parsed.knownMiss) {
+      DMM_PROBE_WORKER_CACHE[code] = parsed.probe;
+      saveDmmProbeToStorage(code, parsed.probe);
+      return parsed.probe;
+    }
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function prefetchDmmProbeCovers(codes, params) {
+  const pending = [];
+  const seen = {};
+  for (let i = 0; i < (codes || []).length; i++) {
+    const code = String(codes[i] || "").trim().toUpperCase();
+    if (!code || seen[code]) continue;
+    seen[code] = true;
+    if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) continue;
+    const storedProbe = loadDmmProbeFromStorage(code);
+    if (storedProbe !== undefined) {
+      DMM_PROBE_WORKER_CACHE[code] = storedProbe;
+      continue;
+    }
+    pending.push(code);
+  }
+  if (!pending.length) return;
+
+  const base = getDmmProbeWorkerBase(params);
+  if (!base) return;
+
+  const concurrency = 6;
+  for (let start = 0; start < pending.length; start += concurrency) {
+    const chunk = pending.slice(start, start + concurrency);
+    const tasks = [];
+    for (let i = 0; i < chunk.length; i++) {
+      tasks.push(fetchDmmProbeCover(chunk[i], params));
+    }
+    await Promise.all(tasks);
+  }
+}
+
+function lookupDmmProbeCover(code) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code || !Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) return null;
+  return DMM_PROBE_WORKER_CACHE[code];
+}
+
+function normalizeDmmPrefix(prefix) {
+  let p = String(prefix || "").toUpperCase();
+  if (p === "REBDB") return "REBD";
+  return p;
+}
+
+function buildDmmContentIdFromParts(parts) {
+  if (!parts) return "";
+  const contentCode = parts.code ? String(parts.code).toUpperCase() : "";
+  if (contentCode && DMM_CONTENT_ID_OVERRIDES[contentCode]) return DMM_CONTENT_ID_OVERRIDES[contentCode];
+  const prefix = normalizeDmmPrefix(parts.prefix);
+  const numericPrefix = DMM_CONTENT_PREFIX_MAP[prefix] || "";
+  if (!numericPrefix && /^SD[A-Z]{2,3}$/.test(prefix)) {
+    return "1" + parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
+  }
+  return numericPrefix + parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
+}
+
+function parseJavCodeParts(title) {
+  const raw = String(title || "").toUpperCase();
+  const match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})([A-Z]?)\b/);
+  if (!match) return null;
+  const prefix = match[1];
+  const prefixLower = prefix.toLowerCase();
+  const suffix = match[3] || "";
+  let number5 = match[2];
   while (number5.length < 5) number5 = "0" + number5;
-  return codeMatch[1].toLowerCase() + number5;
+  const normalizedPrefix = normalizeDmmPrefix(prefix);
+  let makerPrefix = String(DMM_CONTENT_PREFIX_MAP[normalizedPrefix] || "");
+  if (!makerPrefix && /^SD[A-Z]{2,3}$/.test(normalizedPrefix)) makerPrefix = "1";
+  const parts = {
+    prefix,
+    prefixLower,
+    number: match[2],
+    number5,
+    suffix,
+    makerPrefix,
+    plainCode: prefixLower + number5,
+  };
+  parts.code = buildDmmContentIdFromParts(parts) || (makerPrefix + prefixLower + number5);
+  return parts;
+}
+
+function isDmmMonoContentId(contentId) {
+  const id = String(contentId || "").toLowerCase();
+  const hMatch = id.match(/^h_\d+[a-z0-9]+?(\d+)$/);
+  if (hMatch) return hMatch[1].length < 5;
+  const oneMatch = id.match(/^1([a-z]+)(\d+)$/);
+  if (oneMatch) return oneMatch[2].length < 5;
+  return false;
+}
+
+function buildMgstageCoverCandidatesFromParts(parts, rule) {
+  if (!parts || !rule || !rule.maker) return { posterCandidates: [], backdropCandidates: [] };
+  const number = String(parseInt(parts.number, 10));
+  if (!parts.prefixLower || !number || number === "NaN") {
+    return { posterCandidates: [], backdropCandidates: [] };
+  }
+  const dvdDash = parts.prefixLower + "-" + number;
+  const base = "https://image.mgstage.com/images/" + rule.maker + "/" + parts.prefixLower + "/" + number;
+  return {
+    posterCandidates: dmmCompactUniqueUrls([base + "/pf_e_" + dvdDash + ".jpg", base + "/pf_o1_" + dvdDash + ".jpg"]),
+    backdropCandidates: dmmCompactUniqueUrls([base + "/pb_e_" + dvdDash + ".jpg"]),
+  };
+}
+
+function buildDmmMonoCoverCandidatesForId(contentId) {
+  const id = String(contentId || "").toLowerCase();
+  if (!id) return { posterCandidates: [], backdropCandidates: [] };
+  const awsBase = "https://awsimgsrc.dmm.co.jp/pics/mono/movie/adult/" + id;
+  return {
+    posterCandidates: dmmCompactUniqueUrls([awsBase + "/" + id + "ps.jpg"]),
+    backdropCandidates: dmmCompactUniqueUrls([awsBase + "/" + id + "pl.jpg"]),
+  };
+}
+
+function buildDmmDigitalCoverCandidatesForId(contentId) {
+  const id = String(contentId || "").toLowerCase();
+  if (!id) return { posterCandidates: [], backdropCandidates: [] };
+  const awsBase = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id;
+  return {
+    posterCandidates: dmmCompactUniqueUrls([awsBase + "/" + id + "ps.jpg", awsBase + "/" + id + "jp-1.jpg"]),
+    backdropCandidates: dmmCompactUniqueUrls([awsBase + "/" + id + "pl.jpg"]),
+  };
+}
+
+function appendDmmCoverCandidates(target, contentId) {
+  const id = String(contentId || "").toLowerCase();
+  if (!id || !target) return;
+  const digital = buildDmmDigitalCoverCandidatesForId(id);
+  const mono = isDmmMonoContentId(id) ? buildDmmMonoCoverCandidatesForId(id) : { posterCandidates: [], backdropCandidates: [] };
+  if (isDmmMonoContentId(id)) {
+    target.posterCandidates = target.posterCandidates.concat(mono.posterCandidates, digital.posterCandidates);
+    target.backdropCandidates = target.backdropCandidates.concat(mono.backdropCandidates, digital.backdropCandidates);
+  } else {
+    target.posterCandidates = target.posterCandidates.concat(digital.posterCandidates, mono.posterCandidates);
+    target.backdropCandidates = target.backdropCandidates.concat(digital.backdropCandidates, mono.backdropCandidates);
+  }
+}
+
+function buildMgstageCoverCandidatesFromVideoId(videoIdOrTitle) {
+  const parts = parseJavCodeParts(videoIdOrTitle);
+  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
+  const mgRule = getMgstageCoverRule(parts);
+  if (!mgRule) return { posterCandidates: [], backdropCandidates: [] };
+  return buildMgstageCoverCandidatesFromParts(parts, mgRule);
+}
+
+function appendDmmProbeCoverCandidates(candidates, dmmProbe) {
+  if (!candidates || !dmmProbe) return candidates;
+  if (dmmProbe.posterUrl) candidates.posterCandidates.push(dmmProbe.posterUrl);
+  if (dmmProbe.backdropUrl) candidates.backdropCandidates.push(dmmProbe.backdropUrl);
+  candidates.posterCandidates = dmmCompactUniqueUrls(candidates.posterCandidates);
+  candidates.backdropCandidates = dmmCompactUniqueUrls(candidates.backdropCandidates);
+  return candidates;
+}
+
+function buildCoverCandidatesFromVideoId(videoIdOrTitle, dmmProbe) {
+  let candidates = buildMgstageCoverCandidatesFromVideoId(videoIdOrTitle);
+  if (candidates.posterCandidates.length || candidates.backdropCandidates.length) return candidates;
+  candidates = { posterCandidates: [], backdropCandidates: [] };
+  const parts = parseJavCodeParts(videoIdOrTitle);
+  if (parts && parts.code) appendDmmCoverCandidates(candidates, parts.code);
+  return appendDmmProbeCoverCandidates(candidates, dmmProbe);
+}
+
+function isInvalidCoverTarget(url) {
+  const u = String(url || "").toLowerCase();
+  if (!u) return true;
+  if (u.indexOf("now_printing") >= 0) return true;
+  if (u.indexOf("noimage") >= 0) return true;
+  if (/adult_pl\.jpg(\?|$)/i.test(u)) return true;
+  return false;
+}
+
+function isLowResDmmPosterUrl(url) {
+  const u = String(url || "").toLowerCase();
+  if (!u) return false;
+  if (/[?&]w=147(?:&|$|[?#])/.test(u) && /[?&]h=200(?:&|$|[?#])/.test(u)) return true;
+  if (/pics\.dmm\.co\.jp\/.*ps\.jpe?g(\?|$)/i.test(u)) return true;
+  if (/pics\.dmm\.com\/.*ps\.jpe?g(\?|$)/i.test(u)) return true;
+  return false;
+}
+
+function pickFirstUsableCoverUrl(urls) {
+  const list = dmmCompactUniqueUrls(urls || []);
+  for (let i = 0; i < list.length; i++) {
+    if (!isInvalidCoverTarget(list[i])) return list[i];
+  }
+  return "";
+}
+
+function filterTrustedCdnUrls(urls) {
+  return (urls || []).filter(function (url) {
+    const value = String(url || "");
+    if (/image\.mgstage\.com/i.test(value)) return true;
+    if (/awsimgsrc\.dmm\.co\.jp/i.test(value)) return true;
+    return false;
+  });
+}
+
+function resolvePosterUrlWithSiteFallback(posterUrl, siteFallback) {
+  const poster = String(posterUrl || "").trim();
+  if (!poster) return siteFallback || "";
+  if (isLowResDmmPosterUrl(poster)) return siteFallback || poster;
+  return poster;
+}
+
+function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
+  return {
+    backdropPath: hdBackdrop,
+    posterPath: hdPoster,
+    detailPoster: hdPoster,
+    coverUrl: hdBackdrop,
+    image: hdBackdrop,
+  };
+}
+
+function buildListCoverBundle(code, siteFallback, dmmProbe) {
+  const fallback = String(siteFallback || "").trim();
+  if (!code) return buildCoverBundleFromUrls(fallback, fallback);
+  const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(code);
+  const candidates = buildCoverCandidatesFromVideoId(code, probe);
+  const hdBackdrop =
+    pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.backdropCandidates)) ||
+    fallback ||
+    "";
+  const hdPoster =
+    resolvePosterUrlWithSiteFallback(
+      pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)),
+      fallback
+    ) ||
+    fallback ||
+    "";
+  return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
+}
+
+function buildDetailCoverBundleFromDmm(code, siteFallback, dmmProbe) {
+  const fallback = String(siteFallback || "").trim();
+  const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(code);
+  const candidates = buildCoverCandidatesFromVideoId(code, probe);
+  const hdPoster =
+    resolvePosterUrlWithSiteFallback(candidates.posterCandidates[0] || "", fallback) ||
+    fallback ||
+    "";
+  const hdBackdrop = candidates.backdropCandidates[0] || fallback || hdPoster || "";
+  return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
+}
+
+function buildDmmGallery(contentId, count) {
+  count = count || 10;
+  const id = String(contentId || "").toLowerCase();
+  if (!id) return [];
+  const urls = [];
+  const base = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id + "/";
+  for (let i = 1; i <= count; i++) {
+    urls.push(base + id + "jp-" + i + ".jpg");
+  }
+  return urls;
+}
+
+function buildDetailBackdropPaths(displayCode, dmmProbe) {
+  let backdropPaths = [];
+  if (dmmProbe && dmmProbe.contentId) {
+    backdropPaths = buildDmmGallery(dmmProbe.contentId, 10);
+  }
+  const parts = parseJavCodeParts(displayCode);
+  const mgRule = getMgstageCoverRule(parts);
+  if (parts && mgRule) {
+    const mg = buildMgstageCoverCandidatesFromParts(parts, mgRule);
+    return dmmCompactUniqueUrls([mg.backdropCandidates[0]].concat(backdropPaths)).filter(Boolean);
+  }
+  return dmmCompactUniqueUrls(backdropPaths).filter(Boolean);
+}
+
+function extractMovieCodeFromHref(href) {
+  const slug = extractVideoSlug(resolveUrl(href));
+  const code = extractVideoCode(slug) || slug || "";
+  const parts = parseJavCodeParts(code);
+  if (parts) {
+    const prefix = parts.prefix;
+    const num = String(parseInt(parts.number, 10));
+    return prefix + "-" + num + (parts.suffix || "");
+  }
+  return String(code || "").toUpperCase();
+}
+
+function buildDmmContentId(raw) {
+  const parts = parseJavCodeParts(raw);
+  return parts && parts.code ? parts.code : "";
 }
 
 function buildDmmBackdropCandidates(href) {
-  const slug = extractVideoSlug(resolveUrl(href));
-  const code = extractVideoCode(slug) || slug || "";
-  const contentId = buildDmmContentId(code);
-  if (!contentId) return [];
-  const aws = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
-  const pics = "https://pics.dmm.co.jp/digital/video/" + contentId;
-  return [
-    aws + "/" + contentId + "pl.jpg",
-    pics + "/" + contentId + "pl.jpg",
-  ];
+  const code = extractMovieCodeFromHref(href);
+  const candidates = buildCoverCandidatesFromVideoId(code, lookupDmmProbeCover(code));
+  return dmmCompactUniqueUrls(candidates.backdropCandidates || []);
 }
 
 function buildDmmBackdropUrl(href) {
-  const list = buildDmmBackdropCandidates(href);
-  return list.length ? list[0] : "";
+  const code = extractMovieCodeFromHref(href);
+  const bundle = buildListCoverBundle(code, "", lookupDmmProbeCover(code));
+  return bundle.backdropPath || "";
 }
 
 function buildDmmPosterCandidates(href) {
-  const slug = extractVideoSlug(resolveUrl(href));
-  const code = extractVideoCode(slug) || slug || "";
-  const contentId = buildDmmContentId(code);
-  if (!contentId) return [];
-  const aws = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + contentId;
-  const pics = "https://pics.dmm.co.jp/digital/video/" + contentId;
-  return [
-    aws + "/" + contentId + "ps.jpg",
-    pics + "/" + contentId + "ps.jpg",
-  ];
+  const code = extractMovieCodeFromHref(href);
+  const candidates = buildCoverCandidatesFromVideoId(code, lookupDmmProbeCover(code));
+  return dmmCompactUniqueUrls(candidates.posterCandidates || []);
 }
 
 function buildDmmPosterUrl(href) {
-  const list = buildDmmPosterCandidates(href);
-  return list.length ? list[0] : "";
+  const code = extractMovieCodeFromHref(href);
+  const bundle = buildListCoverBundle(code, "", lookupDmmProbeCover(code));
+  return bundle.posterPath || bundle.detailPoster || "";
 }
 
-function buildDetailCovers(detailUrl) {
-  const backdropPath = buildDmmBackdropUrl(detailUrl) || undefined;
-  const posterPath = buildDmmPosterUrl(detailUrl) || undefined;
+function buildDetailCovers(detailUrl, dmmProbe, siteFallback) {
+  const code = extractMovieCodeFromHref(detailUrl);
+  const bundle = buildDetailCoverBundleFromDmm(code, siteFallback || "", dmmProbe);
   return {
-    backdropPath: backdropPath,
-    posterPath: posterPath,
-    detailPoster: posterPath,
+    backdropPath: bundle.backdropPath || undefined,
+    posterPath: bundle.posterPath || undefined,
+    detailPoster: bundle.detailPoster || undefined,
   };
 }
 
@@ -810,14 +1255,20 @@ function buildListCoverCandidates(href, coverUrl, scopeHtml) {
 }
 
 function resolveListCover(href, coverUrl, scopeHtml) {
-  const candidates = buildListCoverCandidates(href, coverUrl, scopeHtml);
+  const code = extractMovieCodeFromHref(href);
+  const siteCandidates = buildListCoverCandidates(href, coverUrl, scopeHtml);
+  const siteFallback = siteCandidates.length ? siteCandidates[0] : "";
+  if (code) {
+    const bundle = buildListCoverBundle(code, siteFallback, lookupDmmProbeCover(code));
+    if (bundle.backdropPath) return bundle.backdropPath;
+  }
   const dmmFirst = buildDmmBackdropUrl(href);
   if (dmmFirst) return dmmFirst;
 
-  if (!candidates.length) return buildSlugLandscapeBackdrop(href);
+  if (!siteCandidates.length) return buildSlugLandscapeBackdrop(href);
 
   function pick(re) {
-    return candidates.find(function (u) {
+    return siteCandidates.find(function (u) {
       return re.test(u);
     });
   }
@@ -829,13 +1280,13 @@ function resolveListCover(href, coverUrl, scopeHtml) {
     pick(/icdn[^"']*\/img2\/[^"']+\/cover\.(?:webp|jpg|jpeg)/i) ||
     pick(/icdn[^"']*\/img2\/[^"']+\/cover-n\.(?:webp|jpg|jpeg)/i) ||
     pick(/fourhoi\.com\/[^"']+\/cover\.jpg/i) ||
-    candidates.find(function (u) {
+    siteCandidates.find(function (u) {
       return isLandscapeListCoverUrl(u);
     }) ||
-    candidates[0];
+    siteCandidates[0];
 
   if (picked && !isPortraitCoverUrl(picked)) return picked;
-  return buildSlugLandscapeBackdrop(href) || buildCoverFallbackUrl(href, "n") || candidates[0] || "";
+  return buildSlugLandscapeBackdrop(href) || buildCoverFallbackUrl(href, "n") || siteCandidates[0] || "";
 }
 
 function normalizeListCoverSize(url) {
@@ -1981,6 +2432,43 @@ function parseVideoList(html) {
   return items;
 }
 
+async function enrichJavxxListWithDmmCovers(items, params) {
+  params = params || {};
+  if (!items || !items.length) return items || [];
+  const codes = [];
+  for (let i = 0; i < items.length; i++) {
+    const code = extractMovieCodeFromHref(items[i].link || items[i].id || "");
+    if (code) codes.push(code);
+  }
+  await prefetchDmmProbeCovers(codes, params);
+  const out = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const code = extractMovieCodeFromHref(item.link || item.id || "");
+    if (!code) {
+      out.push(item);
+      continue;
+    }
+    const siteFallback = item.backdropPath || "";
+    const bundle = buildListCoverBundle(code, siteFallback, lookupDmmProbeCover(code));
+    out.push(
+      Object.assign({}, item, {
+        backdropPath: bundle.backdropPath || item.backdropPath,
+        posterPath: bundle.posterPath || item.posterPath,
+        detailPoster: bundle.detailPoster || item.detailPoster,
+      })
+    );
+  }
+  return out;
+}
+
+async function parseVideoListWithCovers(html, params) {
+  if (!html || isMigrationPage(html)) return [];
+  let items = parseVideoList(html);
+  if (!items.length) items = parseVideoListRegex(extractVideoListHtml(html));
+  return enrichJavxxListWithDmmCovers(items, params);
+}
+
 async function fetchHtmlText(url, referer, options) {
   options = options || {};
   const ref = referer || BASE_URL + LANG_PREFIX + "/";
@@ -2034,9 +2522,7 @@ async function fetchBrowseVideoList(browseRef, page) {
   if (!baseUrl || !fetchUrl) return [];
   const html = await fetchHtmlText(fetchUrl, baseUrl);
   if (!html) return [];
-  let items = parseVideoList(html);
-  if (!items.length) items = parseVideoListRegex(html);
-  return items;
+  return parseVideoListWithCovers(html, { page: page });
 }
 
 async function loadGenreList(params) {
@@ -2060,9 +2546,7 @@ async function loadCategory(categoryId, params) {
   if (page > 1) url += (url.includes("?") ? "&" : "?") + `page=${page}`;
   const html = await fetchHtmlText(url, BASE_URL + LANG_PREFIX + path);
   if (!html || isMigrationPage(html)) return [];
-  let items = parseVideoList(html);
-  if (!items.length) items = parseVideoListRegex(html);
-  return items;
+  return parseVideoListWithCovers(html, params);
 }
 
 async function loadFilterList(params) {
@@ -2235,7 +2719,7 @@ async function loadDetail(link) {
     }
 
     if (isDirectoryListingUrl(detailUrl)) {
-      const videos = parseVideoList(html);
+      const videos = await parseVideoListWithCovers(html, {});
       const firstCover = videos[0] && videos[0].backdropPath;
       const moduleKey = detectBrowseModuleKey(detailUrl);
       const meta = buildBrowseDetailMeta(detailUrl, title || detailUrl, moduleKey);
@@ -2264,7 +2748,10 @@ async function loadDetail(link) {
       };
     }
 
-    const dmmCovers = buildDetailCovers(detailUrl);
+    const displayCode = extractMovieCodeFromHref(detailUrl);
+    const dmmProbe = displayCode ? await fetchDmmProbeCover(displayCode, {}) : null;
+    const sitePosterFallback = buildCoverFallbackUrl(detailUrl, "t");
+    const dmmCovers = buildDetailCovers(detailUrl, dmmProbe, sitePosterFallback);
     const landscapeBackdrop =
       dmmCovers.backdropPath ||
       buildCoverFallbackUrl(detailUrl, "n") ||
@@ -2272,7 +2759,8 @@ async function loadDetail(link) {
     const detailPoster =
       dmmCovers.posterPath ||
       dmmCovers.detailPoster ||
-      buildCoverFallbackUrl(detailUrl, "t");
+      sitePosterFallback;
+    const dmmBackdropPaths = displayCode ? buildDetailBackdropPaths(displayCode, dmmProbe) : [];
 
     const embedUrl = extractSurritEmbedUrl(html);
     let videoUrl = "";
@@ -2334,7 +2822,12 @@ async function loadDetail(link) {
       }
     }
 
-    const backdropPaths = dmmCovers.backdropPath ? undefined : collectBackdropPaths(html, detailUrl, detailPoster, $);
+    const backdropPaths =
+      dmmBackdropPaths.length > 0
+        ? dmmBackdropPaths
+        : dmmCovers.backdropPath
+          ? undefined
+          : collectBackdropPaths(html, detailUrl, detailPoster, $);
 
     const result = {
       id: detailUrl,
@@ -2434,7 +2927,5 @@ async function search(params) {
   if (page > 1) url += `&page=${page}`;
   const html = await fetchHtmlText(url, BASE_URL + LANG_PREFIX + "/search/");
   if (!html || isMigrationPage(html)) return [];
-  let items = parseVideoList(html);
-  if (!items.length) items = parseVideoListRegex(html);
-  return items;
+  return parseVideoListWithCovers(html, params);
 }
