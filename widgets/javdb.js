@@ -1593,7 +1593,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.2.1",
+  version: "2.3.1",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2188,10 +2188,16 @@ var MGSTAGE_COVER_RULES = {
   ABW: { maker: "prestige" },
   ABP: { maker: "prestige" },
   CHN: { maker: "prestige" },
+  JUFE: { maker: "prestige" },
   MAAN: { maker: "prestige" },
   PPT: { maker: "prestige" },
   "390JAC": { maker: "jackson" },
 };
+
+function getMgstageCoverRule(parts) {
+  if (!parts) return null;
+  return MGSTAGE_COVER_RULES[parts.prefix] || null;
+}
 
 function compactUniqueUrls(urls) {
   var seen = {};
@@ -2209,17 +2215,17 @@ var DMM_MONO_PLAIN_PREFIXES = {
   IESP: 1,
 };
 
-// DMM 系列白名单——只有这些前缀才拼 DMM 封面 URL（对齐 MissAV.js）
-var DMM_DIRECT_PREFIXES = {
-  SNIS: 1, SNOS: 1, SONE: 1, SSIS: 1, SSNI: 1, STARS: 1, START: 1, SODS: 1,
-  FSDSS: 1, FCDSS: 1, FNS: 1, FTHTD: 1, FSNF: 1, FLAV: 1, NHDTC: 1, KUSE: 1,
-  MOGI: 1, FTAV: 1, WSA: 1, MIDV: 1, MIDA: 1, MIDE: 1, MIDD: 1, DASS: 1, HIKA: 1,
-  MKMP: 1, MADM: 1, IPZZ: 1, IPZ: 1, IPX: 1, NGOD: 1, SDNM: 1, AVSA: 1, MNGS: 1,
-  WAAA: 1, OFES: 1, OFJE: 1, OAE: 1, SIVR: 1, HSODA: 1, JUFE: 1, MUKA: 1, MIMK: 1,
-  HMN: 1, ROYD: 1, SDHS: 1, JUR: 1, CAWD: 1, REBD: 1, ADN: 1, ATID: 1, JUL: 1, JUMS: 1,
-  JUQ: 1, LULU: 1, MEYD: 1, MIAA: 1, MIAB: 1, MIRD: 1, PRED: 1, URE: 1, YUJ: 1,
-  CJOD: 1, EBWH: 1, JYMA: 1, MDHR: 1, DVAJ: 1, ACHJ: 1,
-};
+// DMM 系列白名单（已停用：除黑名单外一律走 DMM）
+// var DMM_DIRECT_PREFIXES = {
+//   SNIS: 1, SNOS: 1, SONE: 1, SSIS: 1, SSNI: 1, STARS: 1, START: 1, SODS: 1,
+//   FSDSS: 1, FCDSS: 1, FNS: 1, FTHTD: 1, FSNF: 1, FLAV: 1, NHDTC: 1, KUSE: 1,
+//   MOGI: 1, FTAV: 1, WSA: 1, MIDV: 1, MIDA: 1, MIDE: 1, MIDD: 1, DASS: 1, HIKA: 1,
+//   MKMP: 1, MADM: 1, IPZZ: 1, IPZ: 1, IPX: 1, NGOD: 1, SDNM: 1, AVSA: 1, MNGS: 1,
+//   WAAA: 1, OFES: 1, OFJE: 1, OAE: 1, SIVR: 1, HSODA: 1, JUFE: 1, MUKA: 1, MIMK: 1,
+//   HMN: 1, ROYD: 1, SDHS: 1, JUR: 1, CAWD: 1, REBD: 1, ADN: 1, ATID: 1, JUL: 1, JUMS: 1,
+//   JUQ: 1, LULU: 1, MEYD: 1, MIAA: 1, MIAB: 1, MIRD: 1, PRED: 1, URE: 1, YUJ: 1,
+//   CJOD: 1, EBWH: 1, JYMA: 1, MDHR: 1, DVAJ: 1, ACHJ: 1,
+// };
 
 var DMM_DIRECT_BLOCKED_CODES = {
   "START-227": 1, "IPZZ-899": 1, "START-334": 1, "START-302": 1, "START-349": 1,
@@ -2260,7 +2266,7 @@ function normalizeDmmPrefix(prefix) {
 function isDirectDmmSeries(parts) {
   if (!parts) return false;
   if (DMM_DIRECT_BLOCKED_CODES[parts.prefix + "-" + parts.number]) return false;
-  return !!DMM_DIRECT_PREFIXES[normalizeDmmPrefix(parts.prefix)];
+  return true;
 }
 
 function buildDmmContentIdFromParts(parts) {
@@ -2398,12 +2404,12 @@ function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
   var parts = parseJavCodeParts(videoIdOrTitle);
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
 
+  var mgRule = getMgstageCoverRule(parts);
+  if (mgRule) return buildMgstageCoverCandidatesFromParts(parts, mgRule);
+
   if (isDirectDmmSeries(parts)) {
     return buildDmmCoverCandidatesFromParts(parts);
   }
-
-  var rule = MGSTAGE_COVER_RULES[parts.prefix];
-  if (rule) return buildMgstageCoverCandidatesFromParts(parts, rule);
 
   return { posterCandidates: [], backdropCandidates: [] };
 }
@@ -2475,15 +2481,16 @@ function fetchJavTrailersMeta(dvdId) {
   var parts = parseJavCodeParts(dvdId);
   var backdropPath = "";
   var backdropPaths = [];
-  if (parts && isDirectDmmSeries(parts)) {
+  var mgRule = getMgstageCoverRule(parts);
+  if (parts && mgRule) {
+    var mg = buildMgstageCoverCandidatesFromParts(parts, mgRule);
+    backdropPath = mg.backdropCandidates[0] || "";
+    backdropPaths = buildMgstageGalleryFromDvdId(dvdId, 10);
+  } else if (parts && isDirectDmmSeries(parts)) {
     var dmm = buildDmmCoverCandidatesFromParts(parts);
     backdropPath = dmm.backdropCandidates[0] || "";
     var galleryIds = buildDmmContentIdVariants(parts);
     backdropPaths = buildDmmGallery(galleryIds[0] || parts.code || "", 10);
-  } else if (parts && MGSTAGE_COVER_RULES[parts.prefix]) {
-    var mg = buildMgstageCoverCandidatesFromParts(parts, MGSTAGE_COVER_RULES[parts.prefix]);
-    backdropPath = mg.backdropCandidates[0] || "";
-    backdropPaths = buildMgstageGalleryFromDvdId(dvdId, 10);
   }
   return { backdropPath: backdropPath, backdropPaths: backdropPaths };
 }
@@ -2773,11 +2780,12 @@ function buildJdbstaticThumbUrl(videoId) {
 function resolveCatembyStyleCoverUrl(videoId) {
   var id = String(videoId || "").trim();
   if (!id) return "";
+  // catemby CDN 优先，jdbstatic 作为 fallback
+  var catembyCover = resolveCatembyListCoverUrl(id);
+  if (catembyCover) return catembyCover;
   var jdbCover = normalizeJavdbCoverUrl(buildJavdbCoverFromVideoId(id));
   if (jdbCover) return jdbCover;
-  var jdbThumb = normalizeJavdbCoverUrl(buildJdbstaticThumbUrl(id));
-  if (jdbThumb) return jdbThumb;
-  return resolveCatembyListCoverUrl(id) || "";
+  return normalizeJavdbCoverUrl(buildJdbstaticThumbUrl(id)) || "";
 }
 
 function resolveJavdbCoverUrl(fallbackCover, videoId) {
