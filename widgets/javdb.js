@@ -1593,7 +1593,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.4.0",
+  version: "2.4.1",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商",
   author: "老头",
@@ -2221,6 +2221,7 @@ var DMM_DIRECT_PREFIXES = {
   HMN: 1, ROYD: 1, SDHS: 1, JUR: 1, CAWD: 1, REBD: 1, ADN: 1, ATID: 1, JUL: 1, JUMS: 1,
   JUQ: 1, LULU: 1, MEYD: 1, MIAA: 1, MIAB: 1, MIRD: 1, PRED: 1, URE: 1, YUJ: 1,
   CJOD: 1, EBWH: 1, JYMA: 1, MDHR: 1, DVAJ: 1, ACHJ: 1,
+  PPPE: 1, HUNTC: 1, MDTM: 1, MGMJ: 1,
 };
 
 var DMM_DIRECT_BLOCKED_CODES = {
@@ -2519,7 +2520,7 @@ function resolvePosterUrlWithCatembyFallback(posterUrl, videoId) {
   var poster = String(posterUrl || "").trim();
   if (!poster) return "";
   if (isLowResDmmPosterUrl(poster)) {
-    return resolveCatembySmallCoverUrl(videoId) || poster;
+    return resolveCatembyCoverUrl(videoId) || poster;
   }
   return poster;
 }
@@ -2542,24 +2543,21 @@ function filterTrustedCdnUrls(urls) {
 }
 
 function buildListCoverBundle(code, videoId) {
-  var catembyLarge = resolveCatembyLargeCoverUrl(videoId);
-  var catembySmall = resolveCatembySmallCoverUrl(videoId);
+  var catembyCover = resolveCatembyCoverUrl(videoId);
   if (!code) {
-    return buildCoverBundleFromUrls(catembySmall || catembyLarge, catembyLarge || catembySmall);
+    return buildCoverBundleFromUrls(catembyCover, catembyCover);
   }
   var candidates = buildCoverCandidatesFromVideoId(code);
   var hdBackdrop =
     pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.backdropCandidates)) ||
-    catembyLarge ||
-    catembySmall ||
+    catembyCover ||
     "";
   var hdPoster =
     resolvePosterUrlWithCatembyFallback(
       pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)),
       videoId
     ) ||
-    catembySmall ||
-    catembyLarge ||
+    catembyCover ||
     "";
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
 }
@@ -2621,21 +2619,7 @@ function buildCatembySiteCoverUrl(videoId) {
   return CATEMBY_CDN_BASE + "/covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
 }
 
-function buildCatembySiteThumbUrl(videoId) {
-  var id = String(videoId || "").trim();
-  if (!id || id.length < 2) return "";
-  return CATEMBY_CDN_BASE + "/small_covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
-}
-
-function resolveCatembySmallCoverUrl(videoId) {
-  var id = String(videoId || "").trim();
-  if (!id) return "";
-  var siteThumb = buildCatembySiteThumbUrl(id);
-  if (siteThumb) return siteThumb;
-  return normalizeJavdbCoverUrl(buildJdbstaticThumbUrl(id)) || "";
-}
-
-function resolveCatembyLargeCoverUrl(videoId) {
+function resolveCatembyCoverUrl(videoId) {
   var id = String(videoId || "").trim();
   if (!id) return "";
   var siteCover = buildCatembySiteCoverUrl(id);
@@ -2650,12 +2634,6 @@ function buildJavdbCoverFromVideoId(videoId) {
   return "https://c0.jdbstatic.com/covers/" + prefix + "/" + id + ".jpg";
 }
 
-function buildJdbstaticThumbUrl(videoId) {
-  var id = String(videoId || "").trim();
-  if (!id || id.length < 2) return "";
-  return "https://c0.jdbstatic.com/thumbs/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
-}
-
 function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
   return {
     backdropPath: hdBackdrop,
@@ -2668,14 +2646,12 @@ function buildCoverBundleFromUrls(hdPoster, hdBackdrop) {
 
 function buildDetailCoverBundle(code, videoId) {
   var candidates = buildCoverCandidatesFromVideoId(code);
-  var catembyLarge = videoId ? resolveCatembyLargeCoverUrl(videoId) : "";
-  var catembySmall = videoId ? resolveCatembySmallCoverUrl(videoId) : "";
+  var catembyCover = videoId ? resolveCatembyCoverUrl(videoId) : "";
   var hdPoster =
     resolvePosterUrlWithCatembyFallback(candidates.posterCandidates[0] || "", videoId) ||
-    catembySmall ||
-    catembyLarge ||
+    catembyCover ||
     "";
-  var hdBackdrop = candidates.backdropCandidates[0] || catembyLarge || hdPoster || "";
+  var hdBackdrop = candidates.backdropCandidates[0] || catembyCover || hdPoster || "";
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop);
 }
 
