@@ -2184,7 +2184,6 @@ var MGSTAGE_COVER_RULES = {
   ABW: { maker: "prestige" },
   ABP: { maker: "prestige" },
   CHN: { maker: "prestige" },
-  JUFE: { maker: "prestige" },
   MAAN: { maker: "prestige" },
   PPT: { maker: "prestige" },
   "390JAC": { maker: "jackson" },
@@ -2308,6 +2307,10 @@ function parseDmmProbeWorkerResponse(res) {
 async function fetchDmmProbeCover(code, params) {
   code = String(code || "").trim().toUpperCase();
   if (!code) return null;
+  if (!isValidJavCatalogCode(code)) {
+    DMM_PROBE_WORKER_CACHE[code] = null;
+    return null;
+  }
   if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) {
     return DMM_PROBE_WORKER_CACHE[code];
   }
@@ -2356,6 +2359,10 @@ async function prefetchDmmProbeCovers(codes, params) {
     var code = String(codes[i] || "").trim().toUpperCase();
     if (!code || seen[code]) continue;
     seen[code] = true;
+    if (!isValidJavCatalogCode(code)) {
+      DMM_PROBE_WORKER_CACHE[code] = null;
+      continue;
+    }
     if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) continue;
     var storedProbe = loadDmmProbeFromStorage(code);
     if (storedProbe !== undefined) {
@@ -2386,7 +2393,7 @@ function lookupDmmProbeCover(code) {
   return DMM_PROBE_WORKER_CACHE[code];
 }
 
-// DMM contentId 数字前缀映射（对齐 MissAV.js）
+// DMM contentId 数字前缀映射（对齐 MissAV.js / 各 Widget 脚本，修改时请同步）
 var DMM_CONTENT_PREFIX_MAP = {
   WSA: "2",
   FSDSS: "1", FCDSS: "1", FNS: "1", FTHTD: "1",
@@ -2404,6 +2411,9 @@ var DMM_CONTENT_PREFIX_MAP = {
   ABP: "118",
   CHN: "118",
   IESP: "1",
+  DLDSS: "1",
+  NACT: "h_237",
+  "3DSVR": "1",
 };
 
 function normalizeDmmPrefix(prefix) {
@@ -2454,8 +2464,24 @@ function parseJavCodeParts(title) {
   return parts;
 }
 
+function isValidJavCatalogCode(code) {
+  var raw = String(code || "").trim();
+  if (!raw) return false;
+  var upper = raw.toUpperCase().replace(/\s+/g, " ");
+  if (/^\d{4,}$/.test(upper.replace(/[\s\-_]+/g, ""))) return false;
+  if (/^FC2(?:[- ]?PPV)?[- ]?\d{5,8}$/i.test(upper)) return true;
+  if (/^(?:CARIB|1PONDO|HEYZO|T28)[- ]?\d+/i.test(upper)) return true;
+  var parts = parseJavCodeParts(upper);
+  if (!parts) return false;
+  if (!/[A-Z]/.test(parts.prefix)) return false;
+  var num = parseInt(parts.number, 10);
+  if (!Number.isFinite(num) || num <= 0) return false;
+  return true;
+}
+
 function isDmmMonoContentId(contentId) {
   var id = String(contentId || "").toLowerCase();
+  if (/^h_\d+/.test(id)) return true;
   var hMatch = id.match(/^h_\d+[a-z0-9]+?(\d+)$/);
   if (hMatch) return hMatch[1].length < 5;
   var oneMatch = id.match(/^1([a-z]+)(\d+)$/);
@@ -2527,6 +2553,9 @@ function appendDmmProbeCoverCandidates(candidates, dmmProbe) {
 }
 
 function buildCoverCandidatesFromVideoId(videoIdOrTitle, dmmProbe) {
+  if (!isValidJavCatalogCode(videoIdOrTitle)) {
+    return { posterCandidates: [], backdropCandidates: [] };
+  }
   var candidates = buildMgstageCoverCandidatesFromVideoId(videoIdOrTitle);
   if (candidates.posterCandidates.length || candidates.backdropCandidates.length) return candidates;
   candidates = { posterCandidates: [], backdropCandidates: [] };
@@ -2572,7 +2601,7 @@ function buildMgstageGalleryFromDvdId(dvdId, count) {
 
 function fetchJavTrailersMeta(dvdId, dmmProbe) {
   var empty = { backdropPath: "", backdropPaths: [] };
-  if (!dvdId) return empty;
+  if (!dvdId || !isValidJavCatalogCode(dvdId)) return empty;
   var parts = parseJavCodeParts(dvdId);
   var backdropPath = "";
   var backdropPaths = [];
@@ -2668,7 +2697,7 @@ function filterTrustedCdnUrls(urls) {
 
 function buildListCoverBundle(code, videoId, dmmProbe) {
   var catembyCover = resolveCatembyCoverUrl(videoId);
-  if (!code) {
+  if (!code || !isValidJavCatalogCode(code)) {
     return buildCoverBundleFromUrls(catembyCover, catembyCover);
   }
   var probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(code);
@@ -2966,7 +2995,7 @@ async function enrichMovieItems(rawItems, params) {
   params = params || {};
   var codes = [];
   for (var i = 0; i < rawItems.length; i++) {
-    if (rawItems[i].code) codes.push(rawItems[i].code);
+    if (rawItems[i].code && isValidJavCatalogCode(rawItems[i].code)) codes.push(rawItems[i].code);
   }
   await prefetchDmmProbeCovers(codes, params);
 

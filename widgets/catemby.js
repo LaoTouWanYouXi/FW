@@ -2136,7 +2136,6 @@ const MGSTAGE_COVER_RULES = {
   ABW: { maker: "prestige" },
   ABP: { maker: "prestige" },
   CHN: { maker: "prestige" },
-  JUFE: { maker: "prestige" },
   MAAN: { maker: "prestige" },
   PPT: { maker: "prestige" },
   "390JAC": { maker: "jackson" },
