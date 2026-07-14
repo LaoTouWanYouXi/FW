@@ -281,11 +281,11 @@ const TAG_ENUM_OPTIONS = [
 WidgetMetadata = {
   id: "forward.kanav",
   title: "KanAV",
-  version: "1.0.7",
+  version: "1.0.8",
   requiredVersion: "0.0.1",
   description: "KanAV \u89c6\u9891\u6e90",
   author: "\u8001\u5934",
-  site: "https://kanav.info",
+  site: "https://kanav.ad",
   detailCacheDuration: 300,
   modules: [
     { id: "cnSub",     title: "\u4e2d\u6587\u5b57\u5e55", functionName: "loadCnSub",    cacheDuration: 3600, params: [{ name: "page", title: "\u9875\u7801", type: "page" }] },
@@ -330,8 +330,8 @@ WidgetMetadata = {
   },
 };
 
-const BASE = "https://kanav.info";
-const CDN_REFERER = "https://kanav.ad/";  // CDN防盗链要求Referer为kanav.ad，而非kanav.info
+const BASE = "https://kanav.ad";
+const CDN_REFERER = "https://kanav.ad/";  // CDN防盗链与站点均使用 kanav.ad（kanav.info 已 403）
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1";
 const VIDEO_CACHE_TTL = 3600;
 const PLAY_HEADERS = {
@@ -347,6 +347,21 @@ const DETAIL_HEADERS = {
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 };
+
+/** 将旧域名 / detail 空页链接规范为可解析的 play 页 */
+function normalizeDetailLink(link) {
+  let url = String(link || "").trim();
+  if (!url) return "";
+  url = url.replace(/^https?:\/\/kanav\.info(?=\/|$)/i, BASE);
+  if (!/^https?:\/\//i.test(url) && url.startsWith("/")) {
+    url = BASE + url;
+  }
+  const detailMatch = url.match(/^(https?:\/\/[^/]+)\/index\.php\/vod\/detail\/id\/(\d+)\.html/i);
+  if (detailMatch) {
+    return detailMatch[1] + "/index.php/vod/play/id/" + detailMatch[2] + "/sid/1/nid/1.html";
+  }
+  return url;
+}
 
 function resolveAbsoluteUrl(base, ref) {
   if (!ref) return "";
@@ -1142,7 +1157,7 @@ function mapVideoCard($, el, baseUrl) {
     videoItem.find("img").attr("src") ||
     "";
   const remark = videoItem.find("span.model-view-left").text().trim();
-  const detailUrl = href.startsWith("http") ? href : baseUrl + href;
+  const detailUrl = normalizeDetailLink(href.startsWith("http") ? href : baseUrl + href);
   const item = {
     id: href,
     type: "url",
@@ -1436,7 +1451,11 @@ function decodeMacPlayerUrl(playerData) {
 
 async function fetchDetailHtml(link) {
   const res = await Widget.http.get(String(link), { headers: DETAIL_HEADERS });
-  return typeof res.data === "string" ? res.data : String(res.data);
+  return typeof res.data === "string" ? res.data : String(res.data || "");
+}
+
+function htmlLooksPlayable(html) {
+  return !!(html && (/player_aaaa|player_\w+\s*=\s*\{/i.test(html) || /\.m3u8|\.mp4/i.test(html)));
 }
 
 async function resolvePlaybackFromHtml(html, pageUrl, depth) {
@@ -1484,13 +1503,34 @@ async function resolvePlaybackFromHtml(html, pageUrl, depth) {
 }
 
 async function loadDetail(link) {
-  const cached = readVideoCache(link);
-  const html = await fetchDetailHtml(link);
-  let extras = parseDetailExtras(html, link);
+  let pageUrl = normalizeDetailLink(link);
+  const cached = readVideoCache(pageUrl) || readVideoCache(link);
+  let html = await fetchDetailHtml(pageUrl);
+
+  // 若仍无播放器数据，强制回退到 /vod/play/
+  if (!htmlLooksPlayable(html)) {
+    const idMatch = String(pageUrl).match(/\/vod\/(?:detail|play)\/id\/(\d+)/i);
+    if (idMatch) {
+      const playFallback =
+        resolveBaseUrl(pageUrl) +
+        "/index.php/vod/play/id/" +
+        idMatch[1] +
+        "/sid/1/nid/1.html";
+      if (playFallback !== pageUrl) {
+        const playHtml = await fetchDetailHtml(playFallback);
+        if (htmlLooksPlayable(playHtml)) {
+          html = playHtml;
+          pageUrl = playFallback;
+        }
+      }
+    }
+  }
+
+  let extras = parseDetailExtras(html, pageUrl);
 
   const playbackPromise = cached
     ? Promise.resolve({ videoUrl: cached.videoUrl, customHeaders: cached.customHeaders })
-    : resolvePlaybackFromHtml(html, link, 0).then(function (videoUrl) {
+    : resolvePlaybackFromHtml(html, pageUrl, 0).then(function (videoUrl) {
         return { videoUrl: videoUrl, customHeaders: null };
       });
   const extrasPromise = applyDmmToDetailExtras(extras, extras.title, {});
@@ -1501,12 +1541,12 @@ async function loadDetail(link) {
 
   if (playback.videoUrl) {
     if (cached) {
-      return buildDetailItem(link, playback.videoUrl, playback.customHeaders, extras);
+      return buildDetailItem(pageUrl, playback.videoUrl, playback.customHeaders, extras);
     }
-    return deliverDetail(link, playback.videoUrl, extras);
+    return deliverDetail(pageUrl, playback.videoUrl, extras);
   }
 
-  return buildDetailItem(link, "", PLAY_HEADERS, extras);
+  return buildDetailItem(pageUrl, "", PLAY_HEADERS, extras);
 }
 
 
