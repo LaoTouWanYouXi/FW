@@ -1199,6 +1199,50 @@ async function applyDmmToDetailExtras(extras, title, params) {
   });
 }
 
+function parseRatingText(text) {
+  if (!text) return 0;
+  const match = String(text).match(/([\d.]+)/);
+  if (!match) return 0;
+  const score = parseFloat(match[1]);
+  if (isNaN(score) || score < 0) return 0;
+  // 与 javdb / javmove 一致：≤5 按五星制换算到十分制
+  return score <= 5 ? Math.round(score * 2 * 10) / 10 : Math.min(score, 10);
+}
+
+function extractCardRating($, el) {
+  const videoItem = $(el).find(".video-item");
+  const scoreNode = videoItem
+    .find(".score, .rating, .vod-score, .vod_score, [class*='score'], [class*='rating']")
+    .first();
+  if (scoreNode && scoreNode.length) {
+    const rating = parseRatingText(scoreNode.text());
+    if (rating > 0) return rating;
+  }
+
+  const left = videoItem.find("span.model-view-left").text().trim();
+  // 「1605 Views」是播放量，不是评分
+  if (!left || /views?/i.test(left) || /播放|浏览|次/.test(left)) return 0;
+  if (/分|评分|score|rating/i.test(left) || /^[\d.]+$/.test(left)) {
+    const rating = parseRatingText(left);
+    if (rating > 0 && rating <= 10) return rating;
+  }
+  return 0;
+}
+
+function parseDetailRating($, html) {
+  const scoreNode = $(".score, .rating, .vod-score, .vod_score, [class*='score'], [class*='rating']").first();
+  if (scoreNode && scoreNode.length) {
+    const rating = parseRatingText(scoreNode.text());
+    if (rating > 0) return rating;
+  }
+  const match = String(html || "").match(/(?:评分|得分|豆瓣|score|rating)[:：\s]*([\d.]+)/i);
+  if (match) {
+    const rating = parseRatingText(match[1]);
+    if (rating > 0 && rating <= 10) return rating;
+  }
+  return 0;
+}
+
 function hasVerifiedDmmCover(candidate, siteFallback) {
   const url = String(candidate || "").trim();
   if (!url || isInvalidCoverTarget(url)) return false;
@@ -1226,6 +1270,7 @@ function mapVideoCard($, el, baseUrl) {
   const remark = videoItem.find("span.model-view-left").text().trim();
   const detailUrl = normalizeDetailLink(href.startsWith("http") ? href : baseUrl + href);
   const code = extractKanavMovieCode(title);
+  const rating = extractCardRating($, el);
   const item = {
     id: code || href,
     type: "url",
@@ -1233,6 +1278,7 @@ function mapVideoCard($, el, baseUrl) {
     backdropPath: posterPath || undefined,
     link: detailUrl,
     mediaType: "movie",
+    rating: rating || 0,
   };
   if (code) item.matchCode = code;
   if (remark) item.description = remark;
@@ -1248,6 +1294,7 @@ function parseDetailExtras(html, link) {
     $(".video-title h1").first().text().trim() ||
     $("h1").first().text().trim() ||
     "";
+  const rating = parseDetailRating($, html);
 
   const backdropPaths = [];
   const seen = {};
@@ -1270,7 +1317,7 @@ function parseDetailExtras(html, link) {
     });
   });
 
-  return { title, description, backdropPaths, relatedItems };
+  return { title, description, backdropPaths, relatedItems, rating };
 }
 
 function buildDetailItem(link, videoUrl, customHeaders, extras) {
@@ -1283,6 +1330,7 @@ function buildDetailItem(link, videoUrl, customHeaders, extras) {
     link,
     mediaType: "movie",
     customHeaders: customHeaders || PLAY_HEADERS,
+    rating: extras && extras.rating != null ? Number(extras.rating) || 0 : 0,
   };
   if (code) item.matchCode = code;
   if (videoUrl) {
