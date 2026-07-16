@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.4.1",
+  version: "1.4.2",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -587,9 +587,29 @@ async function refreshDetailItemCover(item, pageCover, movieCode, params) {
   return applyCoverBundleToItem(item, coverBundle);
 }
 
+function isCloudflareChallenge(html) {
+  const text = String(html || "");
+  if (!text) return false;
+  return (
+    /just a moment\.\.\./i.test(text) ||
+    /cf-browser-verification|challenge-platform|cdn-cgi\/challenge/i.test(text) ||
+    (/attention required/i.test(text) && /cloudflare/i.test(text))
+  );
+}
+
 function isErrorPage(body) {
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    if (body.error || Number(body.status || body.statusCode) >= 400) return true;
+    try {
+      body = JSON.stringify(body);
+    } catch (e) {
+      return true;
+    }
+  }
   const text = String(body || "").trim();
-  if (!text || text.length < 200) {
+  if (!text) return true;
+  if (isCloudflareChallenge(text)) return true;
+  if (text.length < 200) {
     return text.startsWith("{") && /"error"|"status"\s*:\s*400/.test(text);
   }
   return false;
@@ -600,16 +620,18 @@ async function fetchHtml(url, referer) {
   let res = await Widget.http.get(url, {
     headers: mergeHeaders({ Referer: ref }),
   });
-  let html = stringifyHttpBody(res.data);
-  if (isErrorPage(html)) {
+  let html = stringifyHttpBody(res && res.data);
+  if (isErrorPage(html) || !/id=["']movie-list["']|<article\b|\/movie\//i.test(html)) {
+    const desktopUa =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
     res = await Widget.http.get(url, {
-      headers: {
-        "User-Agent": HEADERS["User-Agent"],
-        Accept: "text/html",
+      headers: mergeHeaders({
+        "User-Agent": desktopUa,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         Referer: ref,
-      },
+      }),
     });
-    html = stringifyHttpBody(res.data);
+    html = stringifyHttpBody(res && res.data);
   }
   return html;
 }
@@ -1978,6 +2000,7 @@ function enrichListItemMatchFields(item, rawTitle) {
   delete match.originalTitle;
   return stripUndefined(
     Object.assign({}, item, match, {
+      id: movieCode || item.id || item.link,
       title: movieCode || item.title || fullTitle,
       rating: 0,
     })
@@ -2072,13 +2095,15 @@ function loadDmmProbeFromStorage(code) {
 function saveDmmProbeToStorage(code, probe) {
   code = String(code || "").trim().toUpperCase();
   if (!code) return;
-  const entry = { ok: !!probe, savedAt: Date.now() };
-  if (probe) {
-    entry.contentId = probe.contentId || "";
-    entry.posterUrl = probe.posterUrl || "";
-    entry.backdropUrl = probe.backdropUrl || "";
-  }
-  Widget.storage.set(dmmProbeStorageKey(code), JSON.stringify(entry));
+  try {
+    const entry = { ok: !!probe, savedAt: Date.now() };
+    if (probe) {
+      entry.contentId = probe.contentId || "";
+      entry.posterUrl = probe.posterUrl || "";
+      entry.backdropUrl = probe.backdropUrl || "";
+    }
+    Widget.storage.set(dmmProbeStorageKey(code), JSON.stringify(entry));
+  } catch (e) {}
 }
 
 function getDmmProbeWorkerBase(params) {
@@ -2864,9 +2889,6 @@ function decodeUnicodeEscapes(text) {
 function stringifyHttpBody(raw) {
   if (raw == null) return "";
   if (typeof raw === "string") return raw;
-  if (typeof raw === "object" && !Array.isArray(raw) && !(raw instanceof Uint8Array)) {
-    return raw;
-  }
   if (typeof Buffer !== "undefined" && Buffer.isBuffer(raw)) {
     return raw.toString("utf8");
   }
@@ -2874,6 +2896,13 @@ function stringifyHttpBody(raw) {
     if (typeof Buffer !== "undefined") return Buffer.from(raw).toString("utf8");
     if (typeof TextDecoder !== "undefined") {
       return new TextDecoder("utf-8").decode(raw);
+    }
+  }
+  if (typeof raw === "object") {
+    try {
+      return JSON.stringify(raw);
+    } catch (e) {
+      return "";
     }
   }
   return String(raw);
@@ -3246,7 +3275,14 @@ function normalizeGenreId(raw) {
 
 function extractMovieListHtml(html) {
   const text = String(html || "");
-  const match = text.match(/id="movie-list"[\s\S]*?<\/section>/i);
+  const start = text.search(/<div[^>]*\bid=["']movie-list["'][^>]*>/i);
+  if (start >= 0) {
+    const from = text.slice(start);
+    const end = from.search(/<\/section>/i);
+    if (end > 0) return from.slice(0, end + "</section>".length);
+    return from.slice(0, 500000);
+  }
+  const match = text.match(/id=["']movie-list["'][\s\S]*?<\/section>/i);
   return match ? match[0] : text;
 }
 
@@ -3261,11 +3297,16 @@ function buildGenrePageUrl(genreUrl, page) {
 async function fetchGenreVideoList(genreRef, page, params) {
   const baseUrl = normalizeGenreId(genreRef);
   if (!baseUrl) return [];
-  const fetchUrl = buildGenrePageUrl(baseUrl, page);
+  const fetchUrl = buildGenrePageUrl(baseUrl, Math.max(1, Number(page || 1) || 1));
   try {
     const html = await fetchHtml(fetchUrl, baseUrl);
-    return parseVideoListWithCovers(html, params);
+    const items = await parseVideoListWithCovers(html, params);
+    if (!items.length && html) {
+      console.error("[fetchGenreVideoList] parsed 0 items, url=" + fetchUrl + " htmlLen=" + String(html).length);
+    }
+    return items;
   } catch (e) {
+    console.error("[fetchGenreVideoList] 失败:", e && e.message ? e.message : e);
     return [];
   }
 }
@@ -3290,7 +3331,7 @@ function parseListTitle(rawTitle) {
 
 function parseVideoListRegex(html) {
   const items = [];
-  const seen = new Set();
+  const seen = {};
   const scoped = extractMovieListHtml(html);
   const articleRe = /<article\b[\s\S]*?<\/article>/gi;
   let match;
@@ -3298,12 +3339,14 @@ function parseVideoListRegex(html) {
     const block = match[0];
     const hrefM =
       block.match(/href="(\/movie\/[^"]+)"[^>]*rel="bookmark"/i) ||
-      block.match(/rel="bookmark"[^>]*href="(\/movie\/[^"]+)"/i);
+      block.match(/rel="bookmark"[^>]*href="(\/movie\/[^"]+)"/i) ||
+      block.match(/href='(\/movie\/[^']+)'[^>]*rel='bookmark'/i) ||
+      block.match(/href="(\/movie\/[^"]+)"/i);
     if (!hrefM) continue;
     const href = hrefM[1];
     const detailLink = resolveUrl(href);
-    if (seen.has(detailLink)) continue;
-    seen.add(detailLink);
+    if (seen[detailLink]) continue;
+    seen[detailLink] = true;
 
     const titleM =
       block.match(/<h2[^>]*title="([^"]+)"/i) ||
@@ -3313,9 +3356,10 @@ function parseVideoListRegex(html) {
 
     const coverM = parseListCover(block);
     const pubM = block.match(/datetime="([^"]+)"/i);
+    const code = resolveMovieCode("", rawTitle, rawTitle);
 
     items.push({
-      id: detailLink,
+      id: code || detailLink,
       type: "url",
       title: parseListTitle(rawTitle),
       backdropPath: coverM || undefined,
@@ -3336,12 +3380,13 @@ function parseVideoListSync(html) {
     const $ = Widget.html.load(scoped);
     $("#movie-list article, article").each(function (_, el) {
       const $el = $(el);
-      const $link = $el.find('a[rel="bookmark"]').first();
-      const href = $link.attr("href") || "";
+      let $link = $el.find('a[rel="bookmark"]').first();
+      if (!$link || !$link.length) $link = $el.find('a[href*="/movie/"]').first();
+      const href = ($link && $link.attr("href")) || "";
       const $h2 = $el.find("h2").first();
       const titleRaw =
-        $h2.attr("title") ||
-        $h2.text().trim() ||
+        ($h2 && $h2.attr("title")) ||
+        ($h2 && $h2.text && $h2.text().trim()) ||
         $el.find("img.movie-image").attr("alt") ||
         "";
       const listTitle = parseListTitle(titleRaw);
@@ -3350,9 +3395,10 @@ function parseVideoListSync(html) {
       const cover = parseListCover($el.html(), $el.find("img.movie-image, .movie-image").first());
       const pubdate = $el.find("time").first().attr("datetime") || "";
       const detailLink = resolveUrl(href);
+      const code = resolveMovieCode("", titleRaw, titleRaw);
 
       items.push({
-        id: detailLink,
+        id: code || detailLink,
         type: "url",
         title: listTitle,
         backdropPath: cover || undefined,
@@ -3377,7 +3423,13 @@ function parseVideoList(html) {
 
 async function parseVideoListWithCovers(html, params) {
   const items = parseVideoList(html);
-  return enrichListWithDmmCovers(items, params);
+  if (!items.length) return items;
+  try {
+    return await enrichListWithDmmCovers(items, params);
+  } catch (e) {
+    console.error("[parseVideoListWithCovers] DMM enrich failed:", e && e.message ? e.message : e);
+    return items;
+  }
 }
 
 async function loadGenreList(params) {
@@ -3396,12 +3448,17 @@ async function loadGenres(params) {
 async function loadLatest(params) {
   params = syncGlobalParams(params || {});
   if (params.genreId) return loadGenreList(params);
-  const page = Number(params.page || 1);
+  const page = Math.max(1, Number(params.page || 1) || 1);
   try {
     const url = BASE_URL + "/release?page=" + page;
     const html = await fetchHtml(url, BASE_URL + "/");
-    return parseVideoListWithCovers(html, params);
+    const items = await parseVideoListWithCovers(html, params);
+    if (!items.length && html) {
+      console.error("[loadLatest] parsed 0 items, htmlLen=" + String(html).length);
+    }
+    return items;
   } catch (e) {
+    console.error("[loadLatest] 失败:", e && e.message ? e.message : e);
     return [];
   }
 }
@@ -3409,12 +3466,17 @@ async function loadLatest(params) {
 async function loadUpcoming(params) {
   params = syncGlobalParams(params || {});
   if (params.genreId) return loadGenreList(params);
-  const page = Number(params.page || 1);
+  const page = Math.max(1, Number(params.page || 1) || 1);
   try {
     const url = BASE_URL + "/upcoming?page=" + page;
     const html = await fetchHtml(url, BASE_URL + "/");
-    return parseVideoListWithCovers(html, params);
+    const items = await parseVideoListWithCovers(html, params);
+    if (!items.length && html) {
+      console.error("[loadUpcoming] parsed 0 items, htmlLen=" + String(html).length);
+    }
+    return items;
   } catch (e) {
+    console.error("[loadUpcoming] 失败:", e && e.message ? e.message : e);
     return [];
   }
 }
@@ -3718,7 +3780,7 @@ async function search(params) {
   if (params.genreId) return loadGenreList(params);
 
   const keyword = params.keyword || "";
-  const page = Number(params.page || 1);
+  const page = Math.max(1, Number(params.page || 1) || 1);
   if (!keyword) return [];
 
   try {
@@ -3729,8 +3791,9 @@ async function search(params) {
       "&page=" +
       page;
     const html = await fetchHtml(url, BASE_URL + "/");
-    return parseVideoListWithCovers(html, params);
+    return await parseVideoListWithCovers(html, params);
   } catch (e) {
+    console.error("[search] 失败:", e && e.message ? e.message : e);
     return [];
   }
 }
