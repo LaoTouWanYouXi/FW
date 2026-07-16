@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.4.2",
+  version: "1.4.3",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -428,6 +428,17 @@ var partsBundleInflight = {};
 var detailInflight = {};
 const HEADERS = {
   "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
+  "Cache-Control": "no-cache",
+  Pragma: "no-cache",
+  Referer: "https://javmove.com/",
+};
+
+const MOBILE_HEADERS = {
+  "User-Agent":
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0.1 Mobile/15E148 Safari/604.1",
   Accept:
     "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -615,25 +626,121 @@ function isErrorPage(body) {
   return false;
 }
 
+function looksLikeMovieListHtml(html) {
+  const text = String(html || "");
+  return /id=["']movie-list["']|<article\b|\/movie\//i.test(text);
+}
+
+function extractHttpStatusFromError(err) {
+  const msg = String(err && err.message ? err.message : err || "");
+  const m = msg.match(/\b([45]\d\d)\b/);
+  return m ? Number(m[1]) : 0;
+}
+
+async function rawHttpGet(url, headers, timeoutMs) {
+  try {
+    const res = await Widget.http.get(url, {
+      headers: headers || {},
+      allow_redirects: true,
+      timeout: timeoutMs || 20000,
+    });
+    return {
+      ok: true,
+      status: Number((res && (res.status || res.statusCode)) || 200),
+      html: stringifyHttpBody(res && res.data),
+      error: "",
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      status: extractHttpStatusFromError(e),
+      html: "",
+      error: String(e && e.message ? e.message : e),
+    };
+  }
+}
+
+function getHtmlProxyWorkerBase(params) {
+  params = params || {};
+  let base = params.htmlProxyWorker || params.dmmProbeWorker;
+  if (!base) {
+    const storedHtml = Widget.storage.get("javdb.global.htmlProxyWorker");
+    if (storedHtml) base = storedHtml;
+  }
+  if (!base) {
+    const stored = Widget.storage.get("javdb.global.dmmProbeWorker");
+    if (stored) base = stored;
+  }
+  if (!base) base = HTML_PROXY_WORKER_BASE || DMM_PROBE_WORKER_BASE;
+  return String(base || "").replace(/\/+$/, "");
+}
+
+function buildHtmlProxyUrl(targetUrl) {
+  const base = getHtmlProxyWorkerBase({});
+  if (!base) return "";
+  return base + "/html?url=" + encodeURIComponent(String(targetUrl || ""));
+}
+
+async function fetchHtmlViaWorkerProxy(targetUrl) {
+  const proxyUrl = buildHtmlProxyUrl(targetUrl);
+  if (!proxyUrl) throw new Error("html proxy base missing");
+  const result = await rawHttpGet(proxyUrl, getDmmProbeWorkerHeaders({}), 25000);
+  if (!result.ok) throw new Error(result.error || "html proxy request failed");
+  if (!result.html || isErrorPage(result.html)) {
+    throw new Error("html proxy empty/challenge status=" + result.status);
+  }
+  return result.html;
+}
+
 async function fetchHtml(url, referer) {
   const ref = referer || BASE_URL + "/";
-  let res = await Widget.http.get(url, {
-    headers: mergeHeaders({ Referer: ref }),
-  });
-  let html = stringifyHttpBody(res && res.data);
-  if (isErrorPage(html) || !/id=["']movie-list["']|<article\b|\/movie\//i.test(html)) {
-    const desktopUa =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-    res = await Widget.http.get(url, {
-      headers: mergeHeaders({
-        "User-Agent": desktopUa,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        Referer: ref,
-      }),
-    });
-    html = stringifyHttpBody(res && res.data);
+  const attempts = [
+    mergeHeaders({ Referer: ref }),
+    Object.assign({}, MOBILE_HEADERS, { Referer: ref }),
+    mergeHeaders({
+      Referer: ref,
+      "Accept-Language": "en-US,en;q=0.9",
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "same-origin",
+      "Upgrade-Insecure-Requests": "1",
+    }),
+  ];
+
+  let lastError = "";
+  let sawForbidden = false;
+
+  for (let i = 0; i < attempts.length; i++) {
+    const result = await rawHttpGet(url, attempts[i], 20000);
+    if (result.status === 403 || /unacceptable:\s*403/i.test(result.error)) {
+      sawForbidden = true;
+      lastError = result.error || "HTTP 403";
+      continue;
+    }
+    if (result.ok && result.html && !isErrorPage(result.html) && looksLikeMovieListHtml(result.html)) {
+      return result.html;
+    }
+    if (result.ok && result.html && !isErrorPage(result.html) && result.html.length > 500) {
+      // detail pages may not include movie-list; still usable
+      if (/video-player|og:title|<h1\b|\/watch\?/i.test(result.html) || looksLikeMovieListHtml(result.html)) {
+        return result.html;
+      }
+    }
+    lastError = result.error || ("HTTP " + result.status);
   }
-  return html;
+
+  // Cloudflare / WAF 对 Forward HTTP 客户端 403 时，回退到 Worker HTML 代理
+  try {
+    const proxied = await fetchHtmlViaWorkerProxy(url);
+    if (proxied && !isErrorPage(proxied)) return proxied;
+    lastError = "html proxy returned unusable body";
+  } catch (e) {
+    lastError = String(e && e.message ? e.message : e);
+  }
+
+  throw new Error(
+    (sawForbidden ? "403 blocked by site WAF; " : "") + (lastError || "fetchHtml failed")
+  );
 }
 
 function extractTokenFromHtml(html) {
@@ -2011,6 +2118,8 @@ const COVER_VERIFY_MIN_BYTES = 15360;
 const COVER_VERIFY_TIMEOUT_MS = 3000;
 
 const DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
+// cloudflare/javmove-html-proxy 自定义域名；空则回退到 DMM_PROBE_WORKER_BASE
+const HTML_PROXY_WORKER_BASE = "https://move.laotou.ccwu.cc";
 const DMM_PROBE_WORKER_CACHE = {};
 const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
 const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
