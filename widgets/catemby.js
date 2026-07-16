@@ -2125,6 +2125,8 @@ async function fetchCategoryMovies(filterBy, params) {
 const DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
 const DMM_PROBE_WORKER_CACHE = {};
 const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
+const DMM_PROBE_BATCH_SIZE = 20;
+const DMM_PROBE_BATCH_TIMEOUT_MS = 60000;
 const DMM_PROBE_DETAIL_BUDGET_MS = 2500;
 const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
 const DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
@@ -2356,6 +2358,11 @@ async function prefetchDmmProbeCovers(codes, params) {
       DMM_PROBE_WORKER_CACHE[code] = storedProbe;
       continue;
     }
+    const parts = parseJavCodeParts(code);
+    if (!parts || getMgstageCoverRule(parts)) {
+      DMM_PROBE_WORKER_CACHE[code] = null;
+      continue;
+    }
     pending.push(code);
   }
   if (!pending.length) return;
@@ -2363,14 +2370,78 @@ async function prefetchDmmProbeCovers(codes, params) {
   const base = getDmmProbeWorkerBase(params);
   if (!base) return;
 
-  const concurrency = 6;
-  for (let start = 0; start < pending.length; start += concurrency) {
-    const chunk = pending.slice(start, start + concurrency);
-    const tasks = [];
-    for (let i = 0; i < chunk.length; i++) {
-      tasks.push(fetchDmmProbeCover(chunk[i], params));
+  const batchSize = DMM_PROBE_BATCH_SIZE || 20;
+  for (let start = 0; start < pending.length; start += batchSize) {
+    const chunk = pending.slice(start, start + batchSize);
+    const ok = await fetchDmmProbeCoverBatch(chunk, params);
+    if (!ok) {
+      for (let j = 0; j < chunk.length; j++) {
+        if (!Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, chunk[j])) {
+          await fetchDmmProbeCover(chunk[j], params);
+        }
+      }
     }
-    await Promise.all(tasks);
+  }
+}
+
+function applyDmmProbeBatchResults(data, requestedCodes) {
+  const byCode = {};
+  const results = data && data.results;
+  if (!Array.isArray(results)) return false;
+  for (let i = 0; i < results.length; i++) {
+    const row = results[i];
+    const code = String((row && row.code) || "")
+      .trim()
+      .toUpperCase();
+    if (!code) continue;
+    if (row && row.ok && row.best) {
+      byCode[code] = {
+        contentId: String(row.best.contentId || ""),
+        posterUrl: String(row.best.posterUrl || ""),
+        backdropUrl: String(row.best.backdropUrl || ""),
+      };
+    } else {
+      byCode[code] = null;
+    }
+  }
+  for (let j = 0; j < (requestedCodes || []).length; j++) {
+    const c = requestedCodes[j];
+    if (!Object.prototype.hasOwnProperty.call(byCode, c)) continue;
+    DMM_PROBE_WORKER_CACHE[c] = byCode[c];
+    saveDmmProbeToStorage(c, byCode[c]);
+  }
+  return true;
+}
+
+async function fetchDmmProbeCoverBatch(codes, params) {
+  const list = codes || [];
+  if (!list.length) return true;
+  const base = getDmmProbeWorkerBase(params);
+  if (!base) return false;
+  try {
+    const headers = getDmmProbeWorkerHeaders(params);
+    headers["Content-Type"] = "application/json";
+    headers.Accept = "application/json";
+    const res = await Widget.http.post(
+      base + "/probe",
+      { codes: list, force: false, variants: false },
+      {
+        headers,
+        timeout: DMM_PROBE_BATCH_TIMEOUT_MS,
+        allow_redirects: true,
+      }
+    );
+    if (!res || res.data === undefined || res.data === null) return false;
+    const status = Number(res.status || res.statusCode || 0);
+    if (status >= 400) return false;
+    const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+    return applyDmmProbeBatchResults(data, list);
+  } catch (err) {
+    console.error(
+      "[catemby] DMM batch probe failed:",
+      err && err.message ? err.message : err
+    );
+    return false;
   }
 }
 
