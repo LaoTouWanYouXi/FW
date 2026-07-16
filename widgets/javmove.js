@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.5.0",
+  version: "1.5.1",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -428,6 +428,7 @@ const PARTS_BUNDLE_TTL = 3600;
 const DETAIL_ITEM_CACHE_TTL = 300;
 var partsBundleInflight = {};
 var detailInflight = {};
+var listInflight = {};
 const HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -674,6 +675,15 @@ function extractHttpStatusFromError(err) {
   return m ? Number(m[1]) : 0;
 }
 
+function isTlsOrTransportError(errOrMsg) {
+  const msg = String(
+    errOrMsg && errOrMsg.message ? errOrMsg.message : errOrMsg || ""
+  );
+  return /TLS|SSL|secure connection|NSURLError|handshake|安全连接|连接失败|network connection was lost|无法连接/i.test(
+    msg
+  );
+}
+
 async function rawHttpGet(url, headers, timeoutMs) {
   try {
     const res = await Widget.http.get(url, {
@@ -766,6 +776,11 @@ async function fetchHtml(url, referer) {
 
   for (let i = 0; i < attempts.length; i++) {
     const result = await rawHttpGet(url, attempts[i], 20000);
+    if (!result.ok && isTlsOrTransportError(result.error)) {
+      // iOS URLSession TLS 失败时不要连换 3 套 UA 狂重试
+      lastError = result.error;
+      break;
+    }
     if (result.status === 403 || /unacceptable:\s*403/i.test(result.error)) {
       sawForbidden = true;
       lastError = result.error || "HTTP 403";
@@ -2467,7 +2482,8 @@ async function prefetchDmmProbeCovers(codes, params) {
   const base = getDmmProbeWorkerBase(params);
   if (!base) return;
 
-  const concurrency = 6;
+  // 降低并发，减轻 iOS URLSession TLS 压力
+  const concurrency = 3;
   for (let start = 0; start < pending.length; start += concurrency) {
     const chunk = pending.slice(start, start + concurrency);
     const tasks = [];
@@ -3706,31 +3722,82 @@ function mapAggregatedListItems(payload) {
 
 async function fetchAggregatedVideoList(listUrl, params) {
   const base = getHtmlProxyWorkerBase(params || {});
-  if (!base) return null;
+  if (!base) return { items: null, tlsError: false };
   const api = base + "/list?url=" + encodeURIComponent(String(listUrl || ""));
   try {
     const result = await rawHttpGet(api, getDmmProbeWorkerHeaders(params || {}), 45000);
-    if (!result.ok || !result.html) return null;
+    if (!result.ok) {
+      return {
+        items: null,
+        tlsError: isTlsOrTransportError(result.error),
+        error: result.error || ("HTTP " + result.status),
+      };
+    }
+    if (!result.html) return { items: null, tlsError: false };
     let data = null;
     try {
       data = JSON.parse(result.html);
     } catch (e) {
-      return null;
+      return { items: null, tlsError: false };
     }
-    if (!data || !data.ok || !Array.isArray(data.items) || !data.items.length) return null;
+    if (!data || !data.ok || !Array.isArray(data.items) || !data.items.length) {
+      return { items: null, tlsError: false };
+    }
     const items = mapAggregatedListItems(data);
-    return items.length ? items : null;
+    return { items: items.length ? items : null, tlsError: false };
   } catch (e) {
-    console.error("[fetchAggregatedVideoList] 失败:", e && e.message ? e.message : e);
-    return null;
+    const msg = e && e.message ? e.message : e;
+    console.error("[fetchAggregatedVideoList] 失败:", msg);
+    return { items: null, tlsError: isTlsOrTransportError(msg), error: String(msg || "") };
   }
 }
 
+async function fetchListHtmlFallback(listUrl, params) {
+  const base = getHtmlProxyWorkerBase(params || {});
+  // 有 Worker 时优先只打一次 /html，避免直连 3 次 + 再代理
+  if (base) {
+    try {
+      return await fetchHtmlViaWorkerProxy(listUrl);
+    } catch (e) {
+      if (isTlsOrTransportError(e)) throw e;
+      console.error("[fetchListHtmlFallback] proxy html failed:", e && e.message ? e.message : e);
+    }
+  }
+  // 无代理或代理非 TLS 失败：最多一次直连，不再套多 UA
+  const result = await rawHttpGet(
+    listUrl,
+    mergeHeaders({ Referer: BASE_URL + "/" }),
+    20000
+  );
+  if (!result.ok && isTlsOrTransportError(result.error)) {
+    throw new Error(result.error || "TLS error");
+  }
+  if (result.ok && isUsableFetchedHtml(result.html, listUrl)) return result.html;
+  throw new Error(result.error || ("list html unusable HTTP " + result.status));
+}
+
 async function loadVideoListSmart(listUrl, params) {
-  const aggregated = await fetchAggregatedVideoList(listUrl, params);
-  if (aggregated && aggregated.length) return aggregated;
-  const html = await fetchHtml(listUrl, BASE_URL + "/");
-  return parseVideoListWithCovers(html, params);
+  const key = String(listUrl || "").trim();
+  if (!key) return [];
+  if (listInflight[key]) return listInflight[key];
+
+  listInflight[key] = (async function () {
+    const agg = await fetchAggregatedVideoList(key, params);
+    if (agg && agg.items && agg.items.length) return agg.items;
+
+    // 聚合阶段已 TLS 失败：停止继续打更多 HTTPS，直接空列表，避免雪崩
+    if (agg && agg.tlsError) {
+      console.error("[loadVideoListSmart] TLS after /list, skip further fetches:", agg.error || "");
+      return [];
+    }
+
+    const html = await fetchListHtmlFallback(key, params);
+    return parseVideoListWithCovers(html, params);
+  })().finally(function () {
+    delete listInflight[key];
+  });
+
+  return listInflight[key];
 }
 
 async function loadGenreList(params) {
