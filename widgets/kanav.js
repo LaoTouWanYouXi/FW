@@ -281,7 +281,7 @@ const TAG_ENUM_OPTIONS = [
 WidgetMetadata = {
   id: "forward.kanav",
   title: "KanAV",
-  version: "1.0.8",
+  version: "1.0.9",
   requiredVersion: "0.0.1",
   description: "KanAV \u89c6\u9891\u6e90",
   author: "\u8001\u5934",
@@ -1157,15 +1157,18 @@ function mapVideoCard($, el, baseUrl) {
     "";
   const remark = videoItem.find("span.model-view-left").text().trim();
   const detailUrl = normalizeDetailLink(href.startsWith("http") ? href : baseUrl + href);
+  const code = extractKanavMovieCode(title);
   const item = {
-    id: href,
+    id: code || href,
     type: "url",
     title,
     backdropPath: posterPath || undefined,
     link: detailUrl,
     mediaType: "movie",
   };
+  if (code) item.matchCode = code;
   if (remark) item.description = remark;
+  else if (code) item.description = "番号: " + code;
   return item;
 }
 
@@ -1203,13 +1206,17 @@ function parseDetailExtras(html, link) {
 }
 
 function buildDetailItem(link, videoUrl, customHeaders, extras) {
+  const code =
+    extractKanavMovieCode((extras && extras.title) || "") ||
+    extractKanavMovieCode((extras && extras.description) || "");
   const item = {
-    id: link,
+    id: code || link,
     type: "detail",
     link,
     mediaType: "movie",
     customHeaders: customHeaders || PLAY_HEADERS,
   };
+  if (code) item.matchCode = code;
   if (videoUrl) {
     item.videoUrl = videoUrl;
     item.playerType = /\.m3u8(\?|$)/i.test(videoUrl) ? "ijk" : "system";
@@ -1217,6 +1224,7 @@ function buildDetailItem(link, videoUrl, customHeaders, extras) {
   if (!extras) return item;
   if (extras.title) item.title = extras.title;
   if (extras.description) item.description = extras.description;
+  else if (code) item.description = "番号: " + code;
   if (extras.backdropPath) item.backdropPath = extras.backdropPath;
   if (extras.posterPath) item.posterPath = extras.posterPath;
   if (extras.detailPoster) item.detailPoster = extras.detailPoster;
