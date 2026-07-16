@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.javmove",
   title: "JavMove",
-  version: "1.4.3",
+  version: "1.5.0",
   requiredVersion: "0.0.1",
   description: "JavMove \u89c6\u9891\u805a\u5408\u6a21\u5757\uff0c\u652f\u6301\u6700\u65b0\u3001\u5373\u5c06\u4e0a\u6620\u3001\u5206\u7c7b\u5bfc\u822a\u3001\u641c\u7d22",
   author: "老头",
@@ -420,6 +420,8 @@ WidgetMetadata = {
 };
 
 const BASE_URL = "https://javmove.com";
+// cloudflare/javmove-html-proxy 自定义域名；空则回退到 DMM_PROBE_WORKER_BASE
+const HTML_PROXY_WORKER_BASE = "https://move.laotou.ccwu.cc";
 const DMM_POSTER_SIZE = "small";
 const VIDEO_CACHE_TTL = 3600;
 const PARTS_BUNDLE_TTL = 3600;
@@ -608,6 +610,16 @@ function isCloudflareChallenge(html) {
   );
 }
 
+function isCloudflareGatewayError(html) {
+  const text = String(html || "");
+  if (!text) return false;
+  if (/error code:\s*502/i.test(text) && text.length < 80) return true;
+  return (
+    /bad gateway/i.test(text) &&
+    (/error code\s*502/i.test(text) || /cloudflare/i.test(text))
+  );
+}
+
 function isErrorPage(body) {
   if (body && typeof body === "object" && !Array.isArray(body)) {
     if (body.error || Number(body.status || body.statusCode) >= 400) return true;
@@ -620,15 +632,40 @@ function isErrorPage(body) {
   const text = String(body || "").trim();
   if (!text) return true;
   if (isCloudflareChallenge(text)) return true;
+  if (isCloudflareGatewayError(text)) return true;
   if (text.length < 200) {
-    return text.startsWith("{") && /"error"|"status"\s*:\s*400/.test(text);
+    return (
+      text.startsWith("{") && /"error"|"status"\s*:\s*4\d\d/.test(text)
+    ) || /error code:\s*[45]\d\d/i.test(text);
   }
   return false;
 }
 
 function looksLikeMovieListHtml(html) {
   const text = String(html || "");
+  if (isErrorPage(text)) return false;
   return /id=["']movie-list["']|<article\b|\/movie\//i.test(text);
+}
+
+function looksLikeMovieDetailHtml(html) {
+  const text = String(html || "");
+  if (!text || isErrorPage(text)) return false;
+  // 不能仅凭 <h1>：Cloudflare 502 页也有 <h1>Bad gateway
+  return (
+    /id=["']video-player["']/i.test(text) ||
+    (/data-id=["'][^"']+["']/i.test(text) && /video-player|video-source-btn|video-format/i.test(text)) ||
+    (/og:title/i.test(text) && /\/movie\//i.test(text)) ||
+    (/video-source-btn/i.test(text) && /video-format/i.test(text))
+  );
+}
+
+function isUsableFetchedHtml(html, url) {
+  const text = String(html || "");
+  if (!text || isErrorPage(text)) return false;
+  const path = String(url || "");
+  if (/\/movie\//i.test(path)) return looksLikeMovieDetailHtml(text);
+  if (looksLikeMovieListHtml(text)) return true;
+  return looksLikeMovieDetailHtml(text);
 }
 
 function extractHttpStatusFromError(err) {
@@ -681,15 +718,31 @@ function buildHtmlProxyUrl(targetUrl) {
   return base + "/html?url=" + encodeURIComponent(String(targetUrl || ""));
 }
 
-async function fetchHtmlViaWorkerProxy(targetUrl) {
-  const proxyUrl = buildHtmlProxyUrl(targetUrl);
+function buildFetchProxyUrl(targetUrl) {
+  const base = getHtmlProxyWorkerBase({});
+  if (!base) return "";
+  return base + "/fetch?url=" + encodeURIComponent(String(targetUrl || ""));
+}
+
+async function fetchViaWorkerProxy(targetUrl, preferHtmlEndpoint) {
+  const proxyUrl = preferHtmlEndpoint
+    ? buildHtmlProxyUrl(targetUrl)
+    : buildFetchProxyUrl(targetUrl) || buildHtmlProxyUrl(targetUrl);
   if (!proxyUrl) throw new Error("html proxy base missing");
   const result = await rawHttpGet(proxyUrl, getDmmProbeWorkerHeaders({}), 25000);
-  if (!result.ok) throw new Error(result.error || "html proxy request failed");
+  if (!result.ok) throw new Error(result.error || "proxy request failed");
   if (!result.html || isErrorPage(result.html)) {
-    throw new Error("html proxy empty/challenge status=" + result.status);
+    throw new Error("proxy empty/challenge status=" + result.status);
   }
   return result.html;
+}
+
+async function fetchHtmlViaWorkerProxy(targetUrl) {
+  const html = await fetchViaWorkerProxy(targetUrl, true);
+  if (!isUsableFetchedHtml(html, targetUrl)) {
+    throw new Error("html proxy returned non-movie page");
+  }
+  return html;
 }
 
 async function fetchHtml(url, referer) {
@@ -709,6 +762,7 @@ async function fetchHtml(url, referer) {
 
   let lastError = "";
   let sawForbidden = false;
+  let sawGateway = false;
 
   for (let i = 0; i < attempts.length; i++) {
     const result = await rawHttpGet(url, attempts[i], 20000);
@@ -717,42 +771,52 @@ async function fetchHtml(url, referer) {
       lastError = result.error || "HTTP 403";
       continue;
     }
-    if (result.ok && result.html && !isErrorPage(result.html) && looksLikeMovieListHtml(result.html)) {
+    if (
+      result.status === 502 ||
+      result.status === 503 ||
+      isCloudflareGatewayError(result.html)
+    ) {
+      sawGateway = true;
+      lastError = result.error || ("HTTP " + result.status);
+      continue;
+    }
+    if (result.ok && isUsableFetchedHtml(result.html, url)) {
       return result.html;
     }
-    if (result.ok && result.html && !isErrorPage(result.html) && result.html.length > 500) {
-      // detail pages may not include movie-list; still usable
-      if (/video-player|og:title|<h1\b|\/watch\?/i.test(result.html) || looksLikeMovieListHtml(result.html)) {
-        return result.html;
-      }
-    }
-    lastError = result.error || ("HTTP " + result.status);
+    lastError = result.error || ("HTTP " + result.status + " unusable html");
   }
 
-  // Cloudflare / WAF 对 Forward HTTP 客户端 403 时，回退到 Worker HTML 代理
+  // Cloudflare / WAF 对 Forward HTTP 客户端拦截时，回退到 Worker HTML 代理
   try {
     const proxied = await fetchHtmlViaWorkerProxy(url);
-    if (proxied && !isErrorPage(proxied)) return proxied;
+    if (proxied && isUsableFetchedHtml(proxied, url)) return proxied;
     lastError = "html proxy returned unusable body";
   } catch (e) {
     lastError = String(e && e.message ? e.message : e);
   }
 
   throw new Error(
-    (sawForbidden ? "403 blocked by site WAF; " : "") + (lastError || "fetchHtml failed")
+    (sawForbidden ? "403 blocked by site WAF; " : "") +
+      (sawGateway ? "upstream 502/503; " : "") +
+      (lastError || "fetchHtml failed")
   );
 }
 
 function extractTokenFromHtml(html) {
   const text = String(html || "");
+  if (!text || isErrorPage(text)) return "";
   const patterns = [
     /id="video-player"[^>]*data-id="([^"]+)"/i,
     /data-id="([^"]+)"[^>]*id="video-player"/i,
     /id='video-player'[^>]*data-id='([^']+)'/i,
+    /id="video-player"[^>]*data-token="([^"]+)"/i,
+    /data-token="([^"]+)"[^>]*id="video-player"/i,
+    /["']token["']\s*:\s*["']([A-Za-z0-9_\-]{8,})["']/i,
+    /\/watch\?token=([A-Za-z0-9_\-%]+)/i,
   ];
   for (let i = 0; i < patterns.length; i++) {
     const match = text.match(patterns[i]);
-    if (match && match[1]) return match[1];
+    if (match && match[1]) return decodeURIComponent(match[1]);
   }
   return "";
 }
@@ -846,11 +910,20 @@ async function fetchMovieHtmlBundle(baseUrl) {
   if (!key) throw new Error("invalid movie url");
 
   const cached = readPartsBundle(key);
-  if (cached && cached.html && cached.parts && cached.parts.length) {
+  if (
+    cached &&
+    cached.html &&
+    cached.parts &&
+    cached.parts.length &&
+    looksLikeMovieDetailHtml(cached.html)
+  ) {
     return { html: cached.html, parts: cached.parts };
   }
 
   const html = await fetchHtml(key, BASE_URL + "/");
+  if (!looksLikeMovieDetailHtml(html)) {
+    throw new Error("movie html unusable (no player/token markers)");
+  }
   const $ = safeLoadHtml(html);
   const parts = collectVideoParts($, key, html);
   writePartsBundle(key, {
@@ -872,22 +945,34 @@ async function fetchMoviePartsBundle(baseUrl) {
     let html = "";
     let parts = [];
     const cached = readPartsBundle(key);
-    if (cached && cached.html && cached.parts && cached.parts.length) {
+    if (
+      cached &&
+      cached.html &&
+      cached.parts &&
+      cached.parts.length &&
+      looksLikeMovieDetailHtml(cached.html)
+    ) {
       html = cached.html;
       parts = cached.parts;
     } else {
       html = await fetchHtml(key, BASE_URL + "/");
+      if (!looksLikeMovieDetailHtml(html)) {
+        throw new Error("movie html unusable for parts bundle");
+      }
       const $ = safeLoadHtml(html);
       parts = collectVideoParts($, key, html);
     }
     const resolvedParts = await resolvePartPlayback(parts, key);
+    const playable = resolvedParts.filter(function (part) {
+      return part && part.videoUrl;
+    });
     const bundle = {
       html: html,
       parts: parts,
       resolvedParts: resolvedParts,
       ts: Date.now(),
     };
-    writePartsBundle(key, bundle);
+    if (playable.length) writePartsBundle(key, bundle);
     return bundle;
   })().finally(function () {
     delete partsBundleInflight[key];
@@ -944,25 +1029,40 @@ async function resolveFreshPlayableParts(baseUrl) {
 
   let html = "";
   let parts = [];
-  if (cached && cached.html && cached.parts && cached.parts.length) {
+  if (
+    cached &&
+    cached.html &&
+    cached.parts &&
+    cached.parts.length &&
+    looksLikeMovieDetailHtml(cached.html)
+  ) {
     html = cached.html;
     parts = cached.parts;
   } else {
     html = await fetchHtml(key, BASE_URL + "/");
+    if (!looksLikeMovieDetailHtml(html)) return [];
     const $ = safeLoadHtml(html);
     parts = collectVideoParts($, key, html);
   }
 
   const resolvedParts = await resolvePartPlayback(parts, key);
-  writePartsBundle(key, {
-    html: html,
-    parts: parts,
-    resolvedParts: resolvedParts,
-    ts: Date.now(),
-  });
-  return resolvedParts.filter(function (part) {
+  const playable = resolvedParts.filter(function (part) {
     return part && part.videoUrl;
   });
+  // 仅在拿到可播放源时写入长期缓存，避免把 502/挑战页缓存 1 小时
+  if (playable.length) {
+    writePartsBundle(key, {
+      html: html,
+      parts: parts,
+      resolvedParts: resolvedParts,
+      ts: Date.now(),
+    });
+  } else {
+    try {
+      Widget.storage.set("parts:v3:" + key, "");
+    } catch (e) {}
+  }
+  return playable;
 }
 
 function normalizeQualityLabel(raw) {
@@ -1064,23 +1164,40 @@ function extractVideoUrlFromHtml(html) {
 async function fetchWatchUrl(token, referer) {
   if (!token) return "";
   const watchApi = BASE_URL + "/watch?token=" + encodeURIComponent(token);
+  const headers = {
+    "User-Agent": HEADERS["User-Agent"],
+    Referer: referer || BASE_URL + "/",
+    Accept: "*/*",
+    "Accept-Language": HEADERS["Accept-Language"],
+  };
+
   try {
-    const res = await Widget.http.get(watchApi, {
-      headers: {
-        "User-Agent": HEADERS["User-Agent"],
-        Referer: referer || BASE_URL + "/",
-        Accept: "*/*",
-        "Accept-Language": HEADERS["Accept-Language"],
-      },
-    });
-    const raw = res.data;
-    if (raw && typeof raw === "object" && (raw.error || raw.status === 400)) {
-      return "";
+    const result = await rawHttpGet(watchApi, headers, 20000);
+    if (result.ok) {
+      let raw = result.html;
+      try {
+        raw = JSON.parse(result.html);
+      } catch (e) {}
+      if (!(raw && typeof raw === "object" && (raw.error || raw.status === 400))) {
+        const url = parseWatchUrl(raw);
+        if (url) return url;
+      }
     }
+  } catch (e) {
+    console.error("[fetchWatchUrl] 直连失败:", e.message || e);
+  }
+
+  // /watch 也被 WAF/502 拦截时，经 Worker /fetch 回退
+  try {
+    const proxied = await fetchViaWorkerProxy(watchApi, false);
+    let raw = proxied;
+    try {
+      raw = JSON.parse(proxied);
+    } catch (e) {}
     const url = parseWatchUrl(raw);
     if (url) return url;
   } catch (e) {
-    console.error("[fetchWatchUrl] 失败:", e.message || e);
+    console.error("[fetchWatchUrl] 代理失败:", e.message || e);
   }
   return "";
 }
@@ -2100,15 +2217,24 @@ function finalizeDetailItem(baseItem, movieCode, chineseSynopsis, rating) {
 
 function enrichListItemMatchFields(item, rawTitle) {
   if (!item) return item;
-  const fullTitle = normalizeListRawTitle(rawTitle || item.title || "");
-  const movieCode = resolveMovieCode("", fullTitle, fullTitle);
+  const fullTitle = normalizeListRawTitle(rawTitle || item.title || item.originalTitle || "");
+  const movieCode =
+    item.matchCode ||
+    item.code ||
+    resolveMovieCode("", fullTitle, fullTitle);
   const listDescription = movieCode ? "\u756a\u53f7: " + movieCode : "";
   const match = buildGuangyaMatchFields(movieCode, "", listDescription);
   delete match.originalTitle;
+  // 列表展示优先用聚合接口译好的 name；否则退回番号
+  const displayName = sanitizeSourceText(item.name || item.seriesName || "");
+  const nameForList = displayName || movieCode || fullTitle;
   return stripUndefined(
     Object.assign({}, item, match, {
       id: movieCode || item.id || item.link,
       title: movieCode || item.title || fullTitle,
+      name: nameForList,
+      seriesName: nameForList,
+      originalTitle: fullTitle || undefined,
       rating: 0,
     })
   );
@@ -2118,8 +2244,6 @@ const COVER_VERIFY_MIN_BYTES = 15360;
 const COVER_VERIFY_TIMEOUT_MS = 3000;
 
 const DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
-// cloudflare/javmove-html-proxy 自定义域名；空则回退到 DMM_PROBE_WORKER_BASE
-const HTML_PROXY_WORKER_BASE = "https://move.laotou.ccwu.cc";
 const DMM_PROBE_WORKER_CACHE = {};
 const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
 const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
@@ -3408,10 +3532,9 @@ async function fetchGenreVideoList(genreRef, page, params) {
   if (!baseUrl) return [];
   const fetchUrl = buildGenrePageUrl(baseUrl, Math.max(1, Number(page || 1) || 1));
   try {
-    const html = await fetchHtml(fetchUrl, baseUrl);
-    const items = await parseVideoListWithCovers(html, params);
-    if (!items.length && html) {
-      console.error("[fetchGenreVideoList] parsed 0 items, url=" + fetchUrl + " htmlLen=" + String(html).length);
+    const items = await loadVideoListSmart(fetchUrl, params);
+    if (!items.length) {
+      console.error("[fetchGenreVideoList] parsed 0 items, url=" + fetchUrl);
     }
     return items;
   } catch (e) {
@@ -3541,6 +3664,75 @@ async function parseVideoListWithCovers(html, params) {
   }
 }
 
+function mapAggregatedListItems(payload) {
+  const rows = payload && Array.isArray(payload.items) ? payload.items : [];
+  const out = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || {};
+    const code = String(row.code || "").trim().toUpperCase();
+    const link = String(row.link || "").trim();
+    if (!link || link.indexOf("/movie/") < 0) continue;
+    const titleEn = normalizeListRawTitle(row.title || "");
+    const titleZh = sanitizeSourceText(row.titleZh || "");
+    const displayName = sanitizeSourceText(row.name || "") ||
+      (code && titleZh ? code + " " + titleZh : titleZh || code || titleEn);
+    const backdrop = row.backdropUrl || row.cover || "";
+    const poster = row.posterUrl || "";
+    let item = {
+      id: code || link,
+      type: "url",
+      title: code || titleEn || displayName,
+      name: displayName,
+      seriesName: displayName,
+      originalTitle: titleEn || undefined,
+      backdropPath: backdrop || undefined,
+      posterPath: poster || undefined,
+      coverUrl: backdrop || poster || undefined,
+      releaseDate: row.releaseDate || "",
+      link: link,
+      mediaType: "movie",
+      code: code || undefined,
+      matchCode: code || undefined,
+    };
+    item = enrichListItemMatchFields(item, titleEn);
+    // enrich 会用番号覆盖 name，这里再写回译名展示
+    item.name = displayName;
+    item.seriesName = displayName;
+    if (titleEn) item.originalTitle = titleEn;
+    out.push(stripUndefined(item));
+  }
+  return out;
+}
+
+async function fetchAggregatedVideoList(listUrl, params) {
+  const base = getHtmlProxyWorkerBase(params || {});
+  if (!base) return null;
+  const api = base + "/list?url=" + encodeURIComponent(String(listUrl || ""));
+  try {
+    const result = await rawHttpGet(api, getDmmProbeWorkerHeaders(params || {}), 45000);
+    if (!result.ok || !result.html) return null;
+    let data = null;
+    try {
+      data = JSON.parse(result.html);
+    } catch (e) {
+      return null;
+    }
+    if (!data || !data.ok || !Array.isArray(data.items) || !data.items.length) return null;
+    const items = mapAggregatedListItems(data);
+    return items.length ? items : null;
+  } catch (e) {
+    console.error("[fetchAggregatedVideoList] 失败:", e && e.message ? e.message : e);
+    return null;
+  }
+}
+
+async function loadVideoListSmart(listUrl, params) {
+  const aggregated = await fetchAggregatedVideoList(listUrl, params);
+  if (aggregated && aggregated.length) return aggregated;
+  const html = await fetchHtml(listUrl, BASE_URL + "/");
+  return parseVideoListWithCovers(html, params);
+}
+
 async function loadGenreList(params) {
   params = syncGlobalParams(params || {});
   const genreId = normalizeGenreId(
@@ -3560,10 +3752,9 @@ async function loadLatest(params) {
   const page = Math.max(1, Number(params.page || 1) || 1);
   try {
     const url = BASE_URL + "/release?page=" + page;
-    const html = await fetchHtml(url, BASE_URL + "/");
-    const items = await parseVideoListWithCovers(html, params);
-    if (!items.length && html) {
-      console.error("[loadLatest] parsed 0 items, htmlLen=" + String(html).length);
+    const items = await loadVideoListSmart(url, params);
+    if (!items.length) {
+      console.error("[loadLatest] parsed 0 items, url=" + url);
     }
     return items;
   } catch (e) {
@@ -3578,10 +3769,9 @@ async function loadUpcoming(params) {
   const page = Math.max(1, Number(params.page || 1) || 1);
   try {
     const url = BASE_URL + "/upcoming?page=" + page;
-    const html = await fetchHtml(url, BASE_URL + "/");
-    const items = await parseVideoListWithCovers(html, params);
-    if (!items.length && html) {
-      console.error("[loadUpcoming] parsed 0 items, htmlLen=" + String(html).length);
+    const items = await loadVideoListSmart(url, params);
+    if (!items.length) {
+      console.error("[loadUpcoming] parsed 0 items, url=" + url);
     }
     return items;
   } catch (e) {
@@ -3899,8 +4089,7 @@ async function search(params) {
       encodeURIComponent(keyword) +
       "&page=" +
       page;
-    const html = await fetchHtml(url, BASE_URL + "/");
-    return await parseVideoListWithCovers(html, params);
+    return await loadVideoListSmart(url, params);
   } catch (e) {
     console.error("[search] 失败:", e && e.message ? e.message : e);
     return [];
