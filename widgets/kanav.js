@@ -454,6 +454,8 @@ function resolveBaseUrl(link) {
 
 
 const DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
+const HTML_PROXY_WORKER_BASE = "https://move.laotou.ccwu.cc";
+const HTML_PROXY_TIMEOUT_MS = 25000;
 const DMM_PROBE_WORKER_CACHE = {};
 const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
 const DMM_PROBE_DETAIL_BUDGET_MS = 2500;
@@ -565,6 +567,72 @@ function getDmmProbeWorkerHeaders(params) {
   if (!key) key = Widget.storage.get("javdb.global.dmmProbeApiKey");
   if (key) headers["X-Probe-Key"] = String(key);
   return headers;
+}
+
+function getHtmlProxyWorkerBase(params) {
+  params = params || {};
+  let base = params.htmlProxyWorker || params.dmmProbeWorker;
+  if (!base) {
+    const storedHtml = Widget.storage.get("javdb.global.htmlProxyWorker");
+    if (storedHtml) base = storedHtml;
+  }
+  if (!base) {
+    const stored = Widget.storage.get("javdb.global.dmmProbeWorker");
+    if (stored) base = stored;
+  }
+  if (!base) base = HTML_PROXY_WORKER_BASE || DMM_PROBE_WORKER_BASE;
+  return String(base || "").replace(/\/+$/, "");
+}
+
+function buildHtmlProxyUrl(targetUrl, params) {
+  const base = getHtmlProxyWorkerBase(params || {});
+  if (!base) return "";
+  return base + "/html?url=" + encodeURIComponent(String(targetUrl || ""));
+}
+
+function isProxyErrorPayload(body) {
+  const text = String(body || "").trim();
+  if (!text || text.charAt(0) !== "{") return false;
+  try {
+    const data = JSON.parse(text);
+    return !!(data && data.error);
+  } catch (e) {
+    return false;
+  }
+}
+
+function isUsableProxiedKanavHtml(html) {
+  const text = String(html || "");
+  if (!text || text.length < 200) return false;
+  if (isProxyErrorPayload(text)) return false;
+  if (/just a moment\.\.\.|cf-browser-verification|challenge-platform|cdn-cgi\/challenge/i.test(text)) {
+    return false;
+  }
+  return (
+    /vod-|stui-|mac_|myui-|\/index\.php\/vod\//i.test(text) ||
+    (/<html[\s>]/i.test(text) && /href=["'][^"']*vod/i.test(text)) ||
+    /<html[\s>]/i.test(text)
+  );
+}
+
+async function fetchHtmlViaWorkerProxy(url, params) {
+  const proxyUrl = buildHtmlProxyUrl(url, params);
+  if (!proxyUrl) throw new Error("html proxy base missing");
+  const headers = getDmmProbeWorkerHeaders(params || {});
+  headers.Accept = "text/html,application/json";
+  const res = await Widget.http.get(proxyUrl, {
+    headers,
+    allow_redirects: true,
+    timeout: HTML_PROXY_TIMEOUT_MS,
+  });
+  if (!res || res.data === undefined || res.data === null) {
+    throw new Error("proxy empty response");
+  }
+  const status = Number(res.status || res.statusCode || 0);
+  if (status >= 400) throw new Error("proxy HTTP " + status);
+  const html = typeof res.data === "string" ? res.data : String(res.data);
+  if (!isUsableProxiedKanavHtml(html)) throw new Error("proxy returned unusable html");
+  return html;
 }
 
 function parseDmmProbeWorkerResponse(res) {
@@ -1356,7 +1424,18 @@ function parseVideoList(html) {
 }
 
 
-async function fetchHtml(url) {
+async function fetchHtml(url, params) {
+  params = params || {};
+  if (getHtmlProxyWorkerBase(params)) {
+    try {
+      return await fetchHtmlViaWorkerProxy(url, params);
+    } catch (proxyErr) {
+      console.error(
+        "[kanav] html proxy failed, fallback direct:",
+        proxyErr && proxyErr.message ? proxyErr.message : proxyErr
+      );
+    }
+  }
   const res = await Widget.http.get(url, { headers: { "User-Agent": UA } });
   return typeof res.data === "string" ? res.data : String(res.data);
 }
@@ -1380,11 +1459,8 @@ function buildHotListUrl(page) {
 }
 async function loadCategory(categoryId, params) {
   const page = Number(params.page || 1);
-  const res = await Widget.http.get(
-    `${BASE}/index.php/vod/type/id/${categoryId}/page/${page}.html`,
-    { headers: { "User-Agent": UA } }
-  );
-  return parseVideoListWithCovers(res.data, params);
+  const url = `${BASE}/index.php/vod/type/id/${categoryId}/page/${page}.html`;
+  return parseVideoListWithCovers(await fetchHtml(url, params), params);
 }
 
 async function loadCnSub(params)     { return loadCategory("1",  params); }
@@ -1456,9 +1532,13 @@ function decodeMacPlayerUrl(playerData) {
   return safeUriDecode(b64Decode(rawUrl));
 }
 
-async function fetchDetailHtml(link) {
-  const res = await Widget.http.get(String(link), { headers: DETAIL_HEADERS });
-  return typeof res.data === "string" ? res.data : String(res.data || "");
+async function fetchDetailHtml(link, params) {
+  try {
+    return await fetchHtml(String(link), params || {});
+  } catch (e) {
+    const res = await Widget.http.get(String(link), { headers: DETAIL_HEADERS });
+    return typeof res.data === "string" ? res.data : String(res.data || "");
+  }
 }
 
 function htmlLooksPlayable(html) {
@@ -1574,9 +1654,6 @@ async function loadHot(params) {
 async function search(params = {}) {
   const keyword = params.keyword || "";
   const page = Number(params.page || 1);
-  const res = await Widget.http.get(
-    `${BASE}/index.php/vod/search/by/time_add/page/${page}/wd/${encodeURIComponent(keyword)}.html`,
-    { headers: { "User-Agent": UA } }
-  );
-  return parseVideoListWithCovers(res.data, params);
+  const url = `${BASE}/index.php/vod/search/by/time_add/page/${page}/wd/${encodeURIComponent(keyword)}.html`;
+  return parseVideoListWithCovers(await fetchHtml(url, params), params);
 }
