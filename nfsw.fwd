@@ -158,15 +158,6 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javday_int.js"
     },
     {
-      "id": "javday_pro_final_mak",
-      "title": "JAVDay_ovo",
-      "description": "简易的javday模块",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.2",
-      "author": "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javdayovo.js"
-    },
-    {
       "id": "Pornhub_int",
       "title": "Pornhub",
       "description": "網路收集到的模塊",
