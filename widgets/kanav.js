@@ -1250,6 +1250,44 @@ function hasVerifiedDmmCover(candidate, siteFallback) {
   return url !== siteFallback;
 }
 
+function pad2(n) {
+  const s = String(n || "");
+  return s.length < 2 ? "0" + s : s;
+}
+
+/** 规范化为 VideoItem.releaseDate 所需的 YYYY-MM-DD（见 SKILL.md） */
+function normalizeReleaseDate(text) {
+  if (!text) return "";
+  const m = String(text).match(/(20\d{2})\s*[\/\-年.]\s*(\d{1,2})\s*[\/\-月.]\s*(\d{1,2})/);
+  if (!m) return "";
+  return m[1] + "-" + pad2(m[2]) + "-" + pad2(m[3]);
+}
+
+function extractCardReleaseDate($, el) {
+  const entryTitle = $(el).find(".entry-title");
+  if (!entryTitle || !entryTitle.length) return "";
+  const linkText = entryTitle.find("a").first().text() || "";
+  const fullText = entryTitle.text() || "";
+  // 日期在 <a> 之后：…</a> 2026 / 07 / 20
+  const afterLink = linkText ? fullText.replace(linkText, " ") : fullText;
+  return normalizeReleaseDate(afterLink) || normalizeReleaseDate(fullText);
+}
+
+function extractDetailReleaseDate($, html) {
+  let releaseDate = "";
+  $("a.btn, a[rel='tag'], .btn, .video-info a, .countext a").each((_, el) => {
+    if (releaseDate) return;
+    const t = ($(el).text() || "").trim();
+    if (!/(上映日期|发行日期|公開日|発売日)/.test(t)) return;
+    releaseDate = normalizeReleaseDate(t);
+  });
+  if (releaseDate) return releaseDate;
+  const match = String(html || "").match(
+    /(?:上映日期|发行日期|公開日|発売日)[:：\s]*(\d{4}\s*[\/\-年.]\s*\d{1,2}\s*[\/\-月.]\s*\d{1,2})/
+  );
+  return match ? normalizeReleaseDate(match[1]) : "";
+}
+
 function mapVideoCard($, el, baseUrl) {
   const videoItem = $(el).find(".video-item");
   const entryTitle = $(el).find(".entry-title");
@@ -1271,6 +1309,7 @@ function mapVideoCard($, el, baseUrl) {
   const detailUrl = normalizeDetailLink(href.startsWith("http") ? href : baseUrl + href);
   const code = extractKanavMovieCode(title);
   const rating = extractCardRating($, el);
+  const releaseDate = extractCardReleaseDate($, el);
   const item = {
     id: code || href,
     type: "url",
@@ -1281,6 +1320,7 @@ function mapVideoCard($, el, baseUrl) {
     rating: rating || 0,
   };
   if (code) item.matchCode = code;
+  if (releaseDate) item.releaseDate = releaseDate;
   if (remark) item.description = remark;
   else if (code) item.description = "番号: " + code;
   return item;
@@ -1295,6 +1335,7 @@ function parseDetailExtras(html, link) {
     $("h1").first().text().trim() ||
     "";
   const rating = parseDetailRating($, html);
+  const releaseDate = extractDetailReleaseDate($, html);
 
   const backdropPaths = [];
   const seen = {};
@@ -1317,7 +1358,7 @@ function parseDetailExtras(html, link) {
     });
   });
 
-  return { title, description, backdropPaths, relatedItems, rating };
+  return { title, description, backdropPaths, relatedItems, rating, releaseDate };
 }
 
 function buildDetailItem(link, videoUrl, customHeaders, extras) {
@@ -1341,6 +1382,7 @@ function buildDetailItem(link, videoUrl, customHeaders, extras) {
   if (extras.title) item.title = extras.title;
   if (extras.description) item.description = extras.description;
   else if (code) item.description = "番号: " + code;
+  if (extras.releaseDate) item.releaseDate = extras.releaseDate;
   if (extras.backdropPath) item.backdropPath = extras.backdropPath;
   if (extras.posterPath) item.posterPath = extras.posterPath;
   if (extras.detailPoster) item.detailPoster = extras.detailPoster;
