@@ -1586,6 +1586,16 @@ function categoryModuleParams(options) {
       ],
       value: "published",
     },
+    {
+      name: "list_filter",
+      title: "\u4f5c\u54c1\u7b5b\u9009",
+      type: "enumeration",
+      enumOptions: [
+        { title: "\u5168\u90e8", value: "all" },
+        { title: "\u6709\u78c1\u529b", value: "download" },
+      ],
+      value: "all",
+    },
     { name: "page", title: "\u4f5c\u54c1\u9875\u7801", type: "page" },
   ];
 }
@@ -1593,9 +1603,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.5.3",
+  version: "2.5.4",
   requiredVersion: "0.0.1",
-  description: "获取 JavDB 影片列表、演员/系列/标签/片商",
+  description: "获取 JavDB 影片列表、演员/系列/标签/片商，支持有磁力筛选",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -3122,6 +3132,16 @@ function applyCategorySort(path, sortBy) {
   return path + (path.indexOf("?") >= 0 ? "&" : "?") + "sort_type=" + sortType;
 }
 
+function applyCategoryListFilter(path, listFilter) {
+  if (!path) return path;
+  var filter = String(listFilter || "all");
+  if (filter === "all" || filter === "") return path;
+  if (filter === "download") {
+    return path + (path.indexOf("?") >= 0 ? "&" : "?") + "f=download";
+  }
+  return path;
+}
+
 async function loadPage(params) {
   try {
     params = syncCategoryParams(params);
@@ -3131,6 +3151,7 @@ async function loadPage(params) {
     }
     var sortBy = String(params.sort_by || "published");
     var path = applyCategorySort(resolveCategoryListPath(params), sortBy);
+    path = applyCategoryListFilter(path, params.list_filter);
     if (!path) {
       throw new Error("请先在参数中选择分类项（演员/系列/标签/片商）");
     }
