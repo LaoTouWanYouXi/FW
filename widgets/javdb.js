@@ -3,7 +3,14 @@
  * 抓取影片列表与详情（名称、横向封面、详情海报、剧照、简介）。
  */
 
-var JAVDB_SORT_FILTER = ["published", "score", "fav"];
+var JAVDB_SORT_FILTER = [
+  "published",
+  "score",
+  "fav",
+  "published_download",
+  "score_download",
+  "fav_download",
+];
 var GLOBAL_PARAM_KEYS = ["baseUrl", "locale"];
 
 function syncGlobalParams(params) {
@@ -1583,18 +1590,11 @@ function categoryModuleParams(options) {
         { title: "\u6700\u8fd1\u4e0a\u5e02", value: "published" },
         { title: "\u6700\u9ad8\u8bc4\u5206", value: "score" },
         { title: "\u6700\u591a\u6536\u85cf", value: "fav" },
+        { title: "\u6700\u8fd1\u4e0a\u5e02(\u6709\u78c1\u529b)", value: "published_download" },
+        { title: "\u6700\u9ad8\u8bc4\u5206(\u6709\u78c1\u529b)", value: "score_download" },
+        { title: "\u6700\u591a\u6536\u85cf(\u6709\u78c1\u529b)", value: "fav_download" },
       ],
       value: "published",
-    },
-    {
-      name: "list_filter",
-      title: "\u4f5c\u54c1\u7b5b\u9009",
-      type: "enumeration",
-      enumOptions: [
-        { title: "\u5168\u90e8", value: "all" },
-        { title: "\u6709\u78c1\u529b", value: "download" },
-      ],
-      value: "all",
     },
     { name: "page", title: "\u4f5c\u54c1\u9875\u7801", type: "page" },
   ];
@@ -1603,7 +1603,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.5.4",
+  version: "2.5.5",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商，支持有磁力筛选",
   author: "老头",
@@ -3126,18 +3126,15 @@ function isBrowseLibraryPath(path) {
 
 function applyCategorySort(path, sortBy) {
   if (!path) return path;
+  var raw = String(sortBy || "published");
+  var withDownload = /_download$/.test(raw);
+  var sortKey = withDownload ? raw.replace(/_download$/, "") : raw;
   var sortMap = { published: "0", score: "1", fav: "2" };
-  var sortType = sortMap[String(sortBy || "published")];
+  var sortType = sortMap[sortKey];
   if (sortType === undefined) return path;
-  return path + (path.indexOf("?") >= 0 ? "&" : "?") + "sort_type=" + sortType;
-}
-
-function applyCategoryListFilter(path, listFilter) {
-  if (!path) return path;
-  var filter = String(listFilter || "all");
-  if (filter === "all" || filter === "") return path;
-  if (filter === "download") {
-    return path + (path.indexOf("?") >= 0 ? "&" : "?") + "f=download";
+  path = path + (path.indexOf("?") >= 0 ? "&" : "?") + "sort_type=" + sortType;
+  if (withDownload) {
+    path = path + (path.indexOf("?") >= 0 ? "&" : "?") + "f=download";
   }
   return path;
 }
@@ -3151,7 +3148,6 @@ async function loadPage(params) {
     }
     var sortBy = String(params.sort_by || "published");
     var path = applyCategorySort(resolveCategoryListPath(params), sortBy);
-    path = applyCategoryListFilter(path, params.list_filter);
     if (!path) {
       throw new Error("请先在参数中选择分类项（演员/系列/标签/片商）");
     }
