@@ -1603,7 +1603,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.5.8",
+  version: "2.6.0",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商，支持有磁力筛选",
   author: "老头",
@@ -1741,11 +1741,8 @@ WidgetMetadata = {
 var JAVDB_DEFAULT_BASE = "https://javdb.com";
 var JAVDB_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-// javdb 会封 Cloudflare Workers 出口（上游 403），此处不再走边缘 HTML 代理。
 var HTML_FETCH_CACHE = {};
 var HTML_FETCH_CACHE_TTL_MS = 3 * 60 * 1000;
-var HTML_FETCH_MIN_INTERVAL_MS = 450;
-var HTML_FETCH_LAST_AT = 0;
 
 function javdbBase(params) {
   var base = String((params && params.baseUrl) || JAVDB_DEFAULT_BASE).replace(/\/+$/, "");
@@ -1757,26 +1754,11 @@ function javdbLocale(params) {
 }
 
 function javdbHeaders(params) {
-  var base = javdbBase(params);
   return {
     "User-Agent": JAVDB_UA,
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    Referer: base + "/",
   };
-}
-
-function sleepMs(ms) {
-  return new Promise(function (resolve) {
-    setTimeout(resolve, Math.max(0, Number(ms) || 0));
-  });
-}
-
-async function throttleHtmlFetch() {
-  var now = Date.now();
-  var wait = HTML_FETCH_MIN_INTERVAL_MS - (now - HTML_FETCH_LAST_AT);
-  if (wait > 0) await sleepMs(wait);
-  HTML_FETCH_LAST_AT = Date.now();
 }
 
 function readHtmlFetchCache(url) {
@@ -3046,39 +3028,11 @@ function isBrowseMovieListPath(path) {
   return clean.indexOf("/rankings/") === 0;
 }
 
-function isBlockedHtml(html) {
-  var text = String(html || "");
-  if (!text) return false;
-  // 仅识别真正的验证/封禁页；不要用裸 "Cloudflare"（正常 javdb 页面里也常见）
-  if (/just a moment\.\.\./i.test(text)) return true;
-  if (/cf-browser-verification|challenge-platform|cdn-cgi\/challenge/i.test(text)) return true;
-  if (/attention required/i.test(text) && /cloudflare/i.test(text) && !/movie-list|video-title|movie-panel-info/i.test(text)) {
-    return true;
-  }
-  if (/sorry,\s*you have been blocked/i.test(text)) return true;
-  // javdb 对异常客户端/边缘 IP 的短封禁页
-  if (/banned your access|browser'?s behaving/i.test(text)) return true;
-  if (
-    text.length < 2500 &&
-    /禁止訪問|禁止访问|行為異常|行为异常|異常行為|异常行为/i.test(text) &&
-    !/movie-list|href="\/v\//i.test(text)
-  ) {
-    return true;
-  }
-  if (/訪問過於頻繁|访问过于频繁|请求过于频繁|too many requests|rate.?limit/i.test(text)) return true;
-  if (
-    /此內容需要登入|需要登入才能查看|需要登录才能查看/i.test(text) &&
-    !/movie-list|href="\/v\//i.test(text)
-  ) {
-    return true;
-  }
-  return false;
-}
-
 function isCategoryErrorHtml(html) {
   var text = String(html || "");
   if (!text) return true;
-  if (isBlockedHtml(text)) return true;
+  if (/Cloudflare|Attention Required|Sorry, you have been blocked/i.test(text)) return true;
+  if (/此內容需要登入|需要登录|需要登入才能查看/i.test(text)) return true;
   if (/404|Not Found|页面不存在|Page Not Found/i.test(text) && text.indexOf("movie-list") < 0 && text.indexOf('class="item"') < 0 && text.indexOf('href="/v/') < 0) {
     return true;
   }
@@ -3086,40 +3040,18 @@ function isCategoryErrorHtml(html) {
 }
 
 async function fetchHtml(url, params) {
-  params = params || {};
   var cached = readHtmlFetchCache(url);
-  if (cached) {
-    if (isBlockedHtml(cached)) {
-      delete HTML_FETCH_CACHE[url];
-    } else {
-      return cached;
-    }
-  }
-
-  await throttleHtmlFetch();
+  if (cached) return cached;
 
   var res = await Widget.http.get(url, {
     headers: javdbHeaders(params),
     allow_redirects: true,
   });
-  if (!res || res.data === undefined || res.data === null) {
-    throw new Error("空响应: " + url);
+  if (!res || !res.data) throw new Error("空响应: " + url);
+  if (res.status && Number(res.status) >= 400) {
+    throw new Error("HTTP " + res.status + " " + url);
   }
-  var status = Number(res.status || res.statusCode || 0);
-  var html = typeof res.data === "string" ? res.data : String(res.data);
-
-  // 4xx/5xx：优先按正文判断是否封禁页，避免把瞬时 HTTP 错误缓存成“风控”
-  if (status >= 400) {
-    if (isBlockedHtml(html)) {
-      throw new Error("站点风控/验证拦截，请稍后再试");
-    }
-    throw new Error("HTTP " + status + " " + url);
-  }
-
-  if (isBlockedHtml(html)) {
-    throw new Error("站点风控/验证拦截，请稍后再试");
-  }
-
+  var html = res.data;
   writeHtmlFetchCache(url, html);
   return html;
 }
@@ -3644,7 +3576,6 @@ async function fetchMovieList(path, params) {
   }
   var candidates = buildCategoryFetchCandidates(basePath);
   var lastError = null;
-  var sawHardError = false;
   var sawValidEmpty = false;
   for (var i = 0; i < candidates.length; i++) {
     try {
@@ -3652,39 +3583,26 @@ async function fetchMovieList(path, params) {
       var html = await fetchHtml(url, params);
       var items = await enrichMovieItems(parseListItems(html, params), params);
       if (items.length) return items;
-      if (isBlockedHtml(html)) {
-        throw new Error("站点风控/验证拦截，请稍后再试");
-      }
       if (isCategoryErrorHtml(html)) {
-        sawHardError = true;
         lastError = new Error("分类页面不可用: " + candidates[i]);
         continue;
       }
-      // 页面可解析但当前页无片：不再继续盲打候选/搜索，避免放大请求
+      // 页面可解析但无片：不再继续盲打候选/搜索回退
       sawValidEmpty = true;
       lastError = new Error("分类页面无影片: " + candidates[i]);
       break;
     } catch (err) {
       lastError = err;
-      if (err && /风控|验证拦截/.test(String(err.message || err))) {
-        throw err;
-      }
-      sawHardError = true;
     }
   }
-  if (sawValidEmpty) {
-    throw lastError || new Error("未解析到影片列表");
-  }
-  // 仅在候选均失败（404/网络）时才搜索回退；风控场景已在上方直接抛出
-  var fallbackTitle = resolveCategorySearchFallback(params, basePath);
-  if (fallbackTitle && sawHardError) {
-    try {
-      return await fetchSearchMovieList(params, fallbackTitle);
-    } catch (searchErr) {
-      if (searchErr && /风控|验证拦截/.test(String(searchErr.message || searchErr))) {
-        throw searchErr;
+  if (!sawValidEmpty) {
+    var fallbackTitle = resolveCategorySearchFallback(params, basePath);
+    if (fallbackTitle) {
+      try {
+        return await fetchSearchMovieList(params, fallbackTitle);
+      } catch (searchErr) {
+        console.error("[javdb] 分类搜索回退失败:", searchErr.message || searchErr);
       }
-      console.error("[javdb] 分类搜索回退失败:", searchErr.message || searchErr);
     }
   }
   throw lastError || new Error("未解析到影片列表");
