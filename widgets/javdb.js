@@ -1603,7 +1603,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.6.1",
+  version: "2.6.2",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商，支持有磁力筛选",
   author: "老头",
@@ -3104,13 +3104,8 @@ async function enrichMovieItems(rawItems, params) {
   for (var i = 0; i < rawItems.length; i++) {
     if (rawItems[i].code && isValidJavCatalogCode(rawItems[i].code)) codes.push(rawItems[i].code);
   }
-  // 列表不等封面探测拖死：最多等 3.5s，超时用本地/CDN 封面继续出片
-  await Promise.race([
-    prefetchDmmProbeCovers(codes, params),
-    new Promise(function (resolve) {
-      setTimeout(resolve, 3500);
-    }),
-  ]);
+  // 不使用 setTimeout（部分 Widget 运行时不支持）；依赖批量探测自身 timeout
+  await prefetchDmmProbeCovers(codes, params);
 
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
