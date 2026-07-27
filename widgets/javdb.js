@@ -1603,7 +1603,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.5.7",
+  version: "2.5.8",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商，支持有磁力筛选",
   author: "老头",
@@ -1741,16 +1741,11 @@ WidgetMetadata = {
 var JAVDB_DEFAULT_BASE = "https://javdb.com";
 var JAVDB_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-// javdb 会封禁 Cloudflare Workers 出口 IP（上游 403），默认不走边缘代理；
-// 需要时可设 javdb.global.htmlProxyWorker（如 https://move.laotou.ccwu.cc）。
-var HTML_PROXY_WORKER_BASE = "";
+// javdb 会封 Cloudflare Workers 出口（上游 403），此处不再走边缘 HTML 代理。
 var HTML_FETCH_CACHE = {};
 var HTML_FETCH_CACHE_TTL_MS = 3 * 60 * 1000;
 var HTML_FETCH_MIN_INTERVAL_MS = 450;
 var HTML_FETCH_LAST_AT = 0;
-var HTML_FETCH_PROXY_TIMEOUT_MS = 8000;
-var HTML_PROXY_COOLDOWN_MS = 15 * 60 * 1000;
-var HTML_PROXY_DISABLED_UNTIL = 0;
 
 function javdbBase(params) {
   var base = String((params && params.baseUrl) || JAVDB_DEFAULT_BASE).replace(/\/+$/, "");
@@ -1769,17 +1764,6 @@ function javdbHeaders(params) {
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     Referer: base + "/",
   };
-}
-
-function getHtmlProxyWorkerBase(params) {
-  params = params || {};
-  var base = params.htmlProxyWorker;
-  if (!base) {
-    var stored = Widget.storage.get("javdb.global.htmlProxyWorker");
-    if (stored) base = stored;
-  }
-  if (!base) base = HTML_PROXY_WORKER_BASE;
-  return String(base || "").replace(/\/+$/, "");
 }
 
 function sleepMs(ms) {
@@ -1808,17 +1792,6 @@ function readHtmlFetchCache(url) {
 function writeHtmlFetchCache(url, html) {
   if (!url || !html) return;
   HTML_FETCH_CACHE[url] = { html: html, at: Date.now() };
-}
-
-function responseHeader(res, name) {
-  if (!res || !name) return "";
-  var headers = res.headers || res.header || null;
-  if (!headers) return "";
-  var key = String(name);
-  if (typeof headers.get === "function") {
-    return String(headers.get(key) || headers.get(key.toLowerCase()) || "");
-  }
-  return String(headers[key] || headers[key.toLowerCase()] || "");
 }
 
 function absUrl(url, base) {
@@ -3076,10 +3049,29 @@ function isBrowseMovieListPath(path) {
 function isBlockedHtml(html) {
   var text = String(html || "");
   if (!text) return false;
-  if (/Just a moment|cf-browser-verification|challenge-platform|cdn-cgi\/challenge/i.test(text)) return true;
-  if (/Cloudflare|Attention Required|Sorry, you have been blocked/i.test(text)) return true;
-  if (/此內容需要登入|需要登录|需要登入才能查看/i.test(text)) return true;
-  if (/rate.?limit|too many requests|訪問過於頻繁|访问过于频繁|请求过于频繁/i.test(text)) return true;
+  // 仅识别真正的验证/封禁页；不要用裸 "Cloudflare"（正常 javdb 页面里也常见）
+  if (/just a moment\.\.\./i.test(text)) return true;
+  if (/cf-browser-verification|challenge-platform|cdn-cgi\/challenge/i.test(text)) return true;
+  if (/attention required/i.test(text) && /cloudflare/i.test(text) && !/movie-list|video-title|movie-panel-info/i.test(text)) {
+    return true;
+  }
+  if (/sorry,\s*you have been blocked/i.test(text)) return true;
+  // javdb 对异常客户端/边缘 IP 的短封禁页
+  if (/banned your access|browser'?s behaving/i.test(text)) return true;
+  if (
+    text.length < 2500 &&
+    /禁止訪問|禁止访问|行為異常|行为异常|異常行為|异常行为/i.test(text) &&
+    !/movie-list|href="\/v\//i.test(text)
+  ) {
+    return true;
+  }
+  if (/訪問過於頻繁|访问过于频繁|请求过于频繁|too many requests|rate.?limit/i.test(text)) return true;
+  if (
+    /此內容需要登入|需要登入才能查看|需要登录才能查看/i.test(text) &&
+    !/movie-list|href="\/v\//i.test(text)
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -3093,80 +3085,41 @@ function isCategoryErrorHtml(html) {
   return false;
 }
 
-function markHtmlProxyCooldown() {
-  HTML_PROXY_DISABLED_UNTIL = Date.now() + HTML_PROXY_COOLDOWN_MS;
-}
-
-function isHtmlProxyInCooldown() {
-  return Date.now() < HTML_PROXY_DISABLED_UNTIL;
-}
-
-async function fetchHtmlViaProxy(url, params) {
-  var base = getHtmlProxyWorkerBase(params);
-  if (!base || isHtmlProxyInCooldown()) {
-    return { html: null, attempted: false };
-  }
-  try {
-    var proxyUrl = base + "/html?url=" + encodeURIComponent(url);
-    var headers = Object.assign({}, getDmmProbeWorkerHeaders(params), {
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    });
-    var res = await Widget.http.get(proxyUrl, {
-      headers: headers,
-      timeout: HTML_FETCH_PROXY_TIMEOUT_MS,
-      allow_redirects: true,
-    });
-    if (!res || res.data === undefined || res.data === null) {
-      markHtmlProxyCooldown();
-      return { html: null, attempted: true };
+async function fetchHtml(url, params) {
+  params = params || {};
+  var cached = readHtmlFetchCache(url);
+  if (cached) {
+    if (isBlockedHtml(cached)) {
+      delete HTML_FETCH_CACHE[url];
+    } else {
+      return cached;
     }
-    var status = Number(res.status || res.statusCode || 0);
-    var html = typeof res.data === "string" ? res.data : String(res.data);
-    var usable = responseHeader(res, "X-Proxy-Usable");
-    // 代理自身 4xx/5xx、或上游对 CF 边缘 IP 的 403/Challenge：一律视为代理失败，交给直连
-    if (usable === "0" || status >= 400 || !html || isBlockedHtml(html)) {
-      markHtmlProxyCooldown();
-      return { html: null, attempted: true };
-    }
-    HTML_PROXY_DISABLED_UNTIL = 0;
-    return { html: html, attempted: true };
-  } catch (err) {
-    markHtmlProxyCooldown();
-    return { html: null, attempted: true };
   }
-}
 
-async function fetchHtmlDirect(url, params) {
+  await throttleHtmlFetch();
+
   var res = await Widget.http.get(url, {
     headers: javdbHeaders(params),
     allow_redirects: true,
   });
-  if (!res || !res.data) throw new Error("空响应: " + url);
-  if (res.status && Number(res.status) >= 400) {
-    throw new Error("HTTP " + res.status + " " + url);
+  if (!res || res.data === undefined || res.data === null) {
+    throw new Error("空响应: " + url);
   }
-  return typeof res.data === "string" ? res.data : String(res.data);
-}
+  var status = Number(res.status || res.statusCode || 0);
+  var html = typeof res.data === "string" ? res.data : String(res.data);
 
-async function fetchHtml(url, params) {
-  params = params || {};
-  var cached = readHtmlFetchCache(url);
-  if (cached) return cached;
-
-  await throttleHtmlFetch();
-
-  // 优先代理（若已配置）；失败必须回退直连。
-  // 实测 javdb 会封 CF Workers 出口（上游 403），不可把代理失败当成整站风控。
-  var proxyResult = await fetchHtmlViaProxy(url, params);
-  if (proxyResult.html) {
-    writeHtmlFetchCache(url, proxyResult.html);
-    return proxyResult.html;
+  // 4xx/5xx：优先按正文判断是否封禁页，避免把瞬时 HTTP 错误缓存成“风控”
+  if (status >= 400) {
+    if (isBlockedHtml(html)) {
+      throw new Error("站点风控/验证拦截，请稍后再试");
+    }
+    throw new Error("HTTP " + status + " " + url);
   }
 
-  var html = await fetchHtmlDirect(url, params);
   if (isBlockedHtml(html)) {
     throw new Error("站点风控/验证拦截，请稍后再试");
   }
+
   writeHtmlFetchCache(url, html);
   return html;
 }
