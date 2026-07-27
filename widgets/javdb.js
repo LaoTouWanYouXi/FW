@@ -1603,7 +1603,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.6.0",
+  version: "2.6.1",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商，支持有磁力筛选",
   author: "老头",
@@ -2241,7 +2241,7 @@ var DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
 var DMM_PROBE_WORKER_CACHE = {};
 var DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
 var DMM_PROBE_BATCH_SIZE = 20;
-var DMM_PROBE_BATCH_TIMEOUT_MS = 60000;
+var DMM_PROBE_BATCH_TIMEOUT_MS = 10000;
 var DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
 var DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
 var DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
@@ -2415,10 +2415,10 @@ async function prefetchDmmProbeCovers(codes, params) {
     var chunk = pending.slice(start, start + batchSize);
     var ok = await fetchDmmProbeCoverBatch(chunk, params);
     if (!ok) {
-      // 批量失败时回退单号，避免整页无封面
+      // 批量失败不再串行单号回退（最坏可达数分钟）；列表用本地/CDN 封面兜底
       for (var j = 0; j < chunk.length; j++) {
         if (!Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, chunk[j])) {
-          await fetchDmmProbeCover(chunk[j], params);
+          DMM_PROBE_WORKER_CACHE[chunk[j]] = null;
         }
       }
     }
@@ -3031,8 +3031,12 @@ function isBrowseMovieListPath(path) {
 function isCategoryErrorHtml(html) {
   var text = String(html || "");
   if (!text) return true;
-  if (/Cloudflare|Attention Required|Sorry, you have been blocked/i.test(text)) return true;
-  if (/此內容需要登入|需要登录|需要登入才能查看/i.test(text)) return true;
+  // 勿裸匹配 Cloudflare：正常页面脚本里也常见，误判会多打搜索回退拖慢加载
+  if (/just a moment\.\.\./i.test(text)) return true;
+  if (/cf-browser-verification|challenge-platform|cdn-cgi\/challenge/i.test(text)) return true;
+  if (/attention required/i.test(text) && /cloudflare/i.test(text) && !/movie-list|video-title/i.test(text)) return true;
+  if (/sorry,\s*you have been blocked/i.test(text)) return true;
+  if (/此內容需要登入|需要登录|需要登入才能查看/i.test(text) && !/movie-list|href="\/v\//i.test(text)) return true;
   if (/404|Not Found|页面不存在|Page Not Found/i.test(text) && text.indexOf("movie-list") < 0 && text.indexOf('class="item"') < 0 && text.indexOf('href="/v/') < 0) {
     return true;
   }
@@ -3100,7 +3104,13 @@ async function enrichMovieItems(rawItems, params) {
   for (var i = 0; i < rawItems.length; i++) {
     if (rawItems[i].code && isValidJavCatalogCode(rawItems[i].code)) codes.push(rawItems[i].code);
   }
-  await prefetchDmmProbeCovers(codes, params);
+  // 列表不等封面探测拖死：最多等 3.5s，超时用本地/CDN 封面继续出片
+  await Promise.race([
+    prefetchDmmProbeCovers(codes, params),
+    new Promise(function (resolve) {
+      setTimeout(resolve, 3500);
+    }),
+  ]);
 
   var items = [];
   for (var i = 0; i < rawItems.length; i++) {
