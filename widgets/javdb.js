@@ -1603,7 +1603,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.5.5",
+  version: "2.5.7",
   requiredVersion: "0.0.1",
   description: "获取 JavDB 影片列表、演员/系列/标签/片商，支持有磁力筛选",
   author: "老头",
@@ -1741,6 +1741,16 @@ WidgetMetadata = {
 var JAVDB_DEFAULT_BASE = "https://javdb.com";
 var JAVDB_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+// javdb 会封禁 Cloudflare Workers 出口 IP（上游 403），默认不走边缘代理；
+// 需要时可设 javdb.global.htmlProxyWorker（如 https://move.laotou.ccwu.cc）。
+var HTML_PROXY_WORKER_BASE = "";
+var HTML_FETCH_CACHE = {};
+var HTML_FETCH_CACHE_TTL_MS = 3 * 60 * 1000;
+var HTML_FETCH_MIN_INTERVAL_MS = 450;
+var HTML_FETCH_LAST_AT = 0;
+var HTML_FETCH_PROXY_TIMEOUT_MS = 8000;
+var HTML_PROXY_COOLDOWN_MS = 15 * 60 * 1000;
+var HTML_PROXY_DISABLED_UNTIL = 0;
 
 function javdbBase(params) {
   var base = String((params && params.baseUrl) || JAVDB_DEFAULT_BASE).replace(/\/+$/, "");
@@ -1752,11 +1762,63 @@ function javdbLocale(params) {
 }
 
 function javdbHeaders(params) {
+  var base = javdbBase(params);
   return {
     "User-Agent": JAVDB_UA,
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    Referer: base + "/",
   };
+}
+
+function getHtmlProxyWorkerBase(params) {
+  params = params || {};
+  var base = params.htmlProxyWorker;
+  if (!base) {
+    var stored = Widget.storage.get("javdb.global.htmlProxyWorker");
+    if (stored) base = stored;
+  }
+  if (!base) base = HTML_PROXY_WORKER_BASE;
+  return String(base || "").replace(/\/+$/, "");
+}
+
+function sleepMs(ms) {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, Math.max(0, Number(ms) || 0));
+  });
+}
+
+async function throttleHtmlFetch() {
+  var now = Date.now();
+  var wait = HTML_FETCH_MIN_INTERVAL_MS - (now - HTML_FETCH_LAST_AT);
+  if (wait > 0) await sleepMs(wait);
+  HTML_FETCH_LAST_AT = Date.now();
+}
+
+function readHtmlFetchCache(url) {
+  var entry = HTML_FETCH_CACHE[url];
+  if (!entry || !entry.html) return null;
+  if (Date.now() - Number(entry.at || 0) > HTML_FETCH_CACHE_TTL_MS) {
+    delete HTML_FETCH_CACHE[url];
+    return null;
+  }
+  return entry.html;
+}
+
+function writeHtmlFetchCache(url, html) {
+  if (!url || !html) return;
+  HTML_FETCH_CACHE[url] = { html: html, at: Date.now() };
+}
+
+function responseHeader(res, name) {
+  if (!res || !name) return "";
+  var headers = res.headers || res.header || null;
+  if (!headers) return "";
+  var key = String(name);
+  if (typeof headers.get === "function") {
+    return String(headers.get(key) || headers.get(key.toLowerCase()) || "");
+  }
+  return String(headers[key] || headers[key.toLowerCase()] || "");
 }
 
 function absUrl(url, base) {
@@ -2998,10 +3060,9 @@ function buildCategoryFetchCandidates(path) {
     candidates.push(value);
   }
   add(path);
+  // tags 仅在明确带查询时保留去参兜底；裸路径不再默认追加 ?c10=1，避免每次多打一枪
   if (path.indexOf("/tags/") === 0 && path.indexOf("?") >= 0) {
     add(path.split("?")[0]);
-  } else if (path.indexOf("/tags/") === 0) {
-    add(path + "?c10=1");
   }
   return candidates;
 }
@@ -3012,18 +3073,70 @@ function isBrowseMovieListPath(path) {
   return clean.indexOf("/rankings/") === 0;
 }
 
+function isBlockedHtml(html) {
+  var text = String(html || "");
+  if (!text) return false;
+  if (/Just a moment|cf-browser-verification|challenge-platform|cdn-cgi\/challenge/i.test(text)) return true;
+  if (/Cloudflare|Attention Required|Sorry, you have been blocked/i.test(text)) return true;
+  if (/此內容需要登入|需要登录|需要登入才能查看/i.test(text)) return true;
+  if (/rate.?limit|too many requests|訪問過於頻繁|访问过于频繁|请求过于频繁/i.test(text)) return true;
+  return false;
+}
+
 function isCategoryErrorHtml(html) {
   var text = String(html || "");
   if (!text) return true;
-  if (/Cloudflare|Attention Required|Sorry, you have been blocked/i.test(text)) return true;
-  if (/此內容需要登入|需要登录|需要登入才能查看/i.test(text)) return true;
+  if (isBlockedHtml(text)) return true;
   if (/404|Not Found|页面不存在|Page Not Found/i.test(text) && text.indexOf("movie-list") < 0 && text.indexOf('class="item"') < 0 && text.indexOf('href="/v/') < 0) {
     return true;
   }
   return false;
 }
 
-async function fetchHtml(url, params) {
+function markHtmlProxyCooldown() {
+  HTML_PROXY_DISABLED_UNTIL = Date.now() + HTML_PROXY_COOLDOWN_MS;
+}
+
+function isHtmlProxyInCooldown() {
+  return Date.now() < HTML_PROXY_DISABLED_UNTIL;
+}
+
+async function fetchHtmlViaProxy(url, params) {
+  var base = getHtmlProxyWorkerBase(params);
+  if (!base || isHtmlProxyInCooldown()) {
+    return { html: null, attempted: false };
+  }
+  try {
+    var proxyUrl = base + "/html?url=" + encodeURIComponent(url);
+    var headers = Object.assign({}, getDmmProbeWorkerHeaders(params), {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    });
+    var res = await Widget.http.get(proxyUrl, {
+      headers: headers,
+      timeout: HTML_FETCH_PROXY_TIMEOUT_MS,
+      allow_redirects: true,
+    });
+    if (!res || res.data === undefined || res.data === null) {
+      markHtmlProxyCooldown();
+      return { html: null, attempted: true };
+    }
+    var status = Number(res.status || res.statusCode || 0);
+    var html = typeof res.data === "string" ? res.data : String(res.data);
+    var usable = responseHeader(res, "X-Proxy-Usable");
+    // 代理自身 4xx/5xx、或上游对 CF 边缘 IP 的 403/Challenge：一律视为代理失败，交给直连
+    if (usable === "0" || status >= 400 || !html || isBlockedHtml(html)) {
+      markHtmlProxyCooldown();
+      return { html: null, attempted: true };
+    }
+    HTML_PROXY_DISABLED_UNTIL = 0;
+    return { html: html, attempted: true };
+  } catch (err) {
+    markHtmlProxyCooldown();
+    return { html: null, attempted: true };
+  }
+}
+
+async function fetchHtmlDirect(url, params) {
   var res = await Widget.http.get(url, {
     headers: javdbHeaders(params),
     allow_redirects: true,
@@ -3032,7 +3145,30 @@ async function fetchHtml(url, params) {
   if (res.status && Number(res.status) >= 400) {
     throw new Error("HTTP " + res.status + " " + url);
   }
-  return res.data;
+  return typeof res.data === "string" ? res.data : String(res.data);
+}
+
+async function fetchHtml(url, params) {
+  params = params || {};
+  var cached = readHtmlFetchCache(url);
+  if (cached) return cached;
+
+  await throttleHtmlFetch();
+
+  // 优先代理（若已配置）；失败必须回退直连。
+  // 实测 javdb 会封 CF Workers 出口（上游 403），不可把代理失败当成整站风控。
+  var proxyResult = await fetchHtmlViaProxy(url, params);
+  if (proxyResult.html) {
+    writeHtmlFetchCache(url, proxyResult.html);
+    return proxyResult.html;
+  }
+
+  var html = await fetchHtmlDirect(url, params);
+  if (isBlockedHtml(html)) {
+    throw new Error("站点风控/验证拦截，请稍后再试");
+  }
+  writeHtmlFetchCache(url, html);
+  return html;
 }
 
 function parseListItems(html, params) {
@@ -3169,14 +3305,15 @@ async function parseCategoryDetailPage(html, path, params) {
   var title = textOf($, $("h2.title strong").first()) || textOf($, $("h2 strong").first()) || path.split("/").pop();
   title = javdbTranslateLabelByPath(stripCountSuffix(title), path);
   var avatar = absUrl(attrOf($, $("img.avatar").first(), "src"), base);
-  var movies = await fetchMovieList(path, params);
+  // 复用已拉取的 HTML 统计当前页条目，避免再打一遍同 URL
+  var movieCount = parseListItems(html, params).length;
   return sanitizeDetailOutput({
     id: path.split("/").pop() || encodeLink(path),
     type: "url",
     title: title,
     posterPath: avatar || "",
     detailPoster: avatar || "",
-    description: "共收录 " + movies.length + " 部影片（当前页）",
+    description: "共收录 " + movieCount + " 部影片（当前页）",
     link: encodeLink(path),
   });
 }
@@ -3554,26 +3691,46 @@ async function fetchMovieList(path, params) {
   }
   var candidates = buildCategoryFetchCandidates(basePath);
   var lastError = null;
+  var sawHardError = false;
+  var sawValidEmpty = false;
   for (var i = 0; i < candidates.length; i++) {
     try {
       var url = buildPageUrl(javdbBase(params), candidates[i], params);
       var html = await fetchHtml(url, params);
       var items = await enrichMovieItems(parseListItems(html, params), params);
       if (items.length) return items;
+      if (isBlockedHtml(html)) {
+        throw new Error("站点风控/验证拦截，请稍后再试");
+      }
       if (isCategoryErrorHtml(html)) {
+        sawHardError = true;
         lastError = new Error("分类页面不可用: " + candidates[i]);
         continue;
       }
+      // 页面可解析但当前页无片：不再继续盲打候选/搜索，避免放大请求
+      sawValidEmpty = true;
       lastError = new Error("分类页面无影片: " + candidates[i]);
+      break;
     } catch (err) {
       lastError = err;
+      if (err && /风控|验证拦截/.test(String(err.message || err))) {
+        throw err;
+      }
+      sawHardError = true;
     }
   }
+  if (sawValidEmpty) {
+    throw lastError || new Error("未解析到影片列表");
+  }
+  // 仅在候选均失败（404/网络）时才搜索回退；风控场景已在上方直接抛出
   var fallbackTitle = resolveCategorySearchFallback(params, basePath);
-  if (fallbackTitle) {
+  if (fallbackTitle && sawHardError) {
     try {
       return await fetchSearchMovieList(params, fallbackTitle);
     } catch (searchErr) {
+      if (searchErr && /风控|验证拦截/.test(String(searchErr.message || searchErr))) {
+        throw searchErr;
+      }
       console.error("[javdb] 分类搜索回退失败:", searchErr.message || searchErr);
     }
   }
