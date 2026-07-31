@@ -1602,7 +1602,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.7.7",
+  version: "2.7.9",
   requiredVersion: "0.0.1",
   description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码登录，验证码云端自动识别",
   author: "老头",
@@ -2012,9 +2012,8 @@ function encodeBase64FromBytes(bytes) {
   return out;
 }
 
-function coerceHttpBinaryToBytes(data) {
+function httpDataToByteArray(data) {
   if (data == null) return [];
-  // Forward 有时直接给 number[] / Uint8Array
   if (typeof Uint8Array !== "undefined" && data instanceof Uint8Array) {
     var u = [];
     for (var i = 0; i < data.length; i++) u.push(data[i] & 0xff);
@@ -2026,32 +2025,49 @@ function coerceHttpBinaryToBytes(data) {
     });
   }
   if (typeof data === "object") {
-    if (data.base64 || data.data) return coerceHttpBinaryToBytes(data.base64 || data.data);
-    if (data.bytes && Array.isArray(data.bytes)) return coerceHttpBinaryToBytes(data.bytes);
+    if (data.base64) return httpDataToByteArray(data.base64);
+    if (data.bytes && Array.isArray(data.bytes)) return httpDataToByteArray(data.bytes);
+    if (typeof data.data === "string" || Array.isArray(data.data) || (typeof Uint8Array !== "undefined" && data.data instanceof Uint8Array)) {
+      return httpDataToByteArray(data.data);
+    }
   }
-  if (typeof data !== "string") data = String(data);
-  if (data.indexOf("data:image") === 0) {
-    var comma = data.indexOf(",");
-    data = comma >= 0 ? data.slice(comma + 1) : data;
-  }
-  // 已是 Base64（常见于部分 HTTP 封装对图片的返回）
-  var compact = data.replace(/\s+/g, "");
-  if (/^[A-Za-z0-9+/]+=*$/.test(compact) && compact.length > 200) {
-    try {
-      // 无 atob 时用手工解码前几字节检测；完整解码走 Worker
-      return { __base64: compact };
-    } catch (err) {}
+  var text = typeof data === "string" ? data : String(data);
+  if (/^data:/i.test(text)) {
+    var comma = text.indexOf(",");
+    var meta = text.slice(0, Math.max(0, comma));
+    var payload = comma >= 0 ? text.slice(comma + 1) : text;
+    if (/;base64/i.test(meta)) {
+      // 保留给上层：已是 base64
+      return { __base64: payload.replace(/\s+/g, "") };
+    }
+    text = payload;
   }
   var bytes = [];
-  for (var j = 0; j < data.length; j++) bytes.push(data.charCodeAt(j) & 0xff);
+  for (var j = 0; j < text.length; j++) bytes.push(text.charCodeAt(j) & 0xff);
   return bytes;
 }
 
-function bytesToBase64(data) {
-  var coerced = coerceHttpBinaryToBytes(data);
-  if (coerced && coerced.__base64) return coerced.__base64;
-  if (!coerced || !coerced.length) return "";
-  return encodeBase64FromBytes(coerced);
+function bytesToHex(bytes) {
+  var out = "";
+  for (var i = 0; i < bytes.length; i++) {
+    var h = (bytes[i] & 0xff).toString(16);
+    out += h.length < 2 ? "0" + h : h;
+  }
+  return out;
+}
+
+function peekBytesMagic(bytes) {
+  if (!bytes || bytes.length < 3) return { ok: false, kind: "empty" };
+  if (bytes.__base64) {
+    return { ok: imageMagicOk(bytes.__base64), kind: "base64-wrapped" };
+  }
+  var b0 = bytes[0], b1 = bytes[1], b2 = bytes[2], b3 = bytes[3] || 0;
+  if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46) return { ok: true, kind: "gif" };
+  if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4e && b3 === 0x47) return { ok: true, kind: "png" };
+  if (b0 === 0xff && b1 === 0xd8) return { ok: true, kind: "jpg" };
+  if (b0 === 0x52 && b1 === 0x49 && b2 === 0x46 && b3 === 0x46) return { ok: false, kind: "webp" };
+  if (b0 === 0x3c) return { ok: false, kind: "html" }; // '<'
+  return { ok: false, kind: "unknown", headHex: bytesToHex(bytes.slice(0, 8)) };
 }
 
 function imageMagicOk(base64) {
@@ -2061,9 +2077,7 @@ function imageMagicOk(base64) {
       var c = s.indexOf(",");
       s = c >= 0 ? s.slice(c + 1) : s;
     }
-    // 仅解前几字节：GIF89a / PNG / JPEG
-    var table =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    var table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     function dec(ch) {
       var i = table.indexOf(ch);
       return i >= 0 ? i : 0;
@@ -2073,13 +2087,20 @@ function imageMagicOk(base64) {
     var b0 = (n0 >> 16) & 255;
     var b1 = (n0 >> 8) & 255;
     var b2 = n0 & 255;
-    if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46) return true; // GIF
-    if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4e) return true; // PNG
-    if (b0 === 0xff && b1 === 0xd8) return true; // JPG
+    if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46) return true;
+    if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4e) return true;
+    if (b0 === 0xff && b1 === 0xd8) return true;
     return false;
   } catch (err) {
     return false;
   }
+}
+
+function bytesToBase64(data) {
+  var coerced = httpDataToByteArray(data);
+  if (coerced && coerced.__base64) return coerced.__base64;
+  if (!coerced || !coerced.length) return "";
+  return encodeBase64FromBytes(coerced);
 }
 
 function normalizeCaptchaAnswer(raw) {
@@ -2103,7 +2124,16 @@ function getOcrProxyEndpoint(params) {
   return "https://dmm.laotou.ccwu.cc/javdb-ocr";
 }
 
-async function ocrCaptchaViaProxy(params, imageBase64) {
+function absCaptchaUrl(base, captchaSrc) {
+  var src = String(captchaSrc || "/rucaptcha/").trim();
+  if (src.indexOf("http") === 0) return src;
+  if (src.charAt(0) !== "/") src = "/" + src;
+  src = base + src;
+  if (src.indexOf("t=") < 0) src += (src.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
+  return src;
+}
+
+async function ocrCaptchaViaProxy(params, payload) {
   var endpoint = getOcrProxyEndpoint(params);
   var headers = {
     "Content-Type": "application/json",
@@ -2114,13 +2144,11 @@ async function ocrCaptchaViaProxy(params, imageBase64) {
   if (!Widget.http.post) throw new Error("当前环境不支持 POST");
   var res;
   try {
-    res = await Widget.http.post(
-      endpoint,
-      { imageBase64: imageBase64 },
-      { headers: headers, allow_redirects: true }
-    );
+    res = await Widget.http.post(endpoint, payload, {
+      headers: headers,
+      allow_redirects: true,
+    });
   } catch (httpErr) {
-    // Forward 对非 2xx 会抛；Worker 已改为失败也回 200，这里兜底提示
     throw new Error("OCR 请求失败：" + String((httpErr && httpErr.message) || httpErr));
   }
   var raw = res && res.data;
@@ -2133,44 +2161,91 @@ async function ocrCaptchaViaProxy(params, imageBase64) {
   return answer;
 }
 
-async function fetchCaptchaImageBase64(params, cookie, captchaSrc) {
+/**
+ * 优先本机拉图（禁止 gzip），以 hex 上传给 Worker OCR。
+ * Worker 出口访问 javdb 会被 403，不能代拉图片。
+ */
+async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
   var base = javdbBase(params);
-  var src = String(captchaSrc || "/rucaptcha/").trim();
-  if (src.indexOf("http") !== 0) {
-    if (src.charAt(0) !== "/") src = "/" + src;
-    src = base + src;
-  }
-  if (src.indexOf("t=") < 0) src += (src.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
+  var captchaUrl = absCaptchaUrl(base, captchaSrc);
+  var errors = [];
 
-  var attempts = [
-    { Accept: "image/gif,image/*,*/*;q=0.8", responseType: "arraybuffer" },
-    { Accept: "image/gif,image/*,*/*;q=0.8", responseType: "base64" },
-    { Accept: "application/octet-stream,*/*", responseType: "arraybuffer" },
-    { Accept: "*/*" },
-  ];
-  var lastErr = "";
-  for (var i = 0; i < attempts.length; i++) {
-    try {
-      var headers = javdbHeaders(params, cookie);
-      headers.Accept = attempts[i].Accept;
-      headers.Referer = base + "/login";
-      var opts = { headers: headers, allow_redirects: true };
-      if (attempts[i].responseType) opts.responseType = attempts[i].responseType;
-      var res = await Widget.http.get(src, opts);
-      if (!res || res.data == null) throw new Error("空响应");
-      cookie = mergeCookieHeader(cookie, collectSetCookiePairs(res));
-      var b64 = bytesToBase64(res.data);
-      if (!b64 || b64.length < 80) throw new Error("数据过短");
-      if (!imageMagicOk(b64)) {
-        lastErr = "图片魔数异常，长度=" + b64.length + " type=" + (attempts[i].responseType || "default");
-        continue;
+  async function downloadCaptchaBytes() {
+    var headerVariants = [
+      { Accept: "image/gif,image/*;q=0.8", "Accept-Encoding": "identity" },
+      { Accept: "image/gif", "Accept-Encoding": "identity" },
+      { Accept: "*/*", "Accept-Encoding": "identity" },
+      { Accept: "image/gif,image/*;q=0.8" },
+    ];
+    var typeVariants = ["arraybuffer", "base64", undefined];
+    var lastErr = "";
+    for (var h = 0; h < headerVariants.length; h++) {
+      for (var t = 0; t < typeVariants.length; t++) {
+        try {
+          var headers = javdbHeaders(params, cookie);
+          for (var k in headerVariants[h]) headers[k] = headerVariants[h][k];
+          headers.Referer = base + "/login";
+          // 明确禁止压缩，避免拿到 1f8b gzip 被误判魔数
+          if (!headers["Accept-Encoding"]) headers["Accept-Encoding"] = "identity";
+          var opts = { headers: headers, allow_redirects: true };
+          if (typeVariants[t]) opts.responseType = typeVariants[t];
+          var res = await Widget.http.get(captchaUrl, opts);
+          if (!res || res.data == null) throw new Error("空响应");
+          cookie = mergeCookieHeader(cookie, collectSetCookiePairs(res));
+          var bytes = httpDataToByteArray(res.data);
+          if (bytes && bytes.__base64) {
+            return { kind: "base64", base64: bytes.__base64, cookie: cookie };
+          }
+          if (!bytes || !bytes.length) throw new Error("无字节");
+          // gzip 魔数：仍交给 Worker 解压，不要在本地拦死
+          return {
+            kind: "bytes",
+            bytes: bytes,
+            cookie: cookie,
+            headHex: bytesToHex(bytes.slice(0, 8)),
+            responseType: typeVariants[t] || "default",
+          };
+        } catch (err) {
+          lastErr = String((err && err.message) || err);
+        }
       }
-      return { base64: b64, cookie: cookie };
-    } catch (err) {
-      lastErr = String((err && err.message) || err);
     }
+    throw new Error(lastErr || "下载失败");
   }
-  throw new Error("验证码图片拉取失败：" + lastErr);
+
+  // A. 本机下载 → hex/base64 给 Worker（主路径）
+  try {
+    var dl = await downloadCaptchaBytes();
+    cookie = dl.cookie || cookie;
+    var payload = {
+      captchaUrl: captchaUrl,
+      cookie: cookie,
+      baseUrl: base,
+    };
+    if (dl.kind === "base64") {
+      payload.imageBase64 = dl.base64;
+    } else {
+      payload.imageHex = bytesToHex(dl.bytes);
+      payload.imageBase64 = encodeBase64FromBytes(dl.bytes);
+      payload.headHex = dl.headHex;
+    }
+    return await ocrCaptchaViaProxy(params, payload);
+  } catch (err) {
+    errors.push("local: " + String((err && err.message) || err));
+  }
+
+  // B. 仍尝试 Worker 代拉（多数出口 403，仅作兜底）
+  try {
+    return await ocrCaptchaViaProxy(params, {
+      captchaUrl: captchaUrl,
+      cookie: cookie,
+      baseUrl: base,
+    });
+  } catch (err) {
+    errors.push("worker-fetch: " + String((err && err.message) || err));
+  }
+
+  throw new Error(errors.join(" | "));
 }
 
 /**
@@ -2208,9 +2283,7 @@ async function loginJavdbWithPassword(params, options) {
 
       var captchaAnswer = "";
       if (formMeta.hasCaptcha) {
-        var img = await fetchCaptchaImageBase64(params, cookie, formMeta.captchaSrc);
-        cookie = img.cookie;
-        captchaAnswer = await ocrCaptchaViaProxy(params, img.base64);
+        captchaAnswer = await resolveCaptchaAnswer(params, cookie, formMeta.captchaSrc);
       }
 
       var res = await httpPostForm(
