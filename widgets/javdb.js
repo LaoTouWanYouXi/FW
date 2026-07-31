@@ -1602,7 +1602,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.8.3",
+  version: "2.8.4",
   requiredVersion: "0.0.1",
   description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码登录，验证码云端自动识别",
   author: "老头",
@@ -2368,7 +2368,13 @@ async function loginJavdbWithPassword(params, options) {
 
   var base = javdbBase(params);
   var loginUrl = base + "/login";
-  var seedCookie = options.ignoreCookie ? "" : readStoredJavdbCookie(params);
+  // forceLogin 时忽略自动缓存，但保留用户手动粘贴的全局 Cookie
+  var seedCookie = "";
+  if (options.ignoreCookie) {
+    seedCookie = String(params.cookie || "").trim();
+  } else {
+    seedCookie = readStoredJavdbCookie(params);
+  }
   var lastErr = "";
 
   for (var attempt = 1; attempt <= 2; attempt++) {
@@ -2451,25 +2457,16 @@ async function loginJavdbWithPassword(params, options) {
       } else {
         lastErr = "登录未通过 OCR=" + captchaAnswer + "（请确认账密，或粘贴浏览器 Cookie）";
       }
-      // 失败不再清掉可能仍可用的手动 Cookie 参数；只清自动缓存
+      // 失败只清自动缓存；不使用 setTimeout（Forward 运行时无此 API）
       clearJavdbCookie();
       seedCookie = "";
-      // 略歇一会再试，降低风控
-      if (attempt < 2) {
-        await new Promise(function (r) {
-          setTimeout(r, 1500);
-        });
-      }
+      // 结构性错误（缺 session / 隐藏 Set-Cookie）再刷无意义
+      if (/_rucaptcha_session_id|Set-Cookie|隐藏了 Set-Cookie/i.test(lastErr)) break;
     } catch (err) {
       lastErr = String((err && err.message) || err);
       seedCookie = "";
       clearJavdbCookie();
-      if (attempt < 2 && /OCR|验证码|魔数/i.test(lastErr)) {
-        await new Promise(function (r) {
-          setTimeout(r, 1500);
-        });
-      } else if (attempt < 2 && /_rucaptcha_session_id|Set-Cookie|账密|密码/i.test(lastErr)) {
-        // 结构性错误：再刷也没用
+      if (/_rucaptcha_session_id|Set-Cookie|隐藏了 Set-Cookie|不支持 POST|无法打开登录页|Cloudflare 拦截/i.test(lastErr)) {
         break;
       }
     }
@@ -3851,10 +3848,14 @@ async function fetchHtml(url, params) {
   var html = await once();
   if (isLoginRequiredHtml(html)) {
     clearJavdbCookie();
+    var manualCookie = String(params.cookie || "").trim();
+    if (isValidJavdbSessionCookie(manualCookie)) {
+      throw new Error("手动 Cookie 已失效或无效，请重新从浏览器复制含 _jdb_session 的完整 Cookie");
+    }
     await ensureJavdbSession(params, { forceLogin: true });
     html = await once();
     if (isLoginRequiredHtml(html)) {
-      throw new Error("该页面需要登录。请填写账号密码（脚本会自动识别验证码），或粘贴含 _jdb_session 的 Cookie");
+      throw new Error("该页面需要登录。请填写账号密码，或粘贴含 _jdb_session 的 Cookie");
     }
   }
   writeHtmlFetchCache(url, html);
