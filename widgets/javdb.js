@@ -1602,7 +1602,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.8.2",
+  version: "2.8.3",
   requiredVersion: "0.0.1",
   description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码登录，验证码云端自动识别",
   author: "老头",
@@ -2302,82 +2302,56 @@ async function ocrCaptchaViaProxy(params, payload) {
 }
 
 /**
- * 优先本机拉图（禁止 gzip），以 hex/base64 上传给 Worker OCR。
- * 返回 { answer, cookie } —— cookie 必须带上验证码 Set-Cookie（_rucaptcha_session_id），
- * 否则即便 OCR 正确也会被站点判验证码错误。
+ * 优先本机拉图，以 hex/base64 上传给 Worker OCR。
+ * 返回 { answer, cookie } —— 必须带上验证码 Set-Cookie（_rucaptcha_session_id）。
+ * 少请求：每种验证码最多拉 2 次图，不做 Worker 代拉（必 403），登录最多 2 轮，避免风控。
  */
 async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
   var base = javdbBase(params);
   var captchaUrl = absCaptchaUrl(base, captchaSrc);
-  var errors = [];
 
   async function downloadCaptchaBytes() {
-    // base64 优先：Forward 对 arraybuffer 支持不稳定，且勿把 base64 原文当字节
-    var headerVariants = [
-      { Accept: "image/gif,image/*;q=0.8,*/*;q=0.5", "Accept-Encoding": "identity" },
-      { Accept: "image/gif,image/*;q=0.8", "Accept-Encoding": "identity" },
-      { Accept: "*/*", "Accept-Encoding": "identity" },
-      { Accept: "image/gif,image/*;q=0.8" },
+    // 同一 captchaUrl 只试两种形态，避免反复打 /rucaptcha/ 触发风控
+    var attempts = [
+      { responseType: "base64", headers: { Accept: "image/gif,image/*;q=0.8,*/*;q=0.5", "Accept-Encoding": "identity" } },
+      { responseType: undefined, headers: { Accept: "image/gif,image/*;q=0.8,*/*;q=0.5", "Accept-Encoding": "identity" } },
     ];
-    var typeVariants = ["base64", "arraybuffer", undefined];
     var lastErr = "";
-    for (var h = 0; h < headerVariants.length; h++) {
-      for (var t = 0; t < typeVariants.length; t++) {
-        try {
-          var headers = javdbHeaders(params, cookie);
-          for (var k in headerVariants[h]) headers[k] = headerVariants[h][k];
-          headers.Referer = base + "/login";
-          if (!headers["Accept-Encoding"]) headers["Accept-Encoding"] = "identity";
-          var opts = { headers: headers, allow_redirects: true };
-          if (typeVariants[t]) opts.responseType = typeVariants[t];
-          var res = await Widget.http.get(captchaUrl, opts);
-          cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
-          var parsed = coerceCaptchaDownload(res, typeVariants[t] || "");
-          parsed.cookie = cookie;
-          parsed.responseType = typeVariants[t] || "default";
-          return parsed;
-        } catch (err) {
-          lastErr = String((err && err.message) || err);
-        }
+    for (var i = 0; i < attempts.length; i++) {
+      try {
+        var headers = javdbHeaders(params, cookie);
+        for (var k in attempts[i].headers) headers[k] = attempts[i].headers[k];
+        headers.Referer = base + "/login";
+        var opts = { headers: headers, allow_redirects: true };
+        if (attempts[i].responseType) opts.responseType = attempts[i].responseType;
+        var res = await Widget.http.get(captchaUrl, opts);
+        cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
+        var parsed = coerceCaptchaDownload(res, attempts[i].responseType || "");
+        parsed.cookie = cookie;
+        parsed.responseType = attempts[i].responseType || "default";
+        return parsed;
+      } catch (err) {
+        lastErr = String((err && err.message) || err);
       }
     }
     throw new Error(lastErr || "下载失败");
   }
 
-  // A. 本机下载 → 仅在魔数合法时上传 OCR
-  try {
-    var dl = await downloadCaptchaBytes();
-    cookie = dl.cookie || cookie;
-    var payload = {
-      cookie: cookie,
-      baseUrl: base,
-    };
-    if (dl.kind === "base64") {
-      payload.imageBase64 = dl.base64;
-    } else {
-      payload.imageHex = bytesToHex(dl.bytes);
-      payload.imageBase64 = encodeBase64FromBytes(dl.bytes);
-      payload.headHex = dl.headHex;
-    }
-    var answer = await ocrCaptchaViaProxy(params, payload);
-    return { answer: answer, cookie: cookie };
-  } catch (err) {
-    errors.push("local: " + String((err && err.message) || err));
+  var dl = await downloadCaptchaBytes();
+  cookie = dl.cookie || cookie;
+  var payload = {
+    cookie: cookie,
+    baseUrl: base,
+  };
+  if (dl.kind === "base64") {
+    payload.imageBase64 = dl.base64;
+  } else {
+    payload.imageHex = bytesToHex(dl.bytes);
+    payload.imageBase64 = encodeBase64FromBytes(dl.bytes);
+    payload.headHex = dl.headHex;
   }
-
-  // B. Worker 代拉几乎必然 403，仅作最后提示
-  try {
-    var answer2 = await ocrCaptchaViaProxy(params, {
-      captchaUrl: captchaUrl,
-      cookie: cookie,
-      baseUrl: base,
-    });
-    return { answer: answer2, cookie: cookie };
-  } catch (err) {
-    errors.push("worker-fetch: " + String((err && err.message) || err));
-  }
-
-  throw new Error(errors.join(" | "));
+  var answer = await ocrCaptchaViaProxy(params, payload);
+  return { answer: answer, cookie: cookie };
 }
 
 /**
@@ -2397,7 +2371,7 @@ async function loginJavdbWithPassword(params, options) {
   var seedCookie = options.ignoreCookie ? "" : readStoredJavdbCookie(params);
   var lastErr = "";
 
-  for (var attempt = 1; attempt <= 5; attempt++) {
+  for (var attempt = 1; attempt <= 2; attempt++) {
     try {
       var loginPage = await Widget.http.get(loginUrl, {
         headers: javdbHeaders(params, seedCookie),
@@ -2458,7 +2432,6 @@ async function loginJavdbWithPassword(params, options) {
         loc = String((follow && (follow.url || follow.finalUrl || follow.requestUrl)) || loc);
         res = follow || res;
       } else if (!/_jdb_session=/i.test(cookie)) {
-        // 兼容仍自动跟随的运行时：再扫一遍最终响应
         cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
       }
 
@@ -2476,23 +2449,37 @@ async function loginJavdbWithPassword(params, options) {
         lastErr =
           "登录页已跳转但未读到 _jdb_session（运行时可能隐藏 Set-Cookie）。请从浏览器复制 Cookie 填到全局参数";
       } else {
-        lastErr =
-          "第" +
-          attempt +
-          "次失败（验证码或账密） OCR=" +
-          captchaAnswer +
-          " hasRucaptcha=" +
-          /_rucaptcha_session_id=/i.test(cookie);
+        lastErr = "登录未通过 OCR=" + captchaAnswer + "（请确认账密，或粘贴浏览器 Cookie）";
       }
-      seedCookie = "";
+      // 失败不再清掉可能仍可用的手动 Cookie 参数；只清自动缓存
       clearJavdbCookie();
+      seedCookie = "";
+      // 略歇一会再试，降低风控
+      if (attempt < 2) {
+        await new Promise(function (r) {
+          setTimeout(r, 1500);
+        });
+      }
     } catch (err) {
       lastErr = String((err && err.message) || err);
       seedCookie = "";
+      clearJavdbCookie();
+      if (attempt < 2 && /OCR|验证码|魔数/i.test(lastErr)) {
+        await new Promise(function (r) {
+          setTimeout(r, 1500);
+        });
+      } else if (attempt < 2 && /_rucaptcha_session_id|Set-Cookie|账密|密码/i.test(lastErr)) {
+        // 结构性错误：再刷也没用
+        break;
+      }
     }
   }
 
-  throw new Error("账号登录失败：" + lastErr);
+  throw new Error(
+    "账号登录失败：" +
+      lastErr +
+      "。为防风控仅重试 2 次；可稍后重试，或浏览器登录后把含 _jdb_session 的 Cookie 填入全局参数"
+  );
 }
 
 function isValidJavdbSessionCookie(cookie) {
