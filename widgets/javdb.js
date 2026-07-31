@@ -556,7 +556,6 @@ var JAVDB_SERIES_OPTIONS = [
   { title: "\u5973\u5b50\u793e\u54e1\u91ce\u7403\u62f3", value: "/series/0dx7" },
   { title: "\u5973\u5b50\u6821\u751f\u76e3\u7981\u51cc\u8fb1 \u9b3c\u755c\u8f2a\u59e6", value: "/series/J14A" },
   { title: "\u5973\u5b50\u6821\u751f\u76e3\u7981\u51cc\u8fb1\u9b3c\u755c\u8f2a\u59e6", value: "/series/1y9" },
-  { title: "\u6b50\u7f8e", value: "/series/western" },
   { title: "\u6d3e\u9063\u30de\u30c3\u30b5\u30fc\u30b8\u5e2b\u306b\u304d\u308f\u3069\u3044\u79d8\u90e8\u3092\u89e6\u3089\u308c\u3059\u304e\u3066\u3001\u5feb\u697d\u306b\u8010\u3048\u5207\u308c\u305a\u5bdd\u53d6\u3089\u308c\u307e\u3057\u305f\u3002", value: "/series/YNpz" },
   { title: "\u50d5\u306e\u77e5\u3089\u306a\u3044\u59bb\u3092\u898b\u305f\u304f\u3066\u2026", value: "/series/Z4z8" },
   { title: "\u50d5\u306e\u306d\u3068\u3089\u308c\u8a71\u3057\u3092\u805e\u3044\u3066\u307b\u3057\u3044", value: "/series/me1y" },
@@ -1603,7 +1602,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.7.3",
+  version: "2.7.4",
   requiredVersion: "0.0.1",
   description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；支持账号密码自动登录（含验证码识别）",
   author: "老头",
@@ -1682,9 +1681,6 @@ WidgetMetadata = {
             { title: "无码·日榜", value: "movies:uncensored:daily" },
             { title: "无码·周榜", value: "movies:uncensored:weekly" },
             { title: "无码·月榜", value: "movies:uncensored:monthly" },
-            { title: "欧美·日榜", value: "movies:western:daily" },
-            { title: "欧美·周榜", value: "movies:western:weekly" },
-            { title: "欧美·月榜", value: "movies:western:monthly" },
             { title: "FC2·日榜", value: "movies:fc2:daily" },
             { title: "FC2·周榜", value: "movies:fc2:weekly" },
             { title: "FC2·月榜", value: "movies:fc2:monthly" },
@@ -1712,7 +1708,6 @@ WidgetMetadata = {
             { title: "全部", value: "all" },
             { title: "有码", value: "0" },
             { title: "无码", value: "1" },
-            { title: "欧美", value: "2" },
             { title: "FC2", value: "3" },
           ],
           value: "all",
@@ -1954,31 +1949,49 @@ function normalizeCaptchaAnswer(raw) {
   return text;
 }
 
+/** Forward / JavaScriptCore 无 btoa，用纯 JS 编码 */
+function encodeBase64FromBytes(bytes) {
+  var table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var out = "";
+  var i = 0;
+  var len = bytes.length;
+  while (i < len) {
+    var remaining = len - i;
+    var a = bytes[i++] & 0xff;
+    var b = remaining > 1 ? bytes[i++] & 0xff : 0;
+    var c = remaining > 2 ? bytes[i++] & 0xff : 0;
+    var triple = (a << 16) | (b << 8) | c;
+    out += table[(triple >> 18) & 63];
+    out += table[(triple >> 12) & 63];
+    out += remaining > 1 ? table[(triple >> 6) & 63] : "=";
+    out += remaining > 2 ? table[triple & 63] : "=";
+  }
+  return out;
+}
+
 function bytesToBase64(data) {
   if (data == null) return "";
   if (typeof data !== "string") {
     try {
       if (typeof Buffer !== "undefined") return Buffer.from(data).toString("base64");
     } catch (err) {}
-    data = String(data);
+    if (typeof ArrayBuffer !== "undefined" && data instanceof ArrayBuffer) {
+      data = String.fromCharCode.apply(null, new Uint8Array(data));
+    } else if (typeof Uint8Array !== "undefined" && data instanceof Uint8Array) {
+      var arr = [];
+      for (var u = 0; u < data.length; u++) arr.push(data[u]);
+      return encodeBase64FromBytes(arr);
+    } else {
+      data = String(data);
+    }
   }
   if (data.indexOf("data:image") === 0) {
     var comma = data.indexOf(",");
     return comma >= 0 ? data.slice(comma + 1) : data;
   }
-  try {
-    return btoa(data);
-  } catch (err) {
-    var out = "";
-    var chunk = 0x8000;
-    for (var i = 0; i < data.length; i += chunk) {
-      var slice = data.slice(i, i + chunk);
-      var codes = [];
-      for (var j = 0; j < slice.length; j++) codes.push(slice.charCodeAt(j) & 0xff);
-      out += String.fromCharCode.apply(null, codes);
-    }
-    return btoa(out);
-  }
+  var bytes = [];
+  for (var i = 0; i < data.length; i++) bytes.push(data.charCodeAt(i) & 0xff);
+  return encodeBase64FromBytes(bytes);
 }
 
 async function httpPostForm(url, body, params, cookie) {
