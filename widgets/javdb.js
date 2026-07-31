@@ -1602,7 +1602,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.8.1",
+  version: "2.8.2",
   requiredVersion: "0.0.1",
   description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码登录，验证码云端自动识别",
   author: "老头",
@@ -1847,9 +1847,19 @@ function getJavdbLoginProxyCandidates(params) {
 
 function getHeaderValue(res, name) {
   if (!res) return "";
-  var headers = res.headers || res.header || res.responseHeaders || {};
-  if (!headers) return "";
   var lower = String(name).toLowerCase();
+  var headers = res.headers || res.header || res.responseHeaders || {};
+  if (headers && typeof headers.get === "function") {
+    try {
+      if (lower === "set-cookie" && typeof headers.getSetCookie === "function") {
+        var list = headers.getSetCookie();
+        if (list && list.length) return list.join("\n");
+      }
+      var viaGet = headers.get(name) || headers.get(lower);
+      if (viaGet) return Array.isArray(viaGet) ? viaGet.join("\n") : String(viaGet);
+    } catch (err) {}
+  }
+  if (!headers) return "";
   for (var k in headers) {
     if (String(k).toLowerCase() === lower) {
       var v = headers[k];
@@ -2286,14 +2296,15 @@ async function ocrCaptchaViaProxy(params, payload) {
     throw new Error(String((data && (data.error || data.message)) || "OCR 失败"));
   }
   var answer = normalizeCaptchaAnswer(data.answer);
-  if (!answer || answer.length < 3) throw new Error("OCR 结果无效");
+  // JavDB rucaptcha 通常 4~5 位；过短多半是误识别
+  if (!answer || answer.length < 4) throw new Error("OCR 结果过短: " + answer);
   return answer;
 }
 
 /**
  * 优先本机拉图（禁止 gzip），以 hex/base64 上传给 Worker OCR。
- * Worker 出口访问 javdb 会被 403，不能代拉图片。
- * Forward 对二进制常损坏：必须先验魔数，禁止把脏数据送去 OCR。
+ * 返回 { answer, cookie } —— cookie 必须带上验证码 Set-Cookie（_rucaptcha_session_id），
+ * 否则即便 OCR 正确也会被站点判验证码错误。
  */
 async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
   var base = javdbBase(params);
@@ -2348,18 +2359,20 @@ async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
       payload.imageBase64 = encodeBase64FromBytes(dl.bytes);
       payload.headHex = dl.headHex;
     }
-    return await ocrCaptchaViaProxy(params, payload);
+    var answer = await ocrCaptchaViaProxy(params, payload);
+    return { answer: answer, cookie: cookie };
   } catch (err) {
     errors.push("local: " + String((err && err.message) || err));
   }
 
-  // B. Worker 代拉几乎必然 403，仅作最后提示，避免掩盖本机真正错误
+  // B. Worker 代拉几乎必然 403，仅作最后提示
   try {
-    return await ocrCaptchaViaProxy(params, {
+    var answer2 = await ocrCaptchaViaProxy(params, {
       captchaUrl: captchaUrl,
       cookie: cookie,
       baseUrl: base,
     });
+    return { answer: answer2, cookie: cookie };
   } catch (err) {
     errors.push("worker-fetch: " + String((err && err.message) || err));
   }
@@ -2384,7 +2397,7 @@ async function loginJavdbWithPassword(params, options) {
   var seedCookie = options.ignoreCookie ? "" : readStoredJavdbCookie(params);
   var lastErr = "";
 
-  for (var attempt = 1; attempt <= 3; attempt++) {
+  for (var attempt = 1; attempt <= 5; attempt++) {
     try {
       var loginPage = await Widget.http.get(loginUrl, {
         headers: javdbHeaders(params, seedCookie),
@@ -2396,13 +2409,23 @@ async function loginJavdbWithPassword(params, options) {
         throw new Error("登录页被 Cloudflare 拦截");
       }
 
-      var cookie = mergeCookieHeader(seedCookie, collectSetCookiePairs(loginPage));
+      var cookie = mergeCookieHeader(seedCookie, collectAnyCookiePairs(loginPage));
       var formMeta = extractLoginFormMeta(html);
       if (!formMeta.token) throw new Error("未取得登录 CSRF");
 
       var captchaAnswer = "";
       if (formMeta.hasCaptcha) {
-        captchaAnswer = await resolveCaptchaAnswer(params, cookie, formMeta.captchaSrc);
+        var captchaResult = await resolveCaptchaAnswer(params, cookie, formMeta.captchaSrc);
+        // 关键：验证码响应里的 _rucaptcha_session_id 必须带回登录 POST
+        if (captchaResult && typeof captchaResult === "object") {
+          captchaAnswer = captchaResult.answer || "";
+          cookie = captchaResult.cookie || cookie;
+        } else {
+          captchaAnswer = String(captchaResult || "");
+        }
+      }
+      if (formMeta.hasCaptcha && !/_rucaptcha_session_id=/i.test(cookie)) {
+        throw new Error("未拿到 _rucaptcha_session_id（Forward 可能隐藏了 Set-Cookie）。请改用浏览器 Cookie 登录");
       }
 
       var res = await httpPostForm(
@@ -2453,7 +2476,13 @@ async function loginJavdbWithPassword(params, options) {
         lastErr =
           "登录页已跳转但未读到 _jdb_session（运行时可能隐藏 Set-Cookie）。请从浏览器复制 Cookie 填到全局参数";
       } else {
-        lastErr = "第" + attempt + "次失败（验证码或账密） OCR=" + captchaAnswer;
+        lastErr =
+          "第" +
+          attempt +
+          "次失败（验证码或账密） OCR=" +
+          captchaAnswer +
+          " hasRucaptcha=" +
+          /_rucaptcha_session_id=/i.test(cookie);
       }
       seedCookie = "";
       clearJavdbCookie();
