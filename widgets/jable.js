@@ -5,7 +5,7 @@ WidgetMetadata = {
   description: "Jable分类浏览.全局搜索.标签.女优.预告.推荐.聚合",
   author: "nibiru｜MakkaPakka｜廿二日",
   site: "https://jable.tv",
-  version: "2.5.1",
+  version: "2.6.0",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1310,69 +1310,67 @@ async function parseHtml(htmlContent, options = {}) {
   const durationSelector = ".absolute-bottom-right .label";
   const titleSelector = ".title a";
 
-  let sections = [];
+  const sectionDrafts = [];
+  const probeCodes = [];
   const sectionElements = $(sectionSelector).toArray();
 
   for (const sectionElement of sectionElements) {
     const $sectionElement = $(sectionElement);
-    const items = [];
+    const drafts = [];
     const sectionTitle = $sectionElement.find(".title-box .h3-md").first();
     const sectionTitleText = sectionTitle.text();
     const itemElements = $sectionElement.find(itemSelector).toArray();
 
-    if (itemElements && itemElements.length > 0) {
-      for (const itemElement of itemElements) {
-        const $itemElement = $(itemElement);
-        const titleId = $itemElement.find(titleSelector).first();
-        const url = titleId.attr("href") || "";
+    for (const itemElement of itemElements) {
+      const $itemElement = $(itemElement);
+      const titleId = $itemElement.find(titleSelector).first();
+      const url = titleId.attr("href") || "";
+      if (!url || !url.includes("jable.tv")) continue;
 
-        if (url && url.includes("jable.tv")) {
-          const durationId = $itemElement.find(durationSelector).first();
-          const coverId = $itemElement.find(coverSelector).first();
-          const cover = coverId.attr("data-src") || coverId.attr("src") || "";
-          const video = coverId.attr("data-preview");
-          const title = titleId.text();
-          const duration = durationId.text().trim();
-          const dvdId = extractDvdId(url);
-          const hdCovers = buildCoverUrlsFromVideoId(dvdId);
-          let hdPoster = hdCovers.posterUrl || cover;
-          let hdBackdrop = hdCovers.backdropUrl || cover;
-
-          if (dvdId && /^(DLDSS|SDNT|SABA|DTT)/i.test(dvdId) && (hdCovers.posterUrl || hdCovers.backdropUrl)) {
-            const verified = await verifyCoverUrl(hdCovers.posterUrl || hdCovers.backdropUrl);
-            if (!verified) {
-              hdPoster = cover;
-              hdBackdrop = cover;
-            }
-          }
-
-          const item = {
-            id: url,
-            type: "url",
-            title: title,
-            backdropPath: hdBackdrop,
-            posterPath: hdPoster,
-            previewUrl: video,
-            link: url,
-            mediaType: "movie",
-            description: dvdId ? `番号: ${dvdId}` : "",
-            releaseDate: duration,
-            coverUrl: hdBackdrop,
-            image: hdBackdrop,
-            detailPoster: hdPoster,
-            playerType: "system"
-          };
-          items.push(item);
-        }
-      }
+      const durationId = $itemElement.find(durationSelector).first();
+      const coverId = $itemElement.find(coverSelector).first();
+      const cover = coverId.attr("data-src") || coverId.attr("src") || "";
+      const video = coverId.attr("data-preview");
+      const title = titleId.text();
+      const duration = durationId.text().trim();
+      const dvdId = extractDvdId(url);
+      if (dvdId) probeCodes.push(dvdId);
+      drafts.push({ url, cover, video, title, duration, dvdId });
     }
 
-    if (items.length > 0) {
-      sections.push({
-        title: sectionTitleText,
-        childItems: items
+    if (drafts.length > 0) {
+      sectionDrafts.push({ title: sectionTitleText, drafts });
+    }
+  }
+
+  await prefetchDmmProbeCovers(probeCodes, options);
+
+  const sections = [];
+  for (const section of sectionDrafts) {
+    const items = [];
+    for (const draft of section.drafts) {
+      const probe = draft.dvdId ? lookupDmmProbeCover(draft.dvdId) : null;
+      const hdCovers = buildCoverUrlsFromVideoId(draft.dvdId, probe);
+      const hdPoster = hdCovers.posterUrl || draft.cover;
+      const hdBackdrop = hdCovers.backdropUrl || draft.cover;
+      items.push({
+        id: draft.url,
+        type: "url",
+        title: draft.title,
+        backdropPath: hdBackdrop,
+        posterPath: hdPoster,
+        previewUrl: draft.video,
+        link: draft.url,
+        mediaType: "movie",
+        description: draft.dvdId ? `番号: ${draft.dvdId}` : "",
+        releaseDate: draft.duration,
+        coverUrl: hdBackdrop,
+        image: hdBackdrop,
+        detailPoster: hdPoster,
+        playerType: "system"
       });
     }
+    sections.push({ title: section.title, childItems: items });
   }
 
   return sections;
@@ -1397,14 +1395,15 @@ async function loadDetail(link) {
   }
 
   const dvdId = extractDvdId(link);
-  const hdCovers = buildCoverUrlsFromVideoId(dvdId);
   const jableCover = $('meta[property="og:image"]').attr("content") || $('meta[name="twitter:image"]').attr("content") || "";
+  const dmmProbe = dvdId ? await fetchDmmProbeCover(dvdId, {}) : null;
+  const hdCovers = buildCoverUrlsFromVideoId(dvdId, dmmProbe);
 
   let detailPosterCover = hdCovers.posterUrl || jableCover;
   let detailBackdropCover = hdCovers.backdropUrl || jableCover || detailPosterCover;
 
   const [jtMeta, trailerUrl] = await Promise.all([
-    (dvdId ? fetchJavTrailersMeta(dvdId).catch(() => ({ backdropPath: "", backdropPaths: [] })) : Promise.resolve({ backdropPath: "", backdropPaths: [] }))
+    (dvdId ? fetchJavTrailersMeta(dvdId, dmmProbe).catch(() => ({ backdropPath: "", backdropPaths: [] })) : Promise.resolve({ backdropPath: "", backdropPaths: [] }))
       .then(meta => {
         if (dvdId && /^(ABF|ABP|ABW)/i.test(dvdId) && meta.backdropPaths?.length) {
           return Promise.all(meta.backdropPaths.map(url => verifyCoverUrl(url))).then(results => {
@@ -1415,16 +1414,11 @@ async function loadDetail(link) {
         return meta;
       }),
     dvdId ? buildJavTrailersUrl(dvdId).catch(() => "") : Promise.resolve(""),
-    (dvdId && /^(DLDSS|SDNT|SABA|DTT)/i.test(dvdId) && (hdCovers.posterUrl || hdCovers.backdropUrl))
-      ? verifyCoverUrl(hdCovers.posterUrl || hdCovers.backdropUrl).then(verified => {
-          if (!verified) { detailPosterCover = jableCover; detailBackdropCover = jableCover; }
-        })
-      : Promise.resolve(),
   ]);
 
   const trailers = [];
   if (trailerUrl) {
-    const tc = buildTrailerCoverUrl(dvdId) || detailBackdropCover;
+    const tc = buildTrailerCoverUrl(dvdId, dmmProbe) || detailBackdropCover;
     trailers.push({ coverUrl: tc, posterPath: tc, backdropPath: tc, image: tc, url: trailerUrl });
   }
 
@@ -1551,6 +1545,191 @@ async function loadDetail(link) {
 
 // ==================== HD Cover Generation, JavTrailers Gallery, and Trailer (adapted from MissAV 3.0) ====================
 
+// ==================== dmm-cover-probe Worker 客户端 ====================
+const DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
+const DMM_PROBE_WORKER_CACHE = {};
+const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
+const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
+const DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
+const DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
+
+function dmmProbeStorageKey(code) {
+  return DMM_PROBE_STORAGE_PREFIX + String(code || "").trim().toUpperCase();
+}
+
+function loadDmmProbeFromStorage(code) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return undefined;
+  try {
+    if (!Widget.storage || typeof Widget.storage.get !== "function") return undefined;
+    const raw = Widget.storage.get(dmmProbeStorageKey(code));
+    if (!raw) return undefined;
+    const entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!entry || !entry.savedAt) return undefined;
+    const ttl = entry.ok ? DMM_PROBE_STORAGE_TTL_OK_MS : DMM_PROBE_STORAGE_TTL_FAIL_MS;
+    if (Date.now() - Number(entry.savedAt) > ttl) return undefined;
+    if (!entry.ok) return null;
+    return {
+      contentId: String(entry.contentId || ""),
+      posterUrl: String(entry.posterUrl || ""),
+      backdropUrl: String(entry.backdropUrl || ""),
+    };
+  } catch (err) {
+    return undefined;
+  }
+}
+
+function saveDmmProbeToStorage(code, probe) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return;
+  try {
+    if (!Widget.storage || typeof Widget.storage.set !== "function") return;
+    const entry = { ok: !!probe, savedAt: Date.now() };
+    if (probe) {
+      entry.contentId = probe.contentId || "";
+      entry.posterUrl = probe.posterUrl || "";
+      entry.backdropUrl = probe.backdropUrl || "";
+    }
+    Widget.storage.set(dmmProbeStorageKey(code), JSON.stringify(entry));
+  } catch (err) {}
+}
+
+function getDmmProbeWorkerBase(params) {
+  params = params || {};
+  let base = params.dmmProbeWorker;
+  if (!base) {
+    try {
+      if (Widget.storage && typeof Widget.storage.get === "function") {
+        const stored = Widget.storage.get("javdb.global.dmmProbeWorker");
+        if (stored) base = stored;
+      }
+    } catch (err) {}
+  }
+  if (!base) base = DMM_PROBE_WORKER_BASE;
+  return String(base || "").replace(/\/+$/, "");
+}
+
+function getDmmProbeWorkerHeaders(params) {
+  const headers = { Accept: "application/json" };
+  let key = params && params.dmmProbeApiKey;
+  if (!key) {
+    try {
+      if (Widget.storage && typeof Widget.storage.get === "function") {
+        key = Widget.storage.get("javdb.global.dmmProbeApiKey");
+      }
+    } catch (err) {}
+  }
+  if (key) headers["X-Probe-Key"] = String(key);
+  return headers;
+}
+
+function parseDmmProbeWorkerResponse(res) {
+  if (!res || res.data === undefined || res.data === null) {
+    return { probe: undefined, knownMiss: false };
+  }
+  const status = Number(res.status || res.statusCode || 0);
+  if (status >= 400) return { probe: undefined, knownMiss: false };
+  try {
+    const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+    if (!data) return { probe: undefined, knownMiss: false };
+    if (data.ok && data.best) {
+      return {
+        probe: {
+          contentId: String(data.best.contentId || ""),
+          posterUrl: String(data.best.posterUrl || ""),
+          backdropUrl: String(data.best.backdropUrl || ""),
+        },
+        knownMiss: false,
+      };
+    }
+    if (data.ok === false) return { probe: null, knownMiss: true };
+    return { probe: undefined, knownMiss: false };
+  } catch (err) {
+    return { probe: undefined, knownMiss: false };
+  }
+}
+
+async function fetchDmmProbeCover(code, params) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return null;
+  if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) {
+    return DMM_PROBE_WORKER_CACHE[code];
+  }
+
+  const stored = loadDmmProbeFromStorage(code);
+  if (stored !== undefined) {
+    DMM_PROBE_WORKER_CACHE[code] = stored;
+    return stored;
+  }
+
+  const parts = parseJavCodeParts(code);
+  if (!parts || MGSTAGE_COVER_RULES[parts.prefix]) {
+    DMM_PROBE_WORKER_CACHE[code] = null;
+    return null;
+  }
+
+  const base = getDmmProbeWorkerBase(params);
+  if (!base) {
+    DMM_PROBE_WORKER_CACHE[code] = null;
+    return null;
+  }
+
+  try {
+    const url = base + "/cover?code=" + encodeURIComponent(code);
+    const res = await Widget.http.get(url, {
+      headers: getDmmProbeWorkerHeaders(params),
+      timeout: DMM_PROBE_WORKER_TIMEOUT_MS,
+      allow_redirects: true,
+    });
+    const parsed = parseDmmProbeWorkerResponse(res);
+    if (parsed.probe !== undefined || parsed.knownMiss) {
+      DMM_PROBE_WORKER_CACHE[code] = parsed.probe;
+      saveDmmProbeToStorage(code, parsed.probe);
+      return parsed.probe;
+    }
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function prefetchDmmProbeCovers(codes, params) {
+  const pending = [];
+  const seen = {};
+  for (let i = 0; i < (codes || []).length; i++) {
+    const code = String(codes[i] || "").trim().toUpperCase();
+    if (!code || seen[code]) continue;
+    seen[code] = true;
+    if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) continue;
+    const storedProbe = loadDmmProbeFromStorage(code);
+    if (storedProbe !== undefined) {
+      DMM_PROBE_WORKER_CACHE[code] = storedProbe;
+      continue;
+    }
+    const parts = parseJavCodeParts(code);
+    if (!parts || MGSTAGE_COVER_RULES[parts.prefix]) {
+      DMM_PROBE_WORKER_CACHE[code] = null;
+      continue;
+    }
+    pending.push(code);
+  }
+  if (!pending.length) return;
+
+  const concurrency = 6;
+  for (let start = 0; start < pending.length; start += concurrency) {
+    const chunk = pending.slice(start, start + concurrency);
+    await Promise.all(chunk.map((code) => fetchDmmProbeCover(code, params)));
+  }
+}
+
+function lookupDmmProbeCover(code) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code || !Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) return null;
+  return DMM_PROBE_WORKER_CACHE[code];
+}
+
+
+
 const JAVTRAILERS_URL_CACHE = {};
 const JAVTRAILERS_URL_PROMISE_CACHE = {};
 const JAVTRAILERS_FETCH_TIMEOUT_MS = 1200;
@@ -1577,565 +1756,14 @@ async function verifyCoverUrl(url) {
   }
 }
 
-function buildCoverUrlsFromVideoId(videoIdOrTitle) {
-  const candidates = buildCoverCandidatesFromVideoId(videoIdOrTitle);
+function buildCoverUrlsFromVideoId(videoIdOrTitle, dmmProbe) {
+  const candidates = buildCoverCandidatesFromVideoId(videoIdOrTitle, dmmProbe);
   return {
     posterUrl: candidates.posterCandidates[0] || "",
     backdropUrl: candidates.backdropCandidates[0] || "",
     posterCandidates: candidates.posterCandidates,
     backdropCandidates: candidates.backdropCandidates,
   };
-}
-
-// DMM 高清白名单：来自 dmm-cover-probe（KV+D1 ok）校验通过番号前缀；命中走 DMM，未命中用站点图/占位
-const DMM_HD_PREFIX_WHITELIST = new Set([
-  "3DSVR",
-  "AARM",
-  "ABFK",
-  "ADN",
-  "AED",
-  "AGAV",
-  "AGEFUKU",
-  "AGEOM",
-  "AGR",
-  "AIAV",
-  "AJVR",
-  "AKDL",
-  "ALDN",
-  "ANB",
-  "ANKB",
-  "AP",
-  "APAK",
-  "APGH",
-  "APNS",
-  "APRG",
-  "AQHS",
-  "AQMB",
-  "AQUBL",
-  "AQUCO",
-  "AQUGL",
-  "AQULA",
-  "ARAN",
-  "ARDB",
-  "ARM",
-  "AST",
-  "ATAD",
-  "ATID",
-  "ATKD",
-  "ATOM",
-  "ATVR",
-  "ATYA",
-  "AUKG",
-  "AVSA",
-  "AVSW",
-  "BAB",
-  "BABD",
-  "BACJ",
-  "BAFUKU",
-  "BASB",
-  "BASJ",
-  "BAZX",
-  "BBAN",
-  "BBSS",
-  "BBTU",
-  "BDA",
-  "BDAM",
-  "BF",
-  "BGG",
-  "BHSP",
-  "BIB",
-  "BIBIVR",
-  "BIGC",
-  "BIJN",
-  "BKD",
-  "BKSP",
-  "BLK",
-  "BLOR",
-  "BMW",
-  "BOKD",
-  "BOKO",
-  "BONU",
-  "BONY",
-  "CADV",
-  "CAWB",
-  "CAWD",
-  "CEAD",
-  "CEMD",
-  "CHIB",
-  "CHIR",
-  "CHRV",
-  "CJOB",
-  "CJOD",
-  "CJVR",
-  "CKCK",
-  "CLUB",
-  "CMC",
-  "CMV",
-  "COGM",
-  "CRFV",
-  "CRNX",
-  "CRVR",
-  "DANDY",
-  "DANDYA",
-  "DASD",
-  "DASS",
-  "DAVK",
-  "DAYM",
-  "DAZD",
-  "DBER",
-  "DBNK",
-  "DDFF",
-  "DDK",
-  "DDT",
-  "DDTJ",
-  "DGCEMD",
-  "DLDSS",
-  "DNJR",
-  "DOGG",
-  "DONN",
-  "DPVR",
-  "DRPT",
-  "DSCESD",
-  "DSDP",
-  "DSOD",
-  "DSS",
-  "DVAJ",
-  "DVDES",
-  "DVDMS",
-  "DVEH",
-  "DVMM",
-  "EBOD",
-  "EBWH",
-  "EFDM",
-  "EKDV",
-  "EMBZ",
-  "ENKI",
-  "EOO",
-  "ERDM",
-  "ERDX",
-  "EVIS",
-  "FAB",
-  "FAVR",
-  "FCDSS",
-  "FCSS",
-  "FCVR",
-  "FEM",
-  "FIP",
-  "FJIN",
-  "FLAV",
-  "FLVA",
-  "FNS",
-  "FOOMVD",
-  "FPRE",
-  "FSDSS",
-  "FSTU",
-  "FTHT",
-  "FTHTD",
-  "FTKD",
-  "FUVR",
-  "FWAY",
-  "GAJK",
-  "GAOR",
-  "GARA",
-  "GBRK",
-  "GBSA",
-  "GDHH",
-  "GDRD",
-  "GEBB",
-  "GIGL",
-  "GKOK",
-  "GMA",
-  "GMEM",
-  "GML",
-  "GNAB",
-  "GQN",
-  "GRCH",
-  "GS",
-  "GVH",
-  "GYAN",
-  "GZAP",
-  "HALE",
-  "HALT",
-  "HAWA",
-  "HAZU",
-  "HBAD",
-  "HBLA",
-  "HBS",
-  "HDRT",
-  "HERK",
-  "HERY",
-  "HHHVR",
-  "HHKL",
-  "HIKR",
-  "HJBB",
-  "HJMO",
-  "HMIX",
-  "HMN",
-  "HNDB",
-  "HNVR",
-  "HOIZ",
-  "HOKS",
-  "HOMA",
-  "HOST",
-  "HSOD",
-  "HSODA",
-  "HTMS",
-  "HUBLK",
-  "HUNTA",
-  "HUNTB",
-  "HUNTC",
-  "HUNVR",
-  "HYAS",
-  "IDBD",
-  "IENE",
-  "IENEE",
-  "IENF",
-  "IENFH",
-  "IENFR",
-  "IESP",
-  "IKEP",
-  "IPBZ",
-  "IPOK",
-  "IPTD",
-  "IPVR",
-  "IPX",
-  "IPZ",
-  "IPZZ",
-  "JBD",
-  "JDL",
-  "JERA",
-  "JFB",
-  "JFYG",
-  "JIMMY",
-  "JJBK",
-  "JJDA",
-  "JJEE",
-  "JJPP",
-  "JKTU",
-  "JSOP",
-  "JUC",
-  "JUFD",
-  "JUFE",
-  "JUL",
-  "JUMS",
-  "JUQ",
-  "JUR",
-  "JUSD",
-  "JUTA",
-  "JUVR",
-  "JUX",
-  "JUY",
-  "JYMA",
-  "KAGP",
-  "KAM",
-  "KAPM",
-  "KAVR",
-  "KBTK",
-  "KCKC",
-  "KDKJ",
-  "KDMI",
-  "KIBD",
-  "KIWVR",
-  "KMHR",
-  "KMI",
-  "KMTD",
-  "KMTV",
-  "KOMZ",
-  "KSBJ",
-  "KTKN",
-  "KTRA",
-  "KTSG",
-  "KUM",
-  "KWBD",
-  "KYMI",
-  "LOS",
-  "LZBS",
-  "MADB",
-  "MADM",
-  "MADV",
-  "MANX",
-  "MAQQ",
-  "MASE",
-  "MASM",
-  "MBDD",
-  "MBF",
-  "MBYD",
-  "MCKT",
-  "MDBK",
-  "MDTD",
-  "MDTE",
-  "MDTM",
-  "MDVR",
-  "MDYD",
-  "MEVR",
-  "MEYD",
-  "MFYD",
-  "MGBB",
-  "MGMJ",
-  "MGMP",
-  "MGMQ",
-  "MGNL",
-  "MGOLD",
-  "MIAA",
-  "MIAB",
-  "MIAD",
-  "MIBB",
-  "MIBD",
-  "MIDA",
-  "MIDD",
-  "MIDE",
-  "MIDV",
-  "MIFD",
-  "MIH",
-  "MIHD",
-  "MIKR",
-  "MIMA",
-  "MIMK",
-  "MIRD",
-  "MISM",
-  "MIST",
-  "MIZD",
-  "MKCK",
-  "MKMP",
-  "MKON",
-  "MMB",
-  "MMGH",
-  "MMGO",
-  "MMKZ",
-  "MMNA",
-  "MMPB",
-  "MMPV",
-  "MMUS",
-  "MNGS",
-  "MOOC",
-  "MOON",
-  "MOOR",
-  "MQNC",
-  "MREC",
-  "MRSS",
-  "MSZ",
-  "MTVI",
-  "MTVR",
-  "MUCD",
-  "MUDR",
-  "MUGE",
-  "MUKC",
-  "MUKD",
-  "MURIKURI",
-  "MVBD",
-  "MVG",
-  "MVSD",
-  "MYBA",
-  "NACT",
-  "NAGAE",
-  "NAMH",
-  "NANX",
-  "NASH",
-  "NASK",
-  "NATR",
-  "NBES",
-  "NCYF",
-  "NDRA",
-  "NGHJ",
-  "NGOD",
-  "NHD",
-  "NHDTB",
-  "NHDTC",
-  "NHVR",
-  "NIG",
-  "NIMA",
-  "NKKD",
-  "NNOD",
-  "NNPJ",
-  "NPH",
-  "NPJB",
-  "NPJH",
-  "NPJS",
-  "NSBB",
-  "NSFS",
-  "NSODN",
-  "NSPS",
-  "NSSTL",
-  "NTR",
-  "NTRH",
-  "NVH",
-  "NYH",
-  "OAE",
-  "OBA",
-  "OBE",
-  "OFES",
-  "OFJE",
-  "OFSD",
-  "OFTR",
-  "OKC",
-  "OKZU",
-  "ONIN",
-  "ONSD",
-  "ONSG",
-  "OPRD",
-  "PARATHD",
-  "PBD",
-  "PETS",
-  "PFES",
-  "PIYO",
-  "PKPL",
-  "PPBD",
-  "PPPD",
-  "PPPE",
-  "PPVR",
-  "PRED",
-  "PRIN",
-  "PRVR",
-  "PRWF",
-  "PXVR",
-  "PXVRW",
-  "QMDB",
-  "QMILL",
-  "QREL",
-  "RAKB",
-  "RBB",
-  "RBD",
-  "RBK",
-  "RCT",
-  "RCTD",
-  "REAL",
-  "REBD",
-  "REBDB",
-  "REZD",
-  "RGAV",
-  "RKI",
-  "RLMP",
-  "RMER",
-  "ROE",
-  "ROOM",
-  "ROYD",
-  "RPIN",
-  "RROY",
-  "RSRVR",
-  "RVG",
-  "SABA",
-  "SAL",
-  "SAME",
-  "SAVR",
-  "SBGVR",
-  "SBP",
-  "SCBB",
-  "SCD",
-  "SCOP",
-  "SCPX",
-  "SDAB",
-  "SDAM",
-  "SDDE",
-  "SDFK",
-  "SDGY",
-  "SDHS",
-  "SDJS",
-  "SDMM",
-  "SDMT",
-  "SDMU",
-  "SDMUA",
-  "SDNM",
-  "SDTH",
-  "SETH",
-  "SETM",
-  "SEVEN",
-  "SGKI",
-  "SHKD",
-  "SILK",
-  "SILKS",
-  "SILKU",
-  "SITW",
-  "SIVR",
-  "SKEJ",
-  "SKMN",
-  "SMOK",
-  "SNIS",
-  "SNOS",
-  "SOAN",
-  "SOAV",
-  "SOAVB",
-  "SODS",
-  "SODSVR",
-  "SOE",
-  "SOIM",
-  "SONE",
-  "SORA",
-  "SORAFK",
-  "SPSE",
-  "SQIS",
-  "SQSET",
-  "SQTE",
-  "SSHN",
-  "SSIS",
-  "SSNI",
-  "SSPD",
-  "STAR",
-  "STARS",
-  "START",
-  "STCV",
-  "STCVS",
-  "STEN",
-  "STOL",
-  "SUJI",
-  "SUN",
-  "SUPD",
-  "SVCAO",
-  "SVDVD",
-  "SVFLA",
-  "SVGAL",
-  "SVMGM",
-  "SVS",
-  "SVSHA",
-  "SW",
-  "SYKH",
-  "TCD",
-  "TCHB",
-  "TEK",
-  "TIKB",
-  "TLDC",
-  "TNOZ",
-  "TOMNVD",
-  "TOTTE",
-  "TPIN",
-  "TPPN",
-  "TSF",
-  "TURA",
-  "TYAN",
-  "TYOD",
-  "UMAN",
-  "UMSO",
-  "URMT",
-  "URVRSP",
-  "USAG",
-  "UZU",
-  "VAGU",
-  "VAIAV",
-  "VANDR",
-  "VEC",
-  "VEMA",
-  "VENU",
-  "VENX",
-  "VENZ",
-  "VOD",
-  "VRKM",
-  "VRNC",
-  "VRPRD",
-  "VSPDS",
-  "WAAA",
-  "WANZ",
-  "WO",
-  "XVSR",
-  "XVT",
-  "YMDD",
-  "YMDS",
-  "YMSR",
-  "YUJ",
-  "ZOCM"
-]);
-
-function isDmmHdWhitelistCode(videoIdOrTitle) {
-  const parts = parseJavCodeParts(videoIdOrTitle);
-  return !!(parts && DMM_HD_PREFIX_WHITELIST.has(parts.prefix));
 }
 
 const MGSTAGE_COVER_RULES = {
@@ -2183,28 +1811,20 @@ function buildMgstageCoverCandidatesFromParts(parts, rule) {
   };
 }
 
-function buildDmmCoverCandidatesFromParts(parts) {
-  if (!parts) return { posterCandidates: [], backdropCandidates: [] };
-  const contentId = String(parts.code || "").toLowerCase().trim();
-  if (!contentId) return { posterCandidates: [], backdropCandidates: [] };
-  const awsBase = `https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/${contentId}`;
-  const picsBase = `https://pics.dmm.co.jp/digital/video/${contentId}`;
-  return {
-    posterCandidates: compactUniqueUrls([`${awsBase}/${contentId}ps.jpg`, `${picsBase}/${contentId}ps.jpg`]),
-    backdropCandidates: compactUniqueUrls([`${awsBase}/${contentId}pl.jpg`, `${picsBase}/${contentId}pl.jpg`])
-  };
-}
-
-function buildCoverCandidatesFromVideoId(videoIdOrTitle) {
+function buildCoverCandidatesFromVideoId(videoIdOrTitle, dmmProbe) {
   const parts = parseJavCodeParts(videoIdOrTitle);
   if (!parts) return { posterCandidates: [], backdropCandidates: [] };
   const rule = MGSTAGE_COVER_RULES[parts.prefix];
   if (rule) return buildMgstageCoverCandidatesFromParts(parts, rule);
-  // 非白名单：不拼 DMM 高清（避免 now_printing 占位），由调用方回退站点封面
-  if (!DMM_HD_PREFIX_WHITELIST.has(parts.prefix)) {
-    return { posterCandidates: [], backdropCandidates: [] };
+  // 仅使用 dmm-cover-probe 校验通过的 URL，避免 now_printing 占位图
+  const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(videoIdOrTitle);
+  if (probe && (probe.posterUrl || probe.backdropUrl)) {
+    return {
+      posterCandidates: compactUniqueUrls([probe.posterUrl].filter(Boolean)),
+      backdropCandidates: compactUniqueUrls([probe.backdropUrl].filter(Boolean)),
+    };
   }
-  return buildDmmCoverCandidatesFromParts(parts);
+  return { posterCandidates: [], backdropCandidates: [] };
 }
 
 function compactUniqueUrls(urls) {
@@ -2278,15 +1898,17 @@ async function buildJavTrailersUrl(title) {
   } catch (e) { return isMgstage ? "" : fallbackUrl; }
 }
 
-function buildTrailerCoverUrl(title) {
+function buildTrailerCoverUrl(title, dmmProbe) {
   const parts = parseJavCodeParts(title);
   if (!parts) return "";
   const mgPrefixes = new Set(["ABF", "ABW", "JUFE", "SQTE"]);
   if (mgPrefixes.has(parts.prefix)) {
     return `https://image.mgstage.com/images/prestige/${parts.prefixLower}/${parts.number3}/pb_e_${parts.prefixLower}-${parts.number3}.jpg`;
   }
-  if (!DMM_HD_PREFIX_WHITELIST.has(parts.prefix)) return "";
-  return `https://pics.dmm.co.jp/digital/video/${parts.code}/${parts.code}pl.jpg`;
+  const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(title);
+  if (probe && probe.backdropUrl) return probe.backdropUrl;
+  if (probe && probe.posterUrl) return probe.posterUrl;
+  return "";
 }
 
 // ---- JavTrailers Gallery functions ----
@@ -2431,7 +2053,7 @@ function isDmmSourceHtml(html) { const r = String(html || "").toLowerCase(); ret
 
 function isMgstageSourceHtml(html) { const r = String(html || "").toLowerCase(); return r.includes("image.mgstage.com") || r.includes("mgstage.nihonjav.com") || r.includes("mgstage"); }
 
-function extractDmmGalleryFromHtml(html, contentId, dvdId) {
+function extractDmmGalleryFromHtml(html, contentId, dvdId, dmmProbe) {
   const $ = Widget.html.load(html);
   const swiper = extractGalleryImagesFromSwiper($, dvdId, contentId);
   if (swiper.length) return swiper;
@@ -2439,8 +2061,8 @@ function extractDmmGalleryFromHtml(html, contentId, dvdId) {
   const isMg = isMgstageSourceHtml(html);
   const hasReal = raw.some(u => !isMgstageCoverOnlyImage(u) && (/cap_e_\d+_/i.test(u) || /jp-\d+\./i.test(u)));
   if (raw.length && (!isMg || hasReal)) return raw;
-  const finalId = String(contentId || "").toLowerCase().trim();
-  if (isDmmSourceHtml(html) && isLikelyDmmContentId(finalId) && isDmmHdWhitelistCode(dvdId)) return buildDmmGallery(finalId, 10);
+  const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(dvdId);
+  if (probe && probe.contentId) return buildDmmGallery(probe.contentId, 10);
   if (isMg) return buildMgstageGalleryFromHtmlOrDvdId(html, dvdId, 10);
   return [];
 }
@@ -2458,18 +2080,18 @@ function buildMgstageBackdropFromDvdId(dvdId, maker) {
   return `https://image.mgstage.com/images/${maker}/${m[1].toLowerCase()}/${String(parseInt(m[2], 10))}/pb_e_${m[1].toLowerCase()}-${String(parseInt(m[2], 10))}.jpg`;
 }
 
-function extractJavTrailersBackdropPath($, html, contentId, dvdId) {
+function extractJavTrailersBackdropPath($, html, contentId, dvdId, dmmProbe) {
   const raw = String(html || "").replace(/\\\//g, "/").replace(/&amp;/g, "&");
   const mg = raw.match(/https?:\/\/image\.mgstage\.com\/images\/[^"'\s<>]+?\/pb_e_[^"'\s<>]+?\.(?:jpg|jpeg|webp|png)/i);
   if (mg) return normalizeImageUrl(mg[0]);
   const d = raw.match(/https?:\/\/pics\.dmm\.co\.jp\/digital\/video\/[^"'\s<>]+?\/[^"'\s<>]+?pl\.(?:jpg|jpeg|webp|png)/i);
-  if (d) return normalizeImageUrl(d[0]);
+  if (d && !/now_printing|noimage|adult_pl/i.test(d[0])) return normalizeImageUrl(d[0]);
   const pf = raw.match(/https?:\/\/image\.mgstage\.com\/images\/([^"'\s<>]+?)\/([a-z]+)\/(\d+)\/pf_o\d+_([a-z]+-\d+)\.(?:jpg|jpeg|webp|png)/i);
   if (pf) return `https://image.mgstage.com/images/${pf[1]}/${pf[2].toLowerCase()}/${pf[3]}/pb_e_${pf[4].toLowerCase()}.jpg`;
   const dvd = cleanDvdId(dvdId).toLowerCase().match(/^([a-z]+)[-_ ]*0*(\d+)$/i);
   if (dvd && dvd[1].toLowerCase() === "abf") { const b = buildMgstageBackdropFromDvdId(dvdId, "prestige"); if (b) return b; }
-  const finalId = String(contentId || "").toLowerCase().trim();
-  if (isLikelyDmmContentId(finalId) && isDmmHdWhitelistCode(dvdId)) return buildDmmBackdropFromContentId(finalId);
+  const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(dvdId);
+  if (probe && probe.backdropUrl) return probe.backdropUrl;
   return "";
 }
 
@@ -2509,25 +2131,27 @@ function extractJavTrailersContentId($, html, detailUrl) {
   return "";
 }
 
-async function fetchJavTrailersMeta(dvdId) {
+async function fetchJavTrailersMeta(dvdId, dmmProbe) {
   const empty = { backdropPath: "", backdropPaths: [] };
   if (!dvdId) return empty;
   const buildFallbackBackdrop = (contentId, dvdId) => {
     const md = cleanDvdId(dvdId).toLowerCase().match(/^([a-z]+)[-_ ]*0*(\d+)$/i);
     if (md && md[1].toLowerCase() === "abf") { const b = buildMgstageBackdropFromDvdId(dvdId, "prestige"); if (b) return b; }
-    if (!isDmmHdWhitelistCode(dvdId)) return "";
-    const finalId = String(contentId || "").toLowerCase().trim();
-    if (isLikelyDmmContentId(finalId)) return buildDmmBackdropFromContentId(finalId);
+    const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(dvdId);
+    if (probe && probe.backdropUrl) return probe.backdropUrl;
     return "";
   };
   try {
     const detailUrl = await findJavTrailersDetailUrl(dvdId);
     if (!detailUrl) {
-      if (!isDmmHdWhitelistCode(dvdId)) return empty;
-      const ecid = buildDmmContentIdFromDvdId(dvdId);
-      const bp = buildFallbackBackdrop(ecid, dvdId) || buildDmmBackdropFromContentId(ecid);
-      const bps = isLikelyDmmContentId(ecid) ? buildDmmGallery(ecid, 10) : [];
-      return { backdropPath: bp || "", backdropPaths: bps };
+      const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(dvdId);
+      if (probe && probe.contentId) {
+        return {
+          backdropPath: probe.backdropUrl || "",
+          backdropPaths: buildDmmGallery(probe.contentId, 10),
+        };
+      }
+      return empty;
     }
     const res = await Widget.http.get(detailUrl, { headers: { ...JAVTRAILERS_GALLERY_HEADERS, Referer: `${JAVTRAILERS_GALLERY_BASE_URL}/` }, timeout: 2500 });
     const html = res.data || "", $ = Widget.html.load(html);
@@ -2535,12 +2159,18 @@ async function fetchJavTrailersMeta(dvdId) {
     const strip = s => String(s || "").toLowerCase().replace(/^\d+/, "");
     if (contentId && expectedContentId && strip(contentId) !== strip(expectedContentId)) {
       const isMg = JAVTRAILERS_MGSTAGE_PREFIXES.has((cleanDvdId(dvdId).match(/^([a-z]+)/i) || [])[1] || "".toUpperCase());
-      const allowDmm = isDmmHdWhitelistCode(dvdId);
-      return { backdropPath: isMg ? (buildMgstageBackdropFromDvdId(dvdId, "prestige") || "") : (allowDmm ? (buildDmmBackdropFromContentId(expectedContentId.toLowerCase()) || "") : ""), backdropPaths: isMg ? buildMgstageGalleryFromDvdId(dvdId, 10) : (allowDmm && isLikelyDmmContentId(expectedContentId.toLowerCase()) ? buildDmmGallery(expectedContentId.toLowerCase(), 10) : []) };
+      const probe = dmmProbe !== undefined ? dmmProbe : lookupDmmProbeCover(dvdId);
+      if (isMg) {
+        return { backdropPath: buildMgstageBackdropFromDvdId(dvdId, "prestige") || "", backdropPaths: buildMgstageGalleryFromDvdId(dvdId, 10) };
+      }
+      if (probe && probe.contentId) {
+        return { backdropPath: probe.backdropUrl || "", backdropPaths: buildDmmGallery(probe.contentId, 10) };
+      }
+      return empty;
     }
-    let bp = extractJavTrailersBackdropPath($, html, contentId, dvdId);
+    let bp = extractJavTrailersBackdropPath($, html, contentId, dvdId, dmmProbe);
     if (!bp) bp = buildFallbackBackdrop(contentId, dvdId);
-    const bps = extractDmmGalleryFromHtml(html, contentId, dvdId);
+    const bps = extractDmmGalleryFromHtml(html, contentId, dvdId, dmmProbe);
     return { backdropPath: bp || "", backdropPaths: bps };
   } catch (e) { const fb = buildFallbackBackdrop("", dvdId); if (fb) return { backdropPath: fb, backdropPaths: [] }; return empty; }
 }
