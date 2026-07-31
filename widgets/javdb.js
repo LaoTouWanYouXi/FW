@@ -1602,7 +1602,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.8.0",
+  version: "2.8.1",
   requiredVersion: "0.0.1",
   description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码登录，验证码云端自动识别",
   author: "老头",
@@ -2048,10 +2048,19 @@ function encodeBase64FromBytes(bytes) {
 
 function httpDataToByteArray(data) {
   if (data == null) return [];
+  if (typeof ArrayBuffer !== "undefined" && data instanceof ArrayBuffer) {
+    return httpDataToByteArray(new Uint8Array(data));
+  }
   if (typeof Uint8Array !== "undefined" && data instanceof Uint8Array) {
     var u = [];
     for (var i = 0; i < data.length; i++) u.push(data[i] & 0xff);
     return u;
+  }
+  // Forward / 部分运行时会给出类 TypedArray
+  if (data && typeof data === "object" && typeof data.byteLength === "number" && typeof data[0] === "number") {
+    var arr = [];
+    for (var ai = 0; ai < data.byteLength; ai++) arr.push(Number(data[ai]) & 0xff);
+    if (arr.length) return arr;
   }
   if (Array.isArray(data)) {
     return data.map(function (n) {
@@ -2061,7 +2070,7 @@ function httpDataToByteArray(data) {
   if (typeof data === "object") {
     if (data.base64) return httpDataToByteArray(data.base64);
     if (data.bytes && Array.isArray(data.bytes)) return httpDataToByteArray(data.bytes);
-    if (typeof data.data === "string" || Array.isArray(data.data) || (typeof Uint8Array !== "undefined" && data.data instanceof Uint8Array)) {
+    if (typeof data.data === "string" || Array.isArray(data.data) || (typeof Uint8Array !== "undefined" && data.data instanceof Uint8Array) || (typeof ArrayBuffer !== "undefined" && data.data instanceof ArrayBuffer)) {
       return httpDataToByteArray(data.data);
     }
   }
@@ -2071,7 +2080,6 @@ function httpDataToByteArray(data) {
     var meta = text.slice(0, Math.max(0, comma));
     var payload = comma >= 0 ? text.slice(comma + 1) : text;
     if (/;base64/i.test(meta)) {
-      // 保留给上层：已是 base64
       return { __base64: payload.replace(/\s+/g, "") };
     }
     text = payload;
@@ -2079,6 +2087,20 @@ function httpDataToByteArray(data) {
   var bytes = [];
   for (var j = 0; j < text.length; j++) bytes.push(text.charCodeAt(j) & 0xff);
   return bytes;
+}
+
+function looksLikePureBase64(text) {
+  var s = String(text || "").replace(/\s+/g, "");
+  if (s.indexOf("data:") === 0) {
+    var c = s.indexOf(",");
+    s = c >= 0 ? s.slice(c + 1) : s;
+  }
+  if (s.length < 80 || s.length % 4 !== 0) return false;
+  // 二进制被当字符串时也会很长，但通常含大量非 base64 字符；纯 base64 几乎全是该字母表
+  if (!/^[A-Za-z0-9+/]+=*$/.test(s)) return false;
+  // GIF/PNG 原文魔数是可读 ASCII/高位字节，不会整体像纯 base64
+  if (s.indexOf("GIF8") === 0 || s.charCodeAt(0) === 0x89) return false;
+  return imageMagicOk(s);
 }
 
 function bytesToHex(bytes) {
@@ -2095,11 +2117,15 @@ function peekBytesMagic(bytes) {
   if (bytes.__base64) {
     return { ok: imageMagicOk(bytes.__base64), kind: "base64-wrapped" };
   }
-  var b0 = bytes[0], b1 = bytes[1], b2 = bytes[2], b3 = bytes[3] || 0;
+  var b0 = bytes[0],
+    b1 = bytes[1],
+    b2 = bytes[2],
+    b3 = bytes[3] || 0;
   if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46) return { ok: true, kind: "gif" };
   if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4e && b3 === 0x47) return { ok: true, kind: "png" };
   if (b0 === 0xff && b1 === 0xd8) return { ok: true, kind: "jpg" };
-  if (b0 === 0x52 && b1 === 0x49 && b2 === 0x46 && b3 === 0x46) return { ok: false, kind: "webp" };
+  if (b0 === 0x52 && b1 === 0x49 && b2 === 0x46 && b3 === 0x46) return { ok: true, kind: "webp" };
+  if (b0 === 0x1f && b1 === 0x8b) return { ok: true, kind: "gzip" }; // Worker 侧 gunzip
   if (b0 === 0x3c) return { ok: false, kind: "html" }; // '<'
   return { ok: false, kind: "unknown", headHex: bytesToHex(bytes.slice(0, 8)) };
 }
@@ -2124,10 +2150,79 @@ function imageMagicOk(base64) {
     if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46) return true;
     if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4e) return true;
     if (b0 === 0xff && b1 === 0xd8) return true;
+    if (b0 === 0x1f && b1 === 0x8b) return true;
     return false;
   } catch (err) {
     return false;
   }
+}
+
+/**
+ * Forward 拉取二进制时常见三种形态：ArrayBuffer / base64 字符串 / 被当 Latin1 的二进制字符串。
+ * 必须先验魔数，避免把损坏数据上传后报「魔数异常」，再误走 Worker 代拉 403。
+ */
+function coerceCaptchaDownload(res, responseTypeHint) {
+  if (!res || res.data == null) throw new Error("空响应");
+  if (res.status && Number(res.status) >= 400) {
+    throw new Error("本机拉取验证码 HTTP " + res.status);
+  }
+  var data = res.data;
+  var hint = String(responseTypeHint || "");
+
+  // 1) 明确 base64 模式，或数据本身就是图片 base64
+  //    注意：Forward 常忽略 responseType，仍返回 GIF 原文；勿把 "GIF8..." 当 base64
+  if (typeof data === "string") {
+    var asText = String(data);
+    var isRawGif = asText.indexOf("GIF8") === 0 || asText.charCodeAt(0) === 0x89 || asText.charCodeAt(0) === 0xff;
+    if (!isRawGif && (hint === "base64" || looksLikePureBase64(asText))) {
+      var b64 = asText.replace(/\s+/g, "");
+      if (b64.indexOf("data:") === 0) {
+        var comma = b64.indexOf(",");
+        b64 = comma >= 0 ? b64.slice(comma + 1) : b64;
+      }
+      if (!imageMagicOk(b64)) throw new Error("base64 魔数异常 head=" + b64.slice(0, 12));
+      return { kind: "base64", base64: b64 };
+    }
+  }
+
+  // 2) 原始字节
+  var bytes = httpDataToByteArray(data);
+  if (bytes && bytes.__base64) {
+    if (!imageMagicOk(bytes.__base64)) throw new Error("data-url 魔数异常");
+    return { kind: "base64", base64: bytes.__base64 };
+  }
+  if (!bytes || !bytes.length) throw new Error("无字节");
+
+  var magic = peekBytesMagic(bytes);
+  if (magic.ok) {
+    return {
+      kind: "bytes",
+      bytes: bytes,
+      headHex: bytesToHex(bytes.slice(0, 8)),
+      magic: magic.kind,
+    };
+  }
+
+  // 3) 误把 base64 当原文 charCode：再按 base64 试一次
+  if (typeof data === "string" && looksLikePureBase64(data)) {
+    var b642 = String(data).replace(/\s+/g, "");
+    return { kind: "base64", base64: b642 };
+  }
+
+  if (magic.kind === "html") {
+    var snip = "";
+    try {
+      snip = String.fromCharCode.apply(null, bytes.slice(0, 48));
+    } catch (e) {
+      snip = bytesToHex(bytes.slice(0, 8));
+    }
+    if (/403|Just a moment|cf-browser|Attention Required|blocked/i.test(snip)) {
+      throw new Error("本机验证码被拦/403 页面");
+    }
+    throw new Error("本机拉到 HTML 而非验证码图");
+  }
+
+  throw new Error("本机验证码魔数异常 kind=" + magic.kind + " headHex=" + (magic.headHex || bytesToHex(bytes.slice(0, 8))));
 }
 
 function bytesToBase64(data) {
@@ -2196,8 +2291,9 @@ async function ocrCaptchaViaProxy(params, payload) {
 }
 
 /**
- * 优先本机拉图（禁止 gzip），以 hex 上传给 Worker OCR。
+ * 优先本机拉图（禁止 gzip），以 hex/base64 上传给 Worker OCR。
  * Worker 出口访问 javdb 会被 403，不能代拉图片。
+ * Forward 对二进制常损坏：必须先验魔数，禁止把脏数据送去 OCR。
  */
 async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
   var base = javdbBase(params);
@@ -2205,13 +2301,14 @@ async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
   var errors = [];
 
   async function downloadCaptchaBytes() {
+    // base64 优先：Forward 对 arraybuffer 支持不稳定，且勿把 base64 原文当字节
     var headerVariants = [
+      { Accept: "image/gif,image/*;q=0.8,*/*;q=0.5", "Accept-Encoding": "identity" },
       { Accept: "image/gif,image/*;q=0.8", "Accept-Encoding": "identity" },
-      { Accept: "image/gif", "Accept-Encoding": "identity" },
       { Accept: "*/*", "Accept-Encoding": "identity" },
       { Accept: "image/gif,image/*;q=0.8" },
     ];
-    var typeVariants = ["arraybuffer", "base64", undefined];
+    var typeVariants = ["base64", "arraybuffer", undefined];
     var lastErr = "";
     for (var h = 0; h < headerVariants.length; h++) {
       for (var t = 0; t < typeVariants.length; t++) {
@@ -2219,33 +2316,15 @@ async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
           var headers = javdbHeaders(params, cookie);
           for (var k in headerVariants[h]) headers[k] = headerVariants[h][k];
           headers.Referer = base + "/login";
-          // 明确禁止压缩，避免拿到 1f8b gzip 被误判魔数
           if (!headers["Accept-Encoding"]) headers["Accept-Encoding"] = "identity";
           var opts = { headers: headers, allow_redirects: true };
           if (typeVariants[t]) opts.responseType = typeVariants[t];
           var res = await Widget.http.get(captchaUrl, opts);
-          if (!res || res.data == null) throw new Error("空响应");
-          if (res.status && Number(res.status) >= 400) {
-            throw new Error("本机拉取验证码 HTTP " + res.status);
-          }
-          cookie = mergeCookieHeader(cookie, collectSetCookiePairs(res));
-          var bytes = httpDataToByteArray(res.data);
-          if (bytes && bytes.__base64) {
-            return { kind: "base64", base64: bytes.__base64, cookie: cookie };
-          }
-          if (!bytes || !bytes.length) throw new Error("无字节");
-          var magic = peekBytesMagic(bytes);
-          if (magic.kind === "html") {
-            throw new Error("本机拉到 HTML 而非验证码图");
-          }
-          // gzip 魔数：仍交给 Worker 解压，不要在本地拦死
-          return {
-            kind: "bytes",
-            bytes: bytes,
-            cookie: cookie,
-            headHex: bytesToHex(bytes.slice(0, 8)),
-            responseType: typeVariants[t] || "default",
-          };
+          cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
+          var parsed = coerceCaptchaDownload(res, typeVariants[t] || "");
+          parsed.cookie = cookie;
+          parsed.responseType = typeVariants[t] || "default";
+          return parsed;
         } catch (err) {
           lastErr = String((err && err.message) || err);
         }
@@ -2254,8 +2333,7 @@ async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
     throw new Error(lastErr || "下载失败");
   }
 
-  // A. 本机下载 → hex/base64 给 Worker OCR（主路径）
-  // 有图时不要带 captchaUrl：旧 Worker 会优先代拉，403 后直接报错且不回退到上传图片
+  // A. 本机下载 → 仅在魔数合法时上传 OCR
   try {
     var dl = await downloadCaptchaBytes();
     cookie = dl.cookie || cookie;
@@ -2275,7 +2353,7 @@ async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
     errors.push("local: " + String((err && err.message) || err));
   }
 
-  // B. 本机拉图失败时再试 Worker 代拉（CF 出口多数 403，仅兜底）
+  // B. Worker 代拉几乎必然 403，仅作最后提示，避免掩盖本机真正错误
   try {
     return await ocrCaptchaViaProxy(params, {
       captchaUrl: captchaUrl,
