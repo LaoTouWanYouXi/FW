@@ -1602,7 +1602,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.7.6",
+  version: "2.7.7",
   requiredVersion: "0.0.1",
   description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码登录，验证码云端自动识别",
   author: "老头",
@@ -2012,30 +2012,80 @@ function encodeBase64FromBytes(bytes) {
   return out;
 }
 
-function bytesToBase64(data) {
-  if (data == null) return "";
-  if (typeof data !== "string") {
-    if (typeof Uint8Array !== "undefined" && data instanceof Uint8Array) {
-      var arr = [];
-      for (var u = 0; u < data.length; u++) arr.push(data[u]);
-      return encodeBase64FromBytes(arr);
-    }
-    data = String(data);
+function coerceHttpBinaryToBytes(data) {
+  if (data == null) return [];
+  // Forward 有时直接给 number[] / Uint8Array
+  if (typeof Uint8Array !== "undefined" && data instanceof Uint8Array) {
+    var u = [];
+    for (var i = 0; i < data.length; i++) u.push(data[i] & 0xff);
+    return u;
   }
+  if (Array.isArray(data)) {
+    return data.map(function (n) {
+      return Number(n) & 0xff;
+    });
+  }
+  if (typeof data === "object") {
+    if (data.base64 || data.data) return coerceHttpBinaryToBytes(data.base64 || data.data);
+    if (data.bytes && Array.isArray(data.bytes)) return coerceHttpBinaryToBytes(data.bytes);
+  }
+  if (typeof data !== "string") data = String(data);
   if (data.indexOf("data:image") === 0) {
     var comma = data.indexOf(",");
-    return comma >= 0 ? data.slice(comma + 1) : data;
+    data = comma >= 0 ? data.slice(comma + 1) : data;
   }
-  if (/^[A-Za-z0-9+/\r\n]+=*$/.test(data) && data.replace(/\s+/g, "").length > 200) {
-    return data.replace(/\s+/g, "");
+  // 已是 Base64（常见于部分 HTTP 封装对图片的返回）
+  var compact = data.replace(/\s+/g, "");
+  if (/^[A-Za-z0-9+/]+=*$/.test(compact) && compact.length > 200) {
+    try {
+      // 无 atob 时用手工解码前几字节检测；完整解码走 Worker
+      return { __base64: compact };
+    } catch (err) {}
   }
   var bytes = [];
-  for (var i = 0; i < data.length; i++) bytes.push(data.charCodeAt(i) & 0xff);
-  return encodeBase64FromBytes(bytes);
+  for (var j = 0; j < data.length; j++) bytes.push(data.charCodeAt(j) & 0xff);
+  return bytes;
+}
+
+function bytesToBase64(data) {
+  var coerced = coerceHttpBinaryToBytes(data);
+  if (coerced && coerced.__base64) return coerced.__base64;
+  if (!coerced || !coerced.length) return "";
+  return encodeBase64FromBytes(coerced);
+}
+
+function imageMagicOk(base64) {
+  try {
+    var s = String(base64 || "").replace(/\s+/g, "");
+    if (s.indexOf("data:") === 0) {
+      var c = s.indexOf(",");
+      s = c >= 0 ? s.slice(c + 1) : s;
+    }
+    // 仅解前几字节：GIF89a / PNG / JPEG
+    var table =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    function dec(ch) {
+      var i = table.indexOf(ch);
+      return i >= 0 ? i : 0;
+    }
+    if (s.length < 8) return false;
+    var n0 = (dec(s[0]) << 18) | (dec(s[1]) << 12) | (dec(s[2]) << 6) | dec(s[3]);
+    var b0 = (n0 >> 16) & 255;
+    var b1 = (n0 >> 8) & 255;
+    var b2 = n0 & 255;
+    if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46) return true; // GIF
+    if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4e) return true; // PNG
+    if (b0 === 0xff && b1 === 0xd8) return true; // JPG
+    return false;
+  } catch (err) {
+    return false;
+  }
 }
 
 function normalizeCaptchaAnswer(raw) {
-  var text = String(raw || "").replace(/\s+/g, "").replace(/[^a-zA-Z]/g, "");
+  var text = String(raw || "")
+    .replace(/\s+/g, "")
+    .replace(/[^a-zA-Z]/g, "");
   if (text.length > 5) text = text.slice(0, 5);
   return text;
 }
@@ -2062,16 +2112,21 @@ async function ocrCaptchaViaProxy(params, imageBase64) {
   var key = String(params.loginProxyKey || "").trim();
   if (key) headers["X-Login-Key"] = key;
   if (!Widget.http.post) throw new Error("当前环境不支持 POST");
-  var res = await Widget.http.post(
-    endpoint,
-    { imageBase64: imageBase64 },
-    { headers: headers, allow_redirects: true }
-  );
-  var status = Number((res && (res.status || res.statusCode)) || 0);
+  var res;
+  try {
+    res = await Widget.http.post(
+      endpoint,
+      { imageBase64: imageBase64 },
+      { headers: headers, allow_redirects: true }
+    );
+  } catch (httpErr) {
+    // Forward 对非 2xx 会抛；Worker 已改为失败也回 200，这里兜底提示
+    throw new Error("OCR 请求失败：" + String((httpErr && httpErr.message) || httpErr));
+  }
   var raw = res && res.data;
   var data = typeof raw === "string" ? JSON.parse(raw) : raw;
   if (!data || !data.ok || !data.answer) {
-    throw new Error(String((data && (data.error || data.message)) || ("OCR HTTP " + status)));
+    throw new Error(String((data && (data.error || data.message)) || "OCR 失败"));
   }
   var answer = normalizeCaptchaAnswer(data.answer);
   if (!answer || answer.length < 3) throw new Error("OCR 结果无效");
@@ -2086,15 +2141,36 @@ async function fetchCaptchaImageBase64(params, cookie, captchaSrc) {
     src = base + src;
   }
   if (src.indexOf("t=") < 0) src += (src.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
-  var headers = javdbHeaders(params, cookie);
-  headers.Accept = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
-  headers.Referer = base + "/login";
-  var res = await Widget.http.get(src, { headers: headers, allow_redirects: true });
-  if (!res || res.data == null) throw new Error("验证码图片拉取失败");
-  cookie = mergeCookieHeader(cookie, collectSetCookiePairs(res));
-  var b64 = bytesToBase64(res.data);
-  if (!b64 || b64.length < 80) throw new Error("验证码图片数据异常");
-  return { base64: b64, cookie: cookie };
+
+  var attempts = [
+    { Accept: "image/gif,image/*,*/*;q=0.8", responseType: "arraybuffer" },
+    { Accept: "image/gif,image/*,*/*;q=0.8", responseType: "base64" },
+    { Accept: "application/octet-stream,*/*", responseType: "arraybuffer" },
+    { Accept: "*/*" },
+  ];
+  var lastErr = "";
+  for (var i = 0; i < attempts.length; i++) {
+    try {
+      var headers = javdbHeaders(params, cookie);
+      headers.Accept = attempts[i].Accept;
+      headers.Referer = base + "/login";
+      var opts = { headers: headers, allow_redirects: true };
+      if (attempts[i].responseType) opts.responseType = attempts[i].responseType;
+      var res = await Widget.http.get(src, opts);
+      if (!res || res.data == null) throw new Error("空响应");
+      cookie = mergeCookieHeader(cookie, collectSetCookiePairs(res));
+      var b64 = bytesToBase64(res.data);
+      if (!b64 || b64.length < 80) throw new Error("数据过短");
+      if (!imageMagicOk(b64)) {
+        lastErr = "图片魔数异常，长度=" + b64.length + " type=" + (attempts[i].responseType || "default");
+        continue;
+      }
+      return { base64: b64, cookie: cookie };
+    } catch (err) {
+      lastErr = String((err && err.message) || err);
+    }
+  }
+  throw new Error("验证码图片拉取失败：" + lastErr);
 }
 
 /**
