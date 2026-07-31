@@ -3,9 +3,9 @@ WidgetMetadata = {
     title: "MissAV_ovo",
     author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|CC|EL|Eric|墨白",
     description: "MissAV 视频聚合模块，支持其他模块聚合missav资源、支持高清海报、封面图、预告片、相似推荐、演员信息及头像",
-    version: "3.1",
+    version: "3.2",
     requiredVersion: "0.0.1",
-    site: "https://missav.ws",
+    site: "https://missav.live",
     modules: [
         {
             title: "最近更新",
@@ -338,15 +338,162 @@ WidgetMetadata = {
     }
 };
 
-const BASE_URL = "https://missav.ws";
-const AVATAR_BASE_URL = "https://missav.ws";
+const BASE_URL = "https://missav.live";
+const AVATAR_BASE_URL = "https://missav.live";
+const MISSAV_MIRROR_HOSTS = ["missav.live", "missav.ws", "missav.ai"];
+const HTML_PROXY_WORKER_BASE = "https://move.laotou.ccwu.cc";
+const HTML_PROXY_TIMEOUT_MS = 25000;
 const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Referer": "https://missav.ws/",
+    "Referer": "https://missav.live/",
     "Connection": "keep-alive"
 };
+
+function getHtmlProxyWorkerBase() {
+    let base = "";
+    try {
+        base = Widget.storage.get("javdb.global.htmlProxyWorker") || Widget.storage.get("missav.htmlProxyWorker") || "";
+    } catch (e) {}
+    if (!base) base = HTML_PROXY_WORKER_BASE;
+    return String(base || "").replace(/\/+$/, "");
+}
+
+function getHtmlProxyHeaders() {
+    const headers = { Accept: "text/html,application/json" };
+    try {
+        const key = Widget.storage.get("javdb.global.dmmProbeApiKey") || Widget.storage.get("missav.proxyApiKey");
+        if (key) headers["X-Probe-Key"] = String(key);
+    } catch (e) {}
+    return headers;
+}
+
+function buildHtmlProxyUrl(targetUrl) {
+    const base = getHtmlProxyWorkerBase();
+    if (!base) return "";
+    return `${base}/html?url=${encodeURIComponent(String(targetUrl || ""))}`;
+}
+
+function isProxyErrorPayload(body) {
+    const text = String(body || "").trim();
+    if (!text || text.charAt(0) !== "{") return false;
+    try {
+        const data = JSON.parse(text);
+        return !!(data && data.error);
+    } catch (e) {
+        return false;
+    }
+}
+
+function isCloudflareChallengeHtml(html) {
+    const text = String(html || "");
+    if (!text) return false;
+    return /just a moment/i.test(text) ||
+        /请稍候|正在进行安全验证|security verification|performing security/i.test(text) ||
+        /sorry, you have been blocked|attention required/i.test(text) ||
+        /cf-browser-verification|challenge-platform|cdn-cgi\/challenge/i.test(text);
+}
+
+function isUsableMissavHtml(html) {
+    const text = String(html || "");
+    if (!text || text.length < 200) return false;
+    if (isProxyErrorPayload(text) || isCloudflareChallengeHtml(text)) return false;
+    // 必须看到列表/详情特征，避免把挑战页当成成功
+    return /text-secondary|og:title|surrit\.com|fourhoi\.com|\/cn\/[a-z0-9\-]+/i.test(text) &&
+        /<html[\s>]|<body[\s>]/i.test(text);
+}
+
+function rewriteMissavHost(url, host) {
+    try {
+        const u = new URL(String(url || ""));
+        if (!MISSAV_MIRROR_HOSTS.some((h) => u.hostname === h || u.hostname.endsWith("." + h))) {
+            return String(url || "");
+        }
+        u.hostname = host;
+        return u.toString();
+    } catch (e) {
+        return String(url || "");
+    }
+}
+
+async function fetchMissavHtmlViaProxy(url) {
+    const proxyUrl = buildHtmlProxyUrl(url);
+    if (!proxyUrl) throw new Error("html proxy base missing");
+    const res = await Widget.http.get(proxyUrl, {
+        headers: getHtmlProxyHeaders(),
+        allow_redirects: true,
+        timeout: HTML_PROXY_TIMEOUT_MS
+    });
+    if (!res || res.data === undefined || res.data === null) throw new Error("proxy empty response");
+    const status = Number(res.status || res.statusCode || 0);
+    if (status >= 400) throw new Error("proxy HTTP " + status);
+    const html = typeof res.data === "string" ? res.data : String(res.data);
+    if (!isUsableMissavHtml(html)) throw new Error("proxy returned unusable html");
+    return html;
+}
+
+async function fetchMissavHtmlDirect(url) {
+    const errors = [];
+    const candidates = [];
+    const primary = String(url || "");
+    candidates.push(primary);
+    for (const host of MISSAV_MIRROR_HOSTS) {
+        const rewritten = rewriteMissavHost(primary, host);
+        if (rewritten && !candidates.includes(rewritten)) candidates.push(rewritten);
+    }
+
+    const perTryTimeout = 10000;
+    for (const candidate of candidates) {
+        try {
+            const res = await Widget.http.get(candidate, {
+                headers: {
+                    ...HEADERS,
+                    Referer: (() => {
+                        try { return new URL(candidate).origin + "/"; } catch (e) { return HEADERS.Referer; }
+                    })()
+                },
+                allow_redirects: true,
+                timeout: perTryTimeout
+            });
+            if (!res || res.data === undefined || res.data === null) {
+                errors.push(`${candidate}: empty`);
+                continue;
+            }
+            const status = Number(res.status || res.statusCode || 0);
+            if (status >= 400) {
+                errors.push(`${candidate}: HTTP ${status}`);
+                continue;
+            }
+            const html = typeof res.data === "string" ? res.data : String(res.data);
+            if (!isUsableMissavHtml(html)) {
+                errors.push(`${candidate}: unusable/challenge`);
+                continue;
+            }
+            return html;
+        } catch (e) {
+            errors.push(`${candidate}: ${e && e.message ? e.message : e}`);
+        }
+    }
+    throw new Error(errors.slice(0, 3).join(" | ") || "direct fetch failed");
+}
+
+async function fetchMissavHtml(url) {
+    // MissAV 对 Cloudflare Workers 出口常直接封禁，因此优先直连镜像，代理仅作回退。
+    try {
+        return await fetchMissavHtmlDirect(url);
+    } catch (directErr) {
+        console.error(
+            "[MissAV] direct fetch failed, try html proxy:",
+            directErr && directErr.message ? directErr.message : directErr
+        );
+    }
+
+    if (getHtmlProxyWorkerBase()) {
+        return fetchMissavHtmlViaProxy(url);
+    }
+    throw new Error("MissAV 页面获取失败");
+}
 
 const PEOPLE_AVATAR_CACHE = {};
 const RECENT_UPDATES_CATEGORY = "recent_updates";
@@ -541,9 +688,9 @@ async function resolvePeopleAvatar(peopleId) {
     try {
         const avatarPageUrl = resolveAvatarPageUrl(peopleId);
         if (!avatarPageUrl) return "";
-        const res = await Widget.http.get(avatarPageUrl, { headers: HEADERS });
-        if (!res.data || res.data.includes("Just a moment")) return "";
-        const $ = Widget.html.load(res.data);
+        const html = await fetchMissavHtml(avatarPageUrl);
+        if (!html || html.includes("Just a moment")) return "";
+        const $ = Widget.html.load(html);
         const avatar = pickFirstAvatar($);
         if (!avatar || isInvalidAvatarUrl(avatar)) {
             PEOPLE_AVATAR_CACHE[peopleId] = "";
@@ -957,8 +1104,7 @@ async function findAllMissAVDetailPages(code) {
     for (const key of [...new Set(searchKeys)]) {
         const url = `${BASE_URL}/cn/search/${encodeURIComponent(key)}`;
         try {
-            const res = await Widget.http.get(url, { headers: HEADERS });
-            const html = res.data || "";
+            const html = await fetchMissavHtml(url);
             const results = parseSearchResults(html, code);
             if (!results.length) continue;
 
@@ -979,9 +1125,9 @@ async function findAllMissAVDetailPages(code) {
 async function buildMissavStreamItems(uuid, code, detailLink, type = "有码") {
     const items = [];
     const headers = {
-        "Referer": "https://missav.ws/",
+        "Referer": `${BASE_URL}/`,
         "User-Agent": HEADERS["User-Agent"],
-        "Origin": "https://missav.ws"
+        "Origin": BASE_URL
     };
 
     try {
@@ -1310,7 +1456,7 @@ async function isImageUrlAvailable(url, checkSize = false) {
             headers: {
                 "User-Agent": HEADERS["User-Agent"],
                 "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-                "Referer": "https://missav.ws/"
+                "Referer": `${BASE_URL}/`
             },
             timeout: checkSize ? IMAGE_SIZE_CHECK_TIMEOUT_MS : IMAGE_CHECK_TIMEOUT_MS
         });
@@ -1371,54 +1517,48 @@ function normalizeText(text) {
 async function parseVideoList(html, options = {}) {
     const { includeImageFields = false, currentPeople = null, currentGenre = null } = options;
 
-    if (!html || html.includes("Just a moment")) {
-        return [{ id: "err_cf", type: "text", title: "被 Cloudflare 拦截", subTitle: "请稍后重试" }];
+    if (!html || isCloudflareChallengeHtml(html)) {
+        return [{ id: "err_cf", type: "text", title: "被 Cloudflare 拦截", subTitle: "请稍后重试或切换网络" }];
     }
 
     const $ = Widget.html.load(html);
     const results = [];
 
-    const cards = $("div.group").toArray();
+    // 兼容站点 class 微调：优先旧选择器，再回退更宽的卡片结构
+    let cards = $("div.group").toArray();
+    if (!cards.length) {
+        cards = $("div.thumbnail, div.relative.group, article.group, .grid > div").toArray();
+    }
 
     for (const el of cards) {
         const $el = $(el);
-        const $link = $el.find("a.text-secondary");
+        let $link = $el.find("a.text-secondary").first();
+        if (!$link.length) $link = $el.find("a[href*='/']").filter((_, a) => {
+            const href = ($(a).attr("href") || "").toLowerCase();
+            return href && !href.includes("/actresses/") && !href.includes("/genres/") && !href.includes("/makers/");
+        }).first();
         const href = $link.attr("href");
 
         if (href) {
-            const title = $link.text().trim();
+            const title = normalizeText($link.text()) || normalizeText($el.find("img").attr("alt"));
+            if (!title) continue;
+
             const $img = $el.find("img");
             const imgSrc = $img.attr("data-src") || $img.attr("src") || "";
-            const duration = $el.find(".absolute.bottom-1.right-1").text().trim();
+            const duration = $el.find(".absolute.bottom-1.right-1, .duration, [class*='duration']").first().text().trim();
             const videoId = extractVideoId(href);
 
             const hdCovers = buildCoverUrlsFromVideoId(videoId);
             const fourhoiCover = videoId ? `https://fourhoi.com/${videoId.toLowerCase()}/cover-t.jpg` : imgSrc;
 
-            // Forward 实测：列表封面和详情页主图最依赖列表 item.coverUrl。
-            // 因此 coverUrl 放高清竖图；detailPoster 放经过验证的高清横图。
-            var posterCover = hdCovers.posterUrl || fourhoiCover || imgSrc;
-
-            // DLDSS 番号的 DMM 竖图可能是占位图，做 size 检测，失败回退 MissAV 原始图
-            if (hdCovers.posterUrl && videoId) {
-                const parts = parseJavCodeParts(videoId);
-                if (parts && shouldVerifyCoverSize(parts.prefix)) {
-                    const valid = await isImageUrlAvailable(hdCovers.posterUrl, true);
-                    if (!valid) posterCover = fourhoiCover || imgSrc;
-                }
-            }
-
-            // 特殊映射的固定背景图（跳过 HEAD 检测）
-            var backdropCover = hdCovers.backdropUrlOverride || "";
-            if (!backdropCover) {
-                // 横图失败时，优先回退 MissAV 原始图，不直接回退竖图，
-                // 避免列表页横图位置显示成竖图。
-                const backdropFallback = imgSrc || fourhoiCover || "";
-                backdropCover = await pickFirstAvailableImageUrl(
-                    hdCovers.backdropCandidates || [],
-                    backdropFallback
-                );
-            }
+            // 列表页不做串行 HEAD 探测：在弱网下会把整页拖到超时，表现为“加载失败”。
+            // 优先用规则猜的高清横图，失败回退站点原图 / fourhoi。
+            const posterCover = hdCovers.posterUrl || fourhoiCover || imgSrc;
+            const backdropCover = hdCovers.backdropUrlOverride ||
+                (hdCovers.backdropCandidates && hdCovers.backdropCandidates[0]) ||
+                imgSrc ||
+                fourhoiCover ||
+                "";
 
             const item = {
                 id: href,
@@ -2000,12 +2140,12 @@ async function loadList(params = {}) {
     try {
         const currentPeopleId = peopleId ? normalizePeopleId(peopleId) : "";
         const currentPeopleTitle = peopleId ? decodeURIComponent(String(peopleId).split('/').pop() || '主演') : "";
-        const res = await Widget.http.get(targetUrl, { headers: HEADERS });
+        const html = await fetchMissavHtml(targetUrl);
         let currentPeople = null;
 
         if (currentPeopleId) {
             const cachedAvatar = PEOPLE_AVATAR_CACHE[currentPeopleId] || "";
-            const pageAvatar = cachedAvatar || resolveAvatarImageUrl(pickFirstAvatar(Widget.html.load(res.data)));
+            const pageAvatar = cachedAvatar || resolveAvatarImageUrl(pickFirstAvatar(Widget.html.load(html)));
             if (pageAvatar) {
                 PEOPLE_AVATAR_CACHE[currentPeopleId] = pageAvatar;
             } else if (!cachedAvatar) {
@@ -2020,12 +2160,12 @@ async function loadList(params = {}) {
             );
         }
 
-        return await parseVideoList(res.data, {
+        return await parseVideoList(html, {
             currentPeople,
             currentGenre: genreId ? buildGenreContext(normalizeGenreId(genreId), decodeURIComponent(String(genreId).split('/').pop() || '分类')) : null
         });
     } catch (e) {
-        return [{ id: "err", type: "text", title: "加载失败", subTitle: e.message }];
+        return [{ id: "err", type: "text", title: "加载失败", subTitle: String(e && e.message ? e.message : e) }];
     }
 }
 
@@ -2040,8 +2180,8 @@ async function searchList(params = {}) {
     if (page > 1) url += `?page=${page}`;
 
     try {
-        const res = await Widget.http.get(url, { headers: HEADERS });
-        return await parseVideoList(res.data);
+        const html = await fetchMissavHtml(url);
+        return await parseVideoList(html);
     } catch (e) {
         return [{ id: "err", type: "text", title: "搜索失败", subTitle: e.message }];
     }
@@ -2058,8 +2198,8 @@ async function searchGlobal(params = {}) {
     if (page > 1) url += `?page=${page}`;
 
     try {
-        const res = await Widget.http.get(url, { headers: HEADERS });
-        return await parseVideoList(res.data, { includeImageFields: true });
+        const html = await fetchMissavHtml(url);
+        return await parseVideoList(html, { includeImageFields: true });
     } catch (e) {
         return [{ id: "err", type: "text", title: "全局搜索失败", subTitle: e.message }];
     }
@@ -2090,8 +2230,7 @@ async function loadResource(params = {}) {
 
             if (!uuid) {
                 try {
-                    const res = await Widget.http.get(page.link, { headers: HEADERS });
-                    const html = res.data || "";
+                    const html = await fetchMissavHtml(page.link);
                     if (html.includes("Just a moment")) continue;
 
                     // 提取 surrit UUID
@@ -2127,8 +2266,7 @@ async function loadResourceLegacy(params, code) {
             const MAX_RETRIES = 2;
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
                 let searchUrl = `${BASE_URL}/cn/search/${encodeURIComponent(code.trim())}`;
-                const res = await Widget.http.get(searchUrl, { headers: HEADERS });
-                let html = res.data;
+                let html = await fetchMissavHtml(searchUrl);
                 detailHtml = html;
                 let detailLink = searchUrl;
 
@@ -2176,8 +2314,7 @@ async function loadResourceLegacy(params, code) {
 
                     if (firstHref) {
                         detailLink = resolveUrl(firstHref);
-                        const detailRes = await Widget.http.get(detailLink, { headers: HEADERS });
-                        detailHtml = detailRes.data;
+                        detailHtml = await fetchMissavHtml(detailLink);
                     } else {
                         if (attempt < MAX_RETRIES) continue;
                         return [];
@@ -2211,7 +2348,7 @@ async function loadResourceLegacy(params, code) {
                 name: code.toUpperCase(),
                 description: "MissAV 播放源",
                 url: videoUrl,
-                customHeaders: { "Referer": currentReferer, "User-Agent": HEADERS["User-Agent"], "Origin": "https://missav.ws" }
+                customHeaders: { "Referer": currentReferer, "User-Agent": HEADERS["User-Agent"], "Origin": BASE_URL }
             }];
         }
         return [];
@@ -2351,8 +2488,7 @@ function extractRelatedItems($, currentLink) {
 
 async function loadDetail(link) {
     try {
-        const res = await Widget.http.get(link, { headers: HEADERS });
-        const html = res.data;
+        const html = await fetchMissavHtml(link);
         const $ = Widget.html.load(html);
 
         const title = $('meta[property="og:title"]').attr('content') || $('h1').text().trim();
@@ -2574,9 +2710,9 @@ async function loadDetail(link) {
                 relatedItems: finalRelatedItems,
 
                 customHeaders: {
-                    "Referer": "https://missav.ws/",
+                    "Referer": `${BASE_URL}/`,
                     "User-Agent": HEADERS["User-Agent"],
-                    "Origin": "https://missav.ws"
+                    "Origin": BASE_URL
                 }
             };
 
