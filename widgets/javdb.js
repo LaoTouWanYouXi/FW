@@ -1604,7 +1604,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.8.5",
+  version: "2.8.6",
   requiredVersion: "0.0.1",
   description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码登录，验证码云端自动识别",
   author: "老头",
@@ -1913,9 +1913,22 @@ function mergeCookieHeader(existing, pairs) {
 function normalizePastedCookie(raw) {
   var text = String(raw || "").trim();
   if (!text) return "";
+  // 去掉用户粘贴时常见的引号 / Cookie: 前缀 / 换行
   text = text.replace(/^cookie\s*:\s*/i, "");
+  if (
+    (text.charAt(0) === "'" && text.charAt(text.length - 1) === "'") ||
+    (text.charAt(0) === '"' && text.charAt(text.length - 1) === '"') ||
+    (text.charAt(0) === "`" && text.charAt(text.length - 1) === "`")
+  ) {
+    text = text.slice(1, -1).trim();
+  }
+  text = text.replace(/^['"`]+|['"`]+$/g, "");
   text = text.replace(/\r?\n+/g, "; ");
   text = text.replace(/;;+/g, ";").replace(/^\s*;\s*|\s*;\s*$/g, "").trim();
+  // 若整段被包在无名值对里，尝试抽出 _jdb_session
+  if (text && text.indexOf("=") < 0 && /_jdb_session/i.test(text)) {
+    text = "_jdb_session=" + text.replace(/^_jdb_session/i, "");
+  }
   return text;
 }
 
@@ -1928,7 +1941,6 @@ function readStoredJavdbCookie(params) {
     if (storedSession) return normalizePastedCookie(storedSession);
   } catch (err) {}
   try {
-    // syncGlobalParams 会写入 javdb.global.cookie
     var storedParam = Widget.storage.get("javdb.global.cookie");
     if (storedParam) return normalizePastedCookie(storedParam);
   } catch (err2) {}
@@ -1950,25 +1962,31 @@ function clearJavdbCookie() {
   try {
     Widget.storage.set(JAVDB_COOKIE_STORAGE_KEY, "");
   } catch (err) {}
-  // 不清理用户全局参数里的手动 cookie，避免误删
 }
 
 function htmlHasMovieLinks(html) {
-  return /href=["']\/v\//i.test(String(html || ""));
+  var t = String(html || "");
+  // 兼容相对/绝对链接、无引号 href
+  return /\/v\/[A-Za-z0-9]+/i.test(t);
 }
 
 function isLoginRequiredHtml(html) {
   var text = String(html || "");
   if (!text) return false;
-  // 有真实影片链接则不算登录墙（即使页面里也有 login 字样）
+  // 有影片链接就不是登录墙（导航里常有「登录」二字，不能据此误判）
   if (htmlHasMovieLinks(text)) return false;
   if (/此內容需要登入|此内容需要登录|需要登录|需要登入才能查看|請先登入|请先登录|会員限定|會員限定|会员限定/i.test(text)) {
     return true;
   }
-  if (/action=["']\/user_sessions["']/i.test(text)) return true;
-  // TOP250/热播等：常有空的 movie-list 容器但无 /v/ 链接
-  if (/movie-list/i.test(text) && /login|登入|登录/i.test(text)) return true;
+  // 真正的登录表单（含密码/验证码），而非页脚登录链接
+  if (/action=["']\/user_sessions["']/i.test(text) && /name=["']password["']|name=["']_rucaptcha["']/i.test(text)) {
+    return true;
+  }
   return false;
+}
+
+function isValidJavdbSessionCookie(cookie) {
+  return /(?:^|;\s*)_jdb_session=[^;\s]+/i.test(String(cookie || ""));
 }
 
 function pathRequiresLogin(path) {
@@ -2084,21 +2102,75 @@ function encodeBase64FromBytes(bytes) {
   return out;
 }
 
+/** Forward 常把二进制按 UTF-16 code unit 打包：charCode>255 时要拆成高/低字节才能还原 GIF */
+function stringToBinaryBytes(text, order) {
+  text = String(text || "");
+  order = order || "be";
+  var i;
+  var c;
+  var hasHi = false;
+  for (i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) > 255) {
+      hasHi = true;
+      break;
+    }
+  }
+  var bytes = [];
+  if (hasHi) {
+    for (i = 0; i < text.length; i++) {
+      c = text.charCodeAt(i);
+      if (order === "le") {
+        bytes.push(c & 0xff);
+        bytes.push((c >> 8) & 0xff);
+      } else {
+        bytes.push((c >> 8) & 0xff);
+        bytes.push(c & 0xff);
+      }
+    }
+  } else {
+    for (i = 0; i < text.length; i++) bytes.push(text.charCodeAt(i) & 0xff);
+  }
+  return bytes;
+}
+
+function typedArrayToBytes(data) {
+  if (!data) return [];
+  // 关键：不要用 byteLength 当下标去读 Uint16Array（会读出 0 并丢掉高位字节）
+  if (typeof ArrayBuffer !== "undefined" && typeof Uint8Array !== "undefined") {
+    try {
+      if (data instanceof ArrayBuffer) {
+        var u0 = new Uint8Array(data);
+        var a0 = [];
+        for (var i0 = 0; i0 < u0.length; i0++) a0.push(u0[i0]);
+        return a0;
+      }
+      if (data.buffer && typeof data.byteLength === "number" && typeof data.byteOffset === "number") {
+        var u1 = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        var a1 = [];
+        for (var i1 = 0; i1 < u1.length; i1++) a1.push(u1[i1]);
+        return a1;
+      }
+    } catch (err) {}
+  }
+  if (typeof data.length === "number") {
+    var a2 = [];
+    for (var i2 = 0; i2 < data.length; i2++) a2.push(Number(data[i2]) & 0xff);
+    return a2;
+  }
+  return [];
+}
+
 function httpDataToByteArray(data) {
   if (data == null) return [];
   if (typeof ArrayBuffer !== "undefined" && data instanceof ArrayBuffer) {
-    return httpDataToByteArray(new Uint8Array(data));
+    return typedArrayToBytes(data);
   }
   if (typeof Uint8Array !== "undefined" && data instanceof Uint8Array) {
-    var u = [];
-    for (var i = 0; i < data.length; i++) u.push(data[i] & 0xff);
-    return u;
+    return typedArrayToBytes(data);
   }
-  // Forward / 部分运行时会给出类 TypedArray
-  if (data && typeof data === "object" && typeof data.byteLength === "number" && typeof data[0] === "number") {
-    var arr = [];
-    for (var ai = 0; ai < data.byteLength; ai++) arr.push(Number(data[ai]) & 0xff);
-    if (arr.length) return arr;
+  if (data && typeof data === "object" && typeof data.byteLength === "number" && (typeof data.length === "number" || data.buffer)) {
+    var fromTyped = typedArrayToBytes(data);
+    if (fromTyped.length) return fromTyped;
   }
   if (Array.isArray(data)) {
     return data.map(function (n) {
@@ -2108,7 +2180,12 @@ function httpDataToByteArray(data) {
   if (typeof data === "object") {
     if (data.base64) return httpDataToByteArray(data.base64);
     if (data.bytes && Array.isArray(data.bytes)) return httpDataToByteArray(data.bytes);
-    if (typeof data.data === "string" || Array.isArray(data.data) || (typeof Uint8Array !== "undefined" && data.data instanceof Uint8Array) || (typeof ArrayBuffer !== "undefined" && data.data instanceof ArrayBuffer)) {
+    if (
+      typeof data.data === "string" ||
+      Array.isArray(data.data) ||
+      (typeof Uint8Array !== "undefined" && data.data instanceof Uint8Array) ||
+      (typeof ArrayBuffer !== "undefined" && data.data instanceof ArrayBuffer)
+    ) {
       return httpDataToByteArray(data.data);
     }
   }
@@ -2122,9 +2199,14 @@ function httpDataToByteArray(data) {
     }
     text = payload;
   }
-  var bytes = [];
-  for (var j = 0; j < text.length; j++) bytes.push(text.charCodeAt(j) & 0xff);
-  return bytes;
+  // 纯 hex（偶发）
+  if (/^[0-9a-fA-F\s]+$/.test(text) && text.replace(/\s+/g, "").length >= 32 && text.replace(/\s+/g, "").length % 2 === 0) {
+    var hex = text.replace(/\s+/g, "");
+    var hb = [];
+    for (var hi = 0; hi < hex.length; hi += 2) hb.push(parseInt(hex.slice(hi, hi + 2), 16) & 0xff);
+    return hb;
+  }
+  return stringToBinaryBytes(text);
 }
 
 function looksLikePureBase64(text) {
@@ -2239,6 +2321,23 @@ function coerceCaptchaDownload(res, responseTypeHint) {
       headHex: bytesToHex(bytes.slice(0, 8)),
       magic: magic.kind,
     };
+  }
+
+  // 2b) UTF-16 打包方向试反：headHex=493861... 就是只取了低字节的典型症状
+  if (typeof data === "string") {
+    var altOrders = ["be", "le"];
+    for (var oi = 0; oi < altOrders.length; oi++) {
+      var alt = stringToBinaryBytes(data, altOrders[oi]);
+      var altMagic = peekBytesMagic(alt);
+      if (altMagic.ok) {
+        return {
+          kind: "bytes",
+          bytes: alt,
+          headHex: bytesToHex(alt.slice(0, 8)),
+          magic: altMagic.kind,
+        };
+      }
+    }
   }
 
   // 3) 误把 base64 当原文 charCode：再按 base64 试一次
@@ -2505,10 +2604,6 @@ async function loginJavdbWithPassword(params, options) {
       lastErr +
       "。为防风控仅重试 2 次；可稍后重试，或浏览器登录后把含 _jdb_session 的 Cookie 填入全局参数"
   );
-}
-
-function isValidJavdbSessionCookie(cookie) {
-  return /_jdb_session=/i.test(String(cookie || ""));
 }
 
 async function ensureJavdbSession(params, options) {
