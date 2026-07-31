@@ -1602,7 +1602,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.7.9",
+  version: "2.8.0",
   requiredVersion: "0.0.1",
   description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码登录，验证码云端自动识别",
   author: "老头",
@@ -1958,18 +1958,20 @@ function extractLoginFormMeta(html) {
   };
 }
 
-async function httpPostForm(url, body, params, cookie) {
+async function httpPostForm(url, body, params, cookie, options) {
+  options = options || {};
   var headers = javdbHeaders(params, cookie);
   headers["Content-Type"] = "application/x-www-form-urlencoded";
   headers.Origin = javdbBase(params);
   headers.Referer = javdbBase(params) + "/login";
   var payload = typeof body === "string" ? body : "";
+  var allowRedirects = options.allowRedirects !== undefined ? !!options.allowRedirects : true;
   var res;
   if (Widget.http.post) {
     // Forward 官方签名: post(url, body, options) —— 切勿把 options 当 body
     res = await Widget.http.post(url, payload, {
       headers: headers,
-      allow_redirects: true,
+      allow_redirects: allowRedirects,
     });
   } else if (Widget.http.request) {
     res = await Widget.http.request({
@@ -1977,12 +1979,44 @@ async function httpPostForm(url, body, params, cookie) {
       method: "POST",
       headers: headers,
       body: payload,
-      allow_redirects: true,
+      allow_redirects: allowRedirects,
     });
   } else {
     throw new Error("当前环境不支持 POST，请改用 Cookie 登录");
   }
   return res;
+}
+
+function responseLocation(res, base) {
+  var loc =
+    getHeaderValue(res, "location") ||
+    getHeaderValue(res, "Location") ||
+    String((res && (res.url || res.finalUrl || res.requestUrl)) || "");
+  loc = String(loc || "").trim();
+  if (!loc) return "";
+  if (loc.indexOf("http") === 0) return loc;
+  base = String(base || "").replace(/\/+$/, "");
+  if (loc.charAt(0) !== "/") loc = "/" + loc;
+  return base + loc;
+}
+
+function collectAnyCookiePairs(res) {
+  var pairs = collectSetCookiePairs(res);
+  if (pairs.length) return pairs;
+  // 部分运行时把会话放在 cookies / cookie 字段而非 Set-Cookie
+  if (res && res.cookies) {
+    if (typeof res.cookies === "string") return collectSetCookiePairs({ headers: { "set-cookie": res.cookies } });
+    if (Array.isArray(res.cookies)) {
+      return res.cookies
+        .map(function (c) {
+          if (typeof c === "string") return c.split(";")[0].trim();
+          if (c && c.name) return c.name + "=" + String(c.value == null ? "" : c.value);
+          return "";
+        })
+        .filter(Boolean);
+    }
+  }
+  return [];
 }
 
 function encodeForm(data) {
@@ -2191,12 +2225,19 @@ async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
           if (typeVariants[t]) opts.responseType = typeVariants[t];
           var res = await Widget.http.get(captchaUrl, opts);
           if (!res || res.data == null) throw new Error("空响应");
+          if (res.status && Number(res.status) >= 400) {
+            throw new Error("本机拉取验证码 HTTP " + res.status);
+          }
           cookie = mergeCookieHeader(cookie, collectSetCookiePairs(res));
           var bytes = httpDataToByteArray(res.data);
           if (bytes && bytes.__base64) {
             return { kind: "base64", base64: bytes.__base64, cookie: cookie };
           }
           if (!bytes || !bytes.length) throw new Error("无字节");
+          var magic = peekBytesMagic(bytes);
+          if (magic.kind === "html") {
+            throw new Error("本机拉到 HTML 而非验证码图");
+          }
           // gzip 魔数：仍交给 Worker 解压，不要在本地拦死
           return {
             kind: "bytes",
@@ -2213,12 +2254,12 @@ async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
     throw new Error(lastErr || "下载失败");
   }
 
-  // A. 本机下载 → hex/base64 给 Worker（主路径）
+  // A. 本机下载 → hex/base64 给 Worker OCR（主路径）
+  // 有图时不要带 captchaUrl：旧 Worker 会优先代拉，403 后直接报错且不回退到上传图片
   try {
     var dl = await downloadCaptchaBytes();
     cookie = dl.cookie || cookie;
     var payload = {
-      captchaUrl: captchaUrl,
       cookie: cookie,
       baseUrl: base,
     };
@@ -2234,7 +2275,7 @@ async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
     errors.push("local: " + String((err && err.message) || err));
   }
 
-  // B. 仍尝试 Worker 代拉（多数出口 403，仅作兜底）
+  // B. 本机拉图失败时再试 Worker 代拉（CF 出口多数 403，仅兜底）
   try {
     return await ocrCaptchaViaProxy(params, {
       captchaUrl: captchaUrl,
@@ -2297,11 +2338,30 @@ async function loginJavdbWithPassword(params, options) {
           commit: formMeta.commit || "登入",
         }),
         params,
-        cookie
+        cookie,
+        { allowRedirects: false }
       );
-      cookie = mergeCookieHeader(cookie, collectSetCookiePairs(res));
+      // 登录会话 Cookie 通常在 302 的 Set-Cookie 上；自动跟随跳转常会丢掉
+      cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
+      var status = Number((res && res.status) || 0);
+      var loc = responseLocation(res, base);
       var body = res && res.data ? String(res.data) : "";
-      var finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || "");
+
+      if (loc && (status === 0 || status === 301 || status === 302 || status === 303 || status === 307 || status === 308)) {
+        var follow = await Widget.http.get(loc, {
+          headers: javdbHeaders(params, cookie),
+          allow_redirects: true,
+        });
+        cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(follow));
+        body = follow && follow.data ? String(follow.data) : body;
+        loc = String((follow && (follow.url || follow.finalUrl || follow.requestUrl)) || loc);
+        res = follow || res;
+      } else if (!/_jdb_session=/i.test(cookie)) {
+        // 兼容仍自动跟随的运行时：再扫一遍最终响应
+        cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
+      }
+
+      var finalUrl = String(loc || (res && (res.url || res.finalUrl || res.requestUrl)) || "");
       var stillLogin =
         /action=["']\/user_sessions["']/i.test(body) ||
         (/\/login/i.test(finalUrl) && !/_jdb_session=/i.test(cookie)) ||
@@ -2311,7 +2371,12 @@ async function loginJavdbWithPassword(params, options) {
         saveJavdbCookie(cookie);
         return cookie;
       }
-      lastErr = "第" + attempt + "次失败（验证码或账密） OCR=" + captchaAnswer;
+      if (!stillLogin && !/_jdb_session=/i.test(cookie)) {
+        lastErr =
+          "登录页已跳转但未读到 _jdb_session（运行时可能隐藏 Set-Cookie）。请从浏览器复制 Cookie 填到全局参数";
+      } else {
+        lastErr = "第" + attempt + "次失败（验证码或账密） OCR=" + captchaAnswer;
+      }
       seedCookie = "";
       clearJavdbCookie();
     } catch (err) {
@@ -2323,27 +2388,32 @@ async function loginJavdbWithPassword(params, options) {
   throw new Error("账号登录失败：" + lastErr);
 }
 
+function isValidJavdbSessionCookie(cookie) {
+  return /_jdb_session=/i.test(String(cookie || ""));
+}
+
 async function ensureJavdbSession(params, options) {
   options = options || {};
   params = params || {};
   var cookie = readStoredJavdbCookie(params);
-  if (cookie && !options.forceLogin) {
+  // 仅当缓存含 _jdb_session 时才视为已登录，避免 locale/over18 等残片跳过账密登录
+  if (isValidJavdbSessionCookie(cookie) && !options.forceLogin) {
     return cookie;
   }
-  if (options.allowAnonymous && !params.email && !params.password && !cookie) {
+  if (options.allowAnonymous && !params.email && !params.password && !isValidJavdbSessionCookie(cookie)) {
     return "";
   }
   if (!String(params.email || "").trim() && !String(params.password || "").trim()) {
-    if (cookie) return cookie;
+    if (isValidJavdbSessionCookie(cookie)) return cookie;
     throw new Error("该内容需要登录：请填写账号密码，或粘贴含 _jdb_session 的 Cookie");
   }
   if (JAVDB_LOGIN_INFLIGHT) return JAVDB_LOGIN_INFLIGHT;
   JAVDB_LOGIN_INFLIGHT = loginJavdbWithPassword(params, {
     forceLogin: !!options.forceLogin,
-    ignoreCookie: !!options.forceLogin,
+    ignoreCookie: !!options.forceLogin || !isValidJavdbSessionCookie(cookie),
   })
     .catch(function (err) {
-      if (cookie && !options.forceLogin) return cookie;
+      if (isValidJavdbSessionCookie(cookie) && !options.forceLogin) return cookie;
       throw err;
     })
     .finally(function () {

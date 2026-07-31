@@ -3,9 +3,9 @@ WidgetMetadata = {
     title: "MissAV_ovo",
     author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|CC|EL|Eric|墨白",
     description: "MissAV 视频聚合模块，支持其他模块聚合missav资源、支持高清海报、封面图、预告片、相似推荐、演员信息及头像",
-    version: "3.2",
+    version: "3.3",
     requiredVersion: "0.0.1",
-    site: "https://missav.live",
+    site: "https://missav.fans",
     modules: [
         {
             title: "最近更新",
@@ -338,16 +338,22 @@ WidgetMetadata = {
     }
 };
 
-const BASE_URL = "https://missav.live";
-const AVATAR_BASE_URL = "https://missav.live";
-const MISSAV_MIRROR_HOSTS = ["missav.live", "missav.ws", "missav.ai"];
+const BASE_URL = "https://missav.fans";
+const AVATAR_BASE_URL = "https://missav.fans";
+const MISSAV_MIRROR_HOSTS = [
+    "missav.fans",
+    "missav.media",
+    "missav.live",
+    "missav.ws",
+    "missav.ai"
+];
 const HTML_PROXY_WORKER_BASE = "https://move.laotou.ccwu.cc";
 const HTML_PROXY_TIMEOUT_MS = 25000;
 const HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Referer": "https://missav.live/",
+    "Referer": "https://missav.fans/",
     "Connection": "keep-alive"
 };
 
@@ -389,18 +395,22 @@ function isProxyErrorPayload(body) {
 function isCloudflareChallengeHtml(html) {
     const text = String(html || "");
     if (!text) return false;
-    return /just a moment/i.test(text) ||
-        /请稍候|正在进行安全验证|security verification|performing security/i.test(text) ||
-        /sorry, you have been blocked|attention required/i.test(text) ||
-        /cf-browser-verification|challenge-platform|cdn-cgi\/challenge/i.test(text);
+    // 正常列表页也会嵌入 Turnstile/challenge 脚本，不能仅凭 challenge-platform 判定失败。
+    // 有缩略图/标题链接且页面足够长时，视为已通过。
+    if (text.length > 20000 && /thumbnail|text-secondary/i.test(text)) return false;
+    if (/sorry, you have been blocked/i.test(text)) return true;
+    if (/attention required!/i.test(text) && /cloudflare/i.test(text) && text.length < 20000) return true;
+    if (/just a moment/i.test(text) && text.length < 20000) return true;
+    if (/(请稍候|正在进行安全验证|performing security verification)/i.test(text) && text.length < 20000) return true;
+    if (/cf-browser-verification|challenge-platform|cdn-cgi\/challenge/i.test(text) && text.length < 15000) return true;
+    return false;
 }
 
 function isUsableMissavHtml(html) {
     const text = String(html || "");
     if (!text || text.length < 200) return false;
     if (isProxyErrorPayload(text) || isCloudflareChallengeHtml(text)) return false;
-    // 必须看到列表/详情特征，避免把挑战页当成成功
-    return /text-secondary|og:title|surrit\.com|fourhoi\.com|\/cn\/[a-z0-9\-]+/i.test(text) &&
+    return /text-secondary|thumbnail|og:title|fourhoi\.com|surrit\.com/i.test(text) &&
         /<html[\s>]|<body[\s>]/i.test(text);
 }
 
@@ -499,6 +509,10 @@ const PEOPLE_AVATAR_CACHE = {};
 const RECENT_UPDATES_CATEGORY = "recent_updates";
 const RECENT_UPDATES_ENDPOINT = "dm539/cn/new";
 const VIDEO_URL_CACHE = {};
+const MISSAV_CARD_SELECTOR = "div.group, [class*='thumbnail'][class*='group']";
+const MISSAV_TITLE_LINK_SELECTOR = "a.text-secondary, a[class*='text-secondary']";
+const MISSAV_META_ROW_SELECTOR = ".text-secondary, [class*='text-secondary']";
+const MISSAV_DURATION_SELECTOR = ".absolute.bottom-1.right-1, [class*='absolute'][class*='bottom-1'][class*='right-1']";
 
 function getSortOptions() {
     return [
@@ -1042,7 +1056,7 @@ function classifyMissavLink(link) {
 }
 
 function parseSearchResults(html, targetCode) {
-    if (!html || html.includes("Just a moment")) {
+    if (!html || isCloudflareChallengeHtml(html)) {
         console.warn("[MissAV] 可能被 Cloudflare 拦截，搜索页返回异常");
         return [];
     }
@@ -1051,9 +1065,9 @@ function parseSearchResults(html, targetCode) {
     const results = [];
     const seen = new Set();
 
-    $("div.group").each((i, el) => {
+    $(MISSAV_CARD_SELECTOR).each((i, el) => {
         const $el = $(el);
-        const $link = $el.find("a.text-secondary").first();
+        const $link = $el.find(MISSAV_TITLE_LINK_SELECTOR).first();
         const href = $link.attr("href");
         if (!href) return;
 
@@ -1069,14 +1083,14 @@ function parseSearchResults(html, targetCode) {
         results.push({ title, link, code });
     });
 
-    // fallback：如果 div.group 结构失效，遍历所有链接
+    // fallback：如果卡片结构失效，遍历所有链接
     if (results.length === 0) {
         $("a[href]").each((i, el) => {
             const $el = $(el);
             const href = $el.attr("href");
             if (!href) return;
             const link = resolveUrl(href);
-            if (!link.includes("/cn/")) return;
+            if (!/\/(?:cn\/)?[a-z0-9]+(?:-[a-z0-9]+)+/i.test(link)) return;
             if (seen.has(link)) return;
             const codeFromLink = extractCodeFromMissAVLink(link);
             if (!codeFromLink) return;
@@ -1524,98 +1538,93 @@ async function parseVideoList(html, options = {}) {
     const $ = Widget.html.load(html);
     const results = [];
 
-    // 兼容站点 class 微调：优先旧选择器，再回退更宽的卡片结构
-    let cards = $("div.group").toArray();
+    // 新站 class 带域名前缀，如 missav_fans-group / missav_fans-text-secondary
+    let cards = $(MISSAV_CARD_SELECTOR).toArray();
     if (!cards.length) {
-        cards = $("div.thumbnail, div.relative.group, article.group, .grid > div").toArray();
+        cards = $("[class*='thumbnail'], .grid > div, article").toArray();
     }
 
     for (const el of cards) {
         const $el = $(el);
-        let $link = $el.find("a.text-secondary").first();
-        if (!$link.length) $link = $el.find("a[href*='/']").filter((_, a) => {
-            const href = ($(a).attr("href") || "").toLowerCase();
-            return href && !href.includes("/actresses/") && !href.includes("/genres/") && !href.includes("/makers/");
-        }).first();
+        let $link = $el.find(MISSAV_TITLE_LINK_SELECTOR).first();
+        if (!$link.length) {
+            $link = $el.find("a[href]").filter((_, a) => {
+                const href = ($(a).attr("href") || "").toLowerCase();
+                if (!href) return false;
+                if (/\/(actresses|genres|makers|search|dm\d+)\b/.test(href)) return false;
+                return /\/(?:cn\/)?[a-z0-9]+(?:-[a-z0-9]+)+/i.test(href);
+            }).first();
+        }
         const href = $link.attr("href");
+        if (!href) continue;
 
-        if (href) {
-            const title = normalizeText($link.text()) || normalizeText($el.find("img").attr("alt"));
-            if (!title) continue;
+        const title = normalizeText($link.text()) || normalizeText($el.find("img").attr("alt"));
+        if (!title) continue;
 
-            const $img = $el.find("img");
-            const imgSrc = $img.attr("data-src") || $img.attr("src") || "";
-            const duration = $el.find(".absolute.bottom-1.right-1, .duration, [class*='duration']").first().text().trim();
-            const videoId = extractVideoId(href);
+        const $img = $el.find("img");
+        const imgSrc = $img.attr("data-src") || $img.attr("src") || "";
+        const duration = $el.find(MISSAV_DURATION_SELECTOR).first().text().trim();
+        const videoId = extractVideoId(href);
 
-            const hdCovers = buildCoverUrlsFromVideoId(videoId);
-            const fourhoiCover = videoId ? `https://fourhoi.com/${videoId.toLowerCase()}/cover-t.jpg` : imgSrc;
+        const hdCovers = buildCoverUrlsFromVideoId(videoId);
+        const fourhoiCover = videoId ? `https://fourhoi.com/${videoId.toLowerCase()}/cover-t.jpg` : imgSrc;
 
-            // 列表页不做串行 HEAD 探测：在弱网下会把整页拖到超时，表现为“加载失败”。
-            // 优先用规则猜的高清横图，失败回退站点原图 / fourhoi。
-            const posterCover = hdCovers.posterUrl || fourhoiCover || imgSrc;
-            const backdropCover = hdCovers.backdropUrlOverride ||
-                (hdCovers.backdropCandidates && hdCovers.backdropCandidates[0]) ||
-                imgSrc ||
-                fourhoiCover ||
-                "";
+        // 列表页不做串行 HEAD 探测，避免弱网超时变成“加载失败”
+        const posterCover = hdCovers.posterUrl || fourhoiCover || imgSrc;
+        const backdropCover = hdCovers.backdropUrlOverride ||
+            (hdCovers.backdropCandidates && hdCovers.backdropCandidates[0]) ||
+            imgSrc ||
+            fourhoiCover ||
+            "";
 
-            const item = {
-                id: href,
-                type: "link",
-                title,
+        const item = {
+            id: href,
+            type: "link",
+            title,
+            coverUrl: backdropCover,
+            detailPoster: posterCover,
+            link: href,
+            description: `时长: ${duration}${videoId ? ` | 番号: ${videoId}` : ""}`,
+            customHeaders: HEADERS
+        };
 
-                // 列表页实测优先吃 coverUrl。
-                // 为了让首页 / 列表页横图样式稳定显示横图，这里放高清横图。
-                coverUrl: backdropCover,
+        const peopleItems = [];
+        if (currentPeople) peopleItems.push(currentPeople);
 
-                // 按旧私服结构保留竖图给 detailPoster。
-                // 虽然当前测试里它没有压过 coverUrl，但先保持和旧版一致。
-                detailPoster: posterCover,
+        $el.find('a[href*="/actresses/"], a[href*="actresses"]').each((_, peopleEl) => {
+            const $people = $(peopleEl);
+            const people = buildPeopleItem(
+                $people.text(),
+                getImageFromElement($, $people),
+                $people.attr("href") || ""
+            );
+            if (!people) return;
 
-                link: href,
-                description: `时长: ${duration}${videoId ? ` | 番号: ${videoId}` : ""}`,
-                customHeaders: HEADERS
-            };
+            const existingIndex = peopleItems.findIndex((entry) =>
+                entry.id === people.id ||
+                normalizePeopleKey(entry.title) === normalizePeopleKey(people.title)
+            );
 
-            const peopleItems = [];
-            if (currentPeople) peopleItems.push(currentPeople);
-
-            $el.find('a[href*="/actresses/"], a[href*="actresses"]').each((_, peopleEl) => {
-                const $people = $(peopleEl);
-                const people = buildPeopleItem(
-                    $people.text(),
-                    getImageFromElement($, $people),
-                    $people.attr("href") || ""
-                );
-                if (!people) return;
-
-                const existingIndex = peopleItems.findIndex((item) =>
-                    item.id === people.id ||
-                    normalizePeopleKey(item.title) === normalizePeopleKey(people.title)
-                );
-
-                if (existingIndex >= 0) {
-                    if (!peopleItems[existingIndex].avatar && people.avatar) {
-                        peopleItems[existingIndex].avatar = people.avatar;
-                    }
-                    return;
+            if (existingIndex >= 0) {
+                if (!peopleItems[existingIndex].avatar && people.avatar) {
+                    peopleItems[existingIndex].avatar = people.avatar;
                 }
-
-                peopleItems.push(people);
-            });
-
-            if (peopleItems.length) item.peoples = peopleItems;
-            if (currentGenre) item.genreItems = [currentGenre];
-
-            if (includeImageFields) {
-                item.backdropPath = backdropCover;
-                item.posterPath = posterCover;
-                item.image = backdropCover;
+                return;
             }
 
-            results.push(item);
+            peopleItems.push(people);
+        });
+
+        if (peopleItems.length) item.peoples = peopleItems;
+        if (currentGenre) item.genreItems = [currentGenre];
+
+        if (includeImageFields) {
+            item.backdropPath = backdropCover;
+            item.posterPath = posterCover;
+            item.image = backdropCover;
         }
+
+        results.push(item);
     }
 
     return results.length > 0 ? results : [{ id: "empty", type: "text", title: "没有找到相关视频" }];
@@ -1664,12 +1673,12 @@ function cleanDvdId(raw) {
 function extractDvdIdFromMissAv($, link) {
     let dvdId = "";
     const labels = ["番号", "品番", "DVD ID"].map(l => normalizeText(l).replace(/[：:]/g, "").trim());
-    $('.text-secondary').each((_, el) => {
+    $('.text-secondary, [class*="text-secondary"]').each((_, el) => {
         if (dvdId) return;
         const $row = $(el);
         const label = normalizeText($row.find('span').first().text()).replace(/[：:]/g, "").trim();
         if (labels.includes(label)) {
-            const text = normalizeText($row.find("span.font-medium").first().text());
+            const text = normalizeText($row.find("span.font-medium, [class*='font-medium']").first().text());
             if (text) dvdId = text;
         }
     });
@@ -2283,9 +2292,9 @@ async function loadResourceLegacy(params, code) {
                     let firstHref = "";
                     const targetLoose = code.toUpperCase().replace(/[\s_\-]+/g, "");
 
-                    $("div.group").each((i, el) => {
+                    $(MISSAV_CARD_SELECTOR).each((i, el) => {
                         const $el = $(el);
-                        const $link = $el.find("a.text-secondary");
+                        const $link = $el.find(MISSAV_TITLE_LINK_SELECTOR);
                         const href = $link.attr("href");
                         if (href) {
                             const videoId = extractVideoId(href);
@@ -2298,9 +2307,9 @@ async function loadResourceLegacy(params, code) {
 
                     if (!firstHref) {
                         const targetUpper = code.toUpperCase();
-                        $("div.group").each((i, el) => {
+                        $(MISSAV_CARD_SELECTOR).each((i, el) => {
                             const $el = $(el);
-                            const $link = $el.find("a.text-secondary");
+                            const $link = $el.find(MISSAV_TITLE_LINK_SELECTOR);
                             const href = $link.attr("href");
                             const text = $link.text().toUpperCase().replace(/[\s_\-]+/g, "");
                             if (href && text.includes(targetUpper.replace(/[\s_\-]+/g, ""))) {
@@ -2310,7 +2319,7 @@ async function loadResourceLegacy(params, code) {
                         });
                     }
 
-                    if (!firstHref) firstHref = $("div.group a.text-secondary").first().attr("href");
+                    if (!firstHref) firstHref = $(`${MISSAV_CARD_SELECTOR} ${MISSAV_TITLE_LINK_SELECTOR}`).first().attr("href");
 
                     if (firstHref) {
                         detailLink = resolveUrl(firstHref);
@@ -2436,10 +2445,10 @@ function extractRelatedItems($, currentLink) {
     addKey(currentIdClean);
     addKey(currentHrefClean);
 
-    $("div.thumbnail, div.group").each((i, el) => {
+    $("div.thumbnail, div.group, [class*='thumbnail'][class*='group']").each((i, el) => {
         const $el = $(el);
         if ($el.closest('#videodetails').length > 0) return;
-        const $link = $el.find("a.text-secondary, a[href*='/cn/'], a[href*='/en/'], a[href*='/ja/']").first();
+        const $link = $el.find(`${MISSAV_TITLE_LINK_SELECTOR}, a[href*='/cn/'], a[href*='/en/'], a[href*='/ja/']`).first();
         let href = $link.attr("href");
 
         if (href) {
@@ -2461,7 +2470,7 @@ function extractRelatedItems($, currentLink) {
 
             const $img = $el.find("img");
             const imgSrc = $img.attr("data-src") || $img.attr("src") || "";
-            const duration = normalizeText($el.find(".absolute.bottom-1.right-1").text());
+            const duration = normalizeText($el.find(MISSAV_DURATION_SELECTOR).text());
             const hdCovers = buildCoverUrlsFromVideoId(videoId);
             const fourhoiCover = videoId ? `https://fourhoi.com/${videoId.toLowerCase()}/cover-t.jpg` : imgSrc;
             const posterCover = hdCovers.posterUrl || fourhoiCover || imgSrc;
@@ -2532,7 +2541,7 @@ async function loadDetail(link) {
             content.split(",").map((name) => name.trim()).filter(Boolean).forEach((name) => metaActressNames.push(name));
         });
 
-        $(".text-secondary").each((_, el) => {
+        $(MISSAV_META_ROW_SELECTOR).each((_, el) => {
             const $row = $(el);
             const label = normalizeDetailLabel($row.find("span").first().text());
             if (isActressLabel(label)) {
@@ -2557,16 +2566,19 @@ async function loadDetail(link) {
         });
 
         // 简介提取：优先取 DOM 中的描述，去重后回退到 meta description
-        let officialDescription = $("div.mb-1.text-secondary.break-all").first().text().trim();
+        let officialDescription = $("div.mb-1.text-secondary.break-all, [class*='mb-1'][class*='text-secondary'][class*='break-all']").first().text().trim();
         if (!officialDescription) {
             officialDescription = $('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || "";
         }
         if (officialDescription) {
             const jpTitle = (() => {
                 let jt = "";
-                $(".text-secondary").each((_, el) => {
+                $(MISSAV_META_ROW_SELECTOR).each((_, el) => {
                     const label = $(el).find("span").first().text().trim();
-                    if (label === "标题:" || label === "標題:") { jt = $(el).find(".font-medium").text().trim(); return false; }
+                    if (label === "标题:" || label === "標題:") {
+                        jt = $(el).find(".font-medium, [class*='font-medium']").text().trim();
+                        return false;
+                    }
                 });
                 return jt;
             })();
