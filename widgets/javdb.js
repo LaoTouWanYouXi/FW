@@ -1604,9 +1604,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.8.6",
+  version: "2.8.7",
   requiredVersion: "0.0.1",
-  description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码登录，验证码云端自动识别",
+  description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；优先 Cookie，或账号密码+验证码云端识别",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -1644,9 +1644,9 @@ WidgetMetadata = {
     },
     {
       name: "cookie",
-      title: "Cookie（可选）",
+      title: "Cookie（推荐）",
       type: "input",
-      description: "可选兜底。有账号密码时通常不必填",
+      description: "浏览器登录后从 DevTools 复制完整 Cookie（须含 _jdb_session）。有 Cookie 时优先使用，不再走验证码登录",
       value: "",
     },
     {
@@ -1913,8 +1913,9 @@ function mergeCookieHeader(existing, pairs) {
 function normalizePastedCookie(raw) {
   var text = String(raw || "").trim();
   if (!text) return "";
-  // 去掉用户粘贴时常见的引号 / Cookie: 前缀 / 换行
+  // 去掉用户粘贴时常见的引号 / Cookie: 前缀 / 换行 / curl -H
   text = text.replace(/^cookie\s*:\s*/i, "");
+  text = text.replace(/^['"`]-H\s+['"]?Cookie:\s*/i, "");
   if (
     (text.charAt(0) === "'" && text.charAt(text.length - 1) === "'") ||
     (text.charAt(0) === '"' && text.charAt(text.length - 1) === '"') ||
@@ -1925,9 +1926,26 @@ function normalizePastedCookie(raw) {
   text = text.replace(/^['"`]+|['"`]+$/g, "");
   text = text.replace(/\r?\n+/g, "; ");
   text = text.replace(/;;+/g, ";").replace(/^\s*;\s*|\s*;\s*$/g, "").trim();
+  // _jdb_session: value / _jdb_session = value → 标准 name=value
+  text = text.replace(/_jdb_session\s*[:=]\s*/gi, "_jdb_session=");
+  // Chrome Application 表：name\tvalue\tdomain...
+  if (!/(?:^|;\s*)_jdb_session=/i.test(text)) {
+    var tabSession = String(raw || "").match(/_jdb_session\t+([^\t\r\n;]+)/i);
+    if (tabSession && tabSession[1]) {
+      // 整段是表格粘贴时，只保留会话键，避免把 \t 带进 Cookie 头
+      text = "_jdb_session=" + String(tabSession[1]).trim();
+    }
+  }
   // 若整段被包在无名值对里，尝试抽出 _jdb_session
   if (text && text.indexOf("=") < 0 && /_jdb_session/i.test(text)) {
-    text = "_jdb_session=" + text.replace(/^_jdb_session/i, "");
+    text = "_jdb_session=" + text.replace(/^_jdb_session/i, "").trim();
+  }
+  // 从杂乱粘贴中强制抽出会话段
+  if (!/(?:^|;\s*)_jdb_session=/i.test(text)) {
+    var sessionMatch = String(raw || "").match(/_jdb_session\s*[:=]\s*([^\s;,"']+)/i);
+    if (sessionMatch && sessionMatch[1]) {
+      text = (text ? text + "; " : "") + "_jdb_session=" + sessionMatch[1];
+    }
   }
   return text;
 }
@@ -1986,7 +2004,12 @@ function isLoginRequiredHtml(html) {
 }
 
 function isValidJavdbSessionCookie(cookie) {
-  return /(?:^|;\s*)_jdb_session=[^;\s]+/i.test(String(cookie || ""));
+  var text = normalizePastedCookie(cookie);
+  var m = text.match(/(?:^|;\s*)_jdb_session=([^;]+)/i);
+  if (!m || !m[1]) return false;
+  var val = String(m[1] || "").trim().replace(/^["']+|["']+$/g, "");
+  // 排除明显占位/空值
+  return !!(val && val.length >= 8 && !/^(null|undefined|1|0)$/i.test(val));
 }
 
 function pathRequiresLogin(path) {
@@ -2498,9 +2521,14 @@ async function loginJavdbWithPassword(params, options) {
   // forceLogin 时忽略自动缓存，但保留用户手动粘贴的全局 Cookie
   var seedCookie = "";
   if (options.ignoreCookie) {
-    seedCookie = String(params.cookie || "").trim();
+    seedCookie = normalizePastedCookie(params.cookie);
   } else {
     seedCookie = readStoredJavdbCookie(params);
+  }
+  // 若已有有效会话，直接使用（避免无意义 OCR）
+  if (isValidJavdbSessionCookie(seedCookie)) {
+    saveJavdbCookie(seedCookie);
+    return seedCookie;
   }
   var lastErr = "";
 
@@ -2610,24 +2638,32 @@ async function ensureJavdbSession(params, options) {
   options = options || {};
   params = params || {};
   var cookie = readStoredJavdbCookie(params);
-  // 仅当缓存含 _jdb_session 时才视为已登录，避免 locale/over18 等残片跳过账密登录
-  if (isValidJavdbSessionCookie(cookie) && !options.forceLogin) {
+  // Cookie 优先：只要含有效 _jdb_session，绝不走账密/OCR
+  if (isValidJavdbSessionCookie(cookie)) {
     return cookie;
   }
-  if (options.allowAnonymous && !params.email && !params.password && !isValidJavdbSessionCookie(cookie)) {
+  if (options.allowAnonymous && !params.email && !params.password) {
     return "";
   }
   if (!String(params.email || "").trim() && !String(params.password || "").trim()) {
-    if (isValidJavdbSessionCookie(cookie)) return cookie;
     throw new Error("该内容需要登录：请填写账号密码，或粘贴含 _jdb_session 的 Cookie");
+  }
+  // 用户填了看起来像 Cookie 但缺会话键时，直接提示，避免误走 OCR
+  if (String(params.cookie || readStoredJavdbCookie(params) || "").trim() && !isValidJavdbSessionCookie(cookie)) {
+    var rawCookie = String(params.cookie || readStoredJavdbCookie(params) || "");
+    if (/_jdb_session/i.test(rawCookie) || rawCookie.length > 40) {
+      throw new Error(
+        "Cookie 无效：未能识别 _jdb_session。请从浏览器 DevTools → Application → Cookies 或请求头复制完整 Cookie（不要只用 document.cookie）"
+      );
+    }
   }
   if (JAVDB_LOGIN_INFLIGHT) return JAVDB_LOGIN_INFLIGHT;
   JAVDB_LOGIN_INFLIGHT = loginJavdbWithPassword(params, {
     forceLogin: !!options.forceLogin,
-    ignoreCookie: !!options.forceLogin || !isValidJavdbSessionCookie(cookie),
+    ignoreCookie: true,
   })
     .catch(function (err) {
-      if (isValidJavdbSessionCookie(cookie) && !options.forceLogin) return cookie;
+      if (isValidJavdbSessionCookie(cookie)) return cookie;
       throw err;
     })
     .finally(function () {
@@ -3979,10 +4015,12 @@ async function fetchHtml(url, params) {
   var html = await once();
   if (isLoginRequiredHtml(html)) {
     var manualCookie = normalizePastedCookie(params.cookie) || readStoredJavdbCookie(params);
-    clearJavdbCookie();
+    // 已带有效会话 Cookie 仍像登录墙 → Cookie 过期/无效，勿再触发 OCR 账密
     if (isValidJavdbSessionCookie(manualCookie)) {
+      clearJavdbCookie();
       throw new Error("手动 Cookie 已失效或无效，请重新从浏览器复制含 _jdb_session 的完整 Cookie");
     }
+    clearJavdbCookie();
     await ensureJavdbSession(params, { forceLogin: true });
     html = await once();
     if (isLoginRequiredHtml(html)) {
@@ -4584,18 +4622,24 @@ async function loadLatest(params) {
 }
 
 async function loadRankings(params) {
-  params = params || {};
+  params = syncGlobalParams(params || {});
   var board = String(params.board || "");
   if (!board && params.period) board = "movies:censored:" + params.period;
   if (!board) board = "movies:censored:daily";
   if (board.indexOf("top:") === 0) {
-    return loadTop250({ type: board.split(":")[2] || board.split(":")[1] || "all", page: params.page });
+    // 必须保留全局 cookie/账密等参数，不能只传 type/page
+    return loadTop250(
+      Object.assign({}, params, {
+        type: board.split(":")[2] || board.split(":")[1] || "all",
+        page: params.page,
+      })
+    );
   }
   return loadBrowseList(buildRankingPath(board), params);
 }
 
 async function loadTop250(params) {
-  params = params || {};
+  params = syncGlobalParams(params || {});
   var type = String(params.type || "all");
   var board = type === "all" || !type ? "top::all" : "top::" + type;
   return loadBrowseList(buildRankingPath(board), params);
