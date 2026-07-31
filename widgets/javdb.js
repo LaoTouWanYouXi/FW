@@ -18,7 +18,9 @@ function syncGlobalParams(params) {
   for (var i = 0; i < GLOBAL_PARAM_KEYS.length; i++) {
     var key = GLOBAL_PARAM_KEYS[i];
     if (params[key] !== undefined && params[key] !== null && String(params[key]) !== "") {
-      Widget.storage.set("javdb.global." + key, params[key]);
+      var val = params[key];
+      if (key === "cookie") val = normalizePastedCookie(val);
+      Widget.storage.set("javdb.global." + key, val);
     }
   }
   return Object.assign({}, params, getEffectiveParams(params));
@@ -1602,7 +1604,7 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.8.4",
+  version: "2.8.5",
   requiredVersion: "0.0.1",
   description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码登录，验证码云端自动识别",
   author: "老头",
@@ -1908,38 +1910,64 @@ function mergeCookieHeader(existing, pairs) {
     .join("; ");
 }
 
+function normalizePastedCookie(raw) {
+  var text = String(raw || "").trim();
+  if (!text) return "";
+  text = text.replace(/^cookie\s*:\s*/i, "");
+  text = text.replace(/\r?\n+/g, "; ");
+  text = text.replace(/;;+/g, ";").replace(/^\s*;\s*|\s*;\s*$/g, "").trim();
+  return text;
+}
+
 function readStoredJavdbCookie(params) {
   params = params || {};
-  var fromParam = String(params.cookie || "").trim();
+  var fromParam = normalizePastedCookie(params.cookie);
   if (fromParam) return fromParam;
   try {
-    var stored = Widget.storage.get(JAVDB_COOKIE_STORAGE_KEY);
-    if (stored) return String(stored).trim();
+    var storedSession = Widget.storage.get(JAVDB_COOKIE_STORAGE_KEY);
+    if (storedSession) return normalizePastedCookie(storedSession);
   } catch (err) {}
+  try {
+    // syncGlobalParams 会写入 javdb.global.cookie
+    var storedParam = Widget.storage.get("javdb.global.cookie");
+    if (storedParam) return normalizePastedCookie(storedParam);
+  } catch (err2) {}
   return "";
 }
 
 function saveJavdbCookie(cookie) {
-  cookie = String(cookie || "").trim();
+  cookie = normalizePastedCookie(cookie);
   if (!cookie) return;
   try {
     Widget.storage.set(JAVDB_COOKIE_STORAGE_KEY, cookie);
   } catch (err) {}
+  try {
+    Widget.storage.set("javdb.global.cookie", cookie);
+  } catch (err2) {}
 }
 
 function clearJavdbCookie() {
   try {
     Widget.storage.set(JAVDB_COOKIE_STORAGE_KEY, "");
   } catch (err) {}
+  // 不清理用户全局参数里的手动 cookie，避免误删
+}
+
+function htmlHasMovieLinks(html) {
+  return /href=["']\/v\//i.test(String(html || ""));
 }
 
 function isLoginRequiredHtml(html) {
   var text = String(html || "");
   if (!text) return false;
-  if (/此內容需要登入|此内容需要登录|需要登录|需要登入才能查看|請先登入|请先登录/i.test(text) && !/movie-list|href="\/v\//i.test(text)) {
+  // 有真实影片链接则不算登录墙（即使页面里也有 login 字样）
+  if (htmlHasMovieLinks(text)) return false;
+  if (/此內容需要登入|此内容需要登录|需要登录|需要登入才能查看|請先登入|请先登录|会員限定|會員限定|会员限定/i.test(text)) {
     return true;
   }
-  if (/action=["']\/user_sessions["']/i.test(text) && !/movie-list|href="\/v\//i.test(text)) return true;
+  if (/action=["']\/user_sessions["']/i.test(text)) return true;
+  // TOP250/热播等：常有空的 movie-list 容器但无 /v/ 链接
+  if (/movie-list/i.test(text) && /login|登入|登录/i.test(text)) return true;
   return false;
 }
 
@@ -3840,15 +3868,23 @@ async function fetchHtml(url, params) {
     if (res.status && Number(res.status) >= 400) {
       throw new Error("HTTP " + res.status + " " + url);
     }
-    var nextCookie = mergeCookieHeader(readStoredJavdbCookie(params), collectSetCookiePairs(res));
+    var existing = readStoredJavdbCookie(params);
+    var pairs = collectAnyCookiePairs(res);
+    // 已有登录会话时，不要被响应里的匿名 _jdb_session 覆盖掉
+    if (/_jdb_session=/i.test(existing)) {
+      pairs = pairs.filter(function (p) {
+        return !/^_jdb_session=/i.test(String(p || ""));
+      });
+    }
+    var nextCookie = mergeCookieHeader(existing, pairs);
     if (nextCookie && /_jdb_session=/i.test(nextCookie)) saveJavdbCookie(nextCookie);
     return String(res.data);
   }
 
   var html = await once();
   if (isLoginRequiredHtml(html)) {
+    var manualCookie = normalizePastedCookie(params.cookie) || readStoredJavdbCookie(params);
     clearJavdbCookie();
-    var manualCookie = String(params.cookie || "").trim();
     if (isValidJavdbSessionCookie(manualCookie)) {
       throw new Error("手动 Cookie 已失效或无效，请重新从浏览器复制含 _jdb_session 的完整 Cookie");
     }
@@ -3858,7 +3894,8 @@ async function fetchHtml(url, params) {
       throw new Error("该页面需要登录。请填写账号密码，或粘贴含 _jdb_session 的 Cookie");
     }
   }
-  writeHtmlFetchCache(url, html);
+  // 不缓存空列表/登录墙，避免一直「未解析到影片」
+  if (htmlHasMovieLinks(html)) writeHtmlFetchCache(url, html);
   return html;
 }
 
@@ -4369,7 +4406,12 @@ async function fetchMovieList(path, params) {
     var browseUrl = buildPageUrl(javdbBase(params), basePath, params);
     var browseHtml = await fetchHtml(browseUrl, params);
     var browseItems = await enrichMovieItems(parseListItems(browseHtml, params), params);
-    if (!browseItems.length) throw new Error("未解析到影片列表");
+    if (!browseItems.length) {
+      if (isLoginRequiredHtml(browseHtml) || pathRequiresLogin(basePath)) {
+        throw new Error("未解析到影片列表（可能未登录或 Cookie 无效）。请更新含 _jdb_session 的 Cookie");
+      }
+      throw new Error("未解析到影片列表");
+    }
     return browseItems;
   }
 
