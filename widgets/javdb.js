@@ -1603,9 +1603,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.7.1",
+  version: "2.7.3",
   requiredVersion: "0.0.1",
-  description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；支持账号密码或 Cookie",
+  description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；支持账号密码自动登录（含验证码识别）",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -1631,21 +1631,28 @@ WidgetMetadata = {
       name: "email",
       title: "账号/邮箱",
       type: "input",
-      description: "登录 JavDB 账号（TOP250/热播等需登录）",
+      description: "TOP250/热播等需登录板块必填；脚本自动拉取验证码并识别后登录",
       value: "",
     },
     {
       name: "password",
       title: "密码",
       type: "input",
-      description: "登录密码；若站点弹出验证码，请改用 Cookie",
+      description: "与账号一起用于脚本直登",
+      value: "",
+    },
+    {
+      name: "captcha",
+      title: "验证码（可选）",
+      type: "input",
+      description: "一般留空由脚本自动识别；识别失败时可手动填 4～5 位字母",
       value: "",
     },
     {
       name: "cookie",
       title: "Cookie（可选）",
       type: "input",
-      description: "浏览器登录后复制 Cookie（含 _jdb_session）；验证码时优先使用",
+      description: "可选兜底。有账号密码时通常不必填",
       value: "",
     },
   ],
@@ -1660,7 +1667,7 @@ WidgetMetadata = {
     {
       id: "rankings",
       title: "排行榜",
-      description: "日/周/月榜、热播（热播通常需登录）",
+      description: "日/周/月榜、热播（热播需全局参数填写账号密码）",
       functionName: "loadRankings",
       cacheDuration: 3600,
       params: [
@@ -1693,7 +1700,7 @@ WidgetMetadata = {
     {
       id: "top250",
       title: "TOP250",
-      description: "JavDB TOP250（通常需登录）",
+      description: "JavDB TOP250（需全局参数填写账号密码）",
       functionName: "loadTop250",
       cacheDuration: 3600,
       params: [
@@ -1816,15 +1823,15 @@ function javdbHeaders(params, cookieOverride) {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   };
-  var cookie = cookieOverride !== undefined ? cookieOverride : readStoredJavdbCookie(params || {});
-  if (cookie) headers.Cookie = cookie;
   var locale = javdbLocale(params);
-  if (locale) headers.Cookie = mergeCookieHeader(headers.Cookie || "", ["locale=" + locale, "over18=1"]);
+  var cookie = cookieOverride !== undefined ? cookieOverride : readStoredJavdbCookie(params || {});
+  headers.Cookie = mergeCookieHeader(cookie, ["locale=" + locale, "over18=1"]);
   return headers;
 }
 
 var JAVDB_COOKIE_STORAGE_KEY = "javdb.global.sessionCookie";
 var JAVDB_LOGIN_INFLIGHT = null;
+var OCR_SPACE_URL = "https://api.ocr.space/parse/image";
 
 function getHeaderValue(res, name) {
   if (!res) return "";
@@ -1919,15 +1926,59 @@ function pathRequiresLogin(path) {
   return clean.indexOf("/rankings/top") === 0 || clean.indexOf("/rankings/playback") === 0;
 }
 
-function extractAuthenticityToken(html) {
-  var m =
-    String(html || "").match(/name=["']authenticity_token["'][^>]*value=["']([^"']+)["']/i) ||
-    String(html || "").match(/value=["']([^"']+)["'][^>]*name=["']authenticity_token["']/i);
-  return m ? m[1] : "";
+/** 必须从 /user_sessions 表单取 token，页面顶部可能还有另一个 authenticity_token */
+function extractLoginFormMeta(html) {
+  var text = String(html || "");
+  var formMatch = text.match(/<form[^>]*action=["']\/user_sessions["'][^>]*>([\s\S]*?)<\/form>/i);
+  var formHtml = formMatch ? formMatch[0] : text;
+  var tokenMatch =
+    formHtml.match(/name=["']authenticity_token["'][^>]*value=["']([^"']+)["']/i) ||
+    formHtml.match(/value=["']([^"']+)["'][^>]*name=["']authenticity_token["']/i);
+  var captchaImg =
+    formHtml.match(/<img[^>]*class=["'][^"']*rucaptcha-image[^"']*["'][^>]*src=["']([^"']+)["']/i) ||
+    formHtml.match(/src=["']([^"']*rucaptcha[^"']*)["']/i);
+  var commitMatch = formHtml.match(/name=["']commit["'][^>]*value=["']([^"']+)["']/i);
+  return {
+    token: tokenMatch ? tokenMatch[1] : "",
+    captchaSrc: captchaImg ? captchaImg[1] : "/rucaptcha/",
+    commit: commitMatch ? commitMatch[1] : "登入",
+    hasCaptcha: /name=["']_rucaptcha["']/i.test(formHtml),
+  };
 }
 
-function loginFormHasCaptcha(html) {
-  return /name=["']_rucaptcha["']/i.test(String(html || ""));
+function normalizeCaptchaAnswer(raw) {
+  var text = String(raw || "")
+    .replace(/\s+/g, "")
+    .replace(/[^a-zA-Z]/g, "");
+  if (text.length > 5) text = text.slice(0, 5);
+  return text;
+}
+
+function bytesToBase64(data) {
+  if (data == null) return "";
+  if (typeof data !== "string") {
+    try {
+      if (typeof Buffer !== "undefined") return Buffer.from(data).toString("base64");
+    } catch (err) {}
+    data = String(data);
+  }
+  if (data.indexOf("data:image") === 0) {
+    var comma = data.indexOf(",");
+    return comma >= 0 ? data.slice(comma + 1) : data;
+  }
+  try {
+    return btoa(data);
+  } catch (err) {
+    var out = "";
+    var chunk = 0x8000;
+    for (var i = 0; i < data.length; i += chunk) {
+      var slice = data.slice(i, i + chunk);
+      var codes = [];
+      for (var j = 0; j < slice.length; j++) codes.push(slice.charCodeAt(j) & 0xff);
+      out += String.fromCharCode.apply(null, codes);
+    }
+    return btoa(out);
+  }
 }
 
 async function httpPostForm(url, body, params, cookie) {
@@ -1938,9 +1989,19 @@ async function httpPostForm(url, body, params, cookie) {
   var payload = typeof body === "string" ? body : "";
   var res;
   if (Widget.http.post) {
-    res = await Widget.http.post(url, { headers: headers, body: payload, allow_redirects: true });
+    // Forward 官方签名: post(url, body, options) —— 切勿把 options 当 body
+    res = await Widget.http.post(url, payload, {
+      headers: headers,
+      allow_redirects: true,
+    });
   } else if (Widget.http.request) {
-    res = await Widget.http.request({ url: url, method: "POST", headers: headers, body: payload, allow_redirects: true });
+    res = await Widget.http.request({
+      url: url,
+      method: "POST",
+      headers: headers,
+      body: payload,
+      allow_redirects: true,
+    });
   } else {
     throw new Error("当前环境不支持 POST，请改用 Cookie 登录");
   }
@@ -1953,6 +2014,88 @@ function encodeForm(data) {
     parts.push(encodeURIComponent(key) + "=" + encodeURIComponent(String(data[key] == null ? "" : data[key])));
   });
   return parts.join("&");
+}
+
+async function fetchRucaptchaImage(params, cookie, captchaSrc) {
+  var base = javdbBase(params);
+  var src = String(captchaSrc || "/rucaptcha/").trim();
+  if (src.indexOf("http") !== 0) {
+    if (src.charAt(0) !== "/") src = "/" + src;
+    src = base + src;
+  }
+  if (src.indexOf("t=") < 0) {
+    src += (src.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
+  }
+  var headers = javdbHeaders(params, cookie);
+  headers.Accept = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
+  headers.Referer = base + "/login";
+  var res = await Widget.http.get(src, {
+    headers: headers,
+    allow_redirects: true,
+  });
+  if (!res || res.data == null) throw new Error("验证码图片拉取失败");
+  cookie = mergeCookieHeader(cookie, collectSetCookiePairs(res));
+  var b64 = bytesToBase64(res.data);
+  if (!b64 || b64.length < 80) throw new Error("验证码图片数据异常");
+  return { base64: b64, cookie: cookie };
+}
+
+async function ocrCaptchaWithOcrSpace(base64, apiKey) {
+  var key = String(apiKey || "helloworld").trim() || "helloworld";
+  var body = encodeForm({
+    base64Image: "data:image/png;base64," + base64,
+    language: "eng",
+    isOverlayRequired: "false",
+    OCREngine: "2",
+    scale: "true",
+    apikey: key,
+  });
+  var res;
+  if (Widget.http.post) {
+    res = await Widget.http.post(OCR_SPACE_URL, body, {
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      allow_redirects: true,
+    });
+  } else {
+    throw new Error("当前环境不支持验证码识别请求");
+  }
+  var raw = res && res.data;
+  var data = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (!data || data.IsErroredOnProcessing) {
+    var errMsg =
+      (data && data.ErrorMessage && (Array.isArray(data.ErrorMessage) ? data.ErrorMessage.join("; ") : data.ErrorMessage)) ||
+      "OCR 失败";
+    throw new Error(String(errMsg));
+  }
+  var parsed = data.ParsedResults && data.ParsedResults[0] && data.ParsedResults[0].ParsedText;
+  return normalizeCaptchaAnswer(parsed);
+}
+
+async function resolveCaptchaAnswer(params, cookie, formMeta) {
+  var manual = normalizeCaptchaAnswer(params && params.captcha);
+  if (manual && manual.length >= 3) return { answer: manual, cookie: cookie };
+
+  if (!formMeta.hasCaptcha) return { answer: "", cookie: cookie };
+
+  var img = await fetchRucaptchaImage(params, cookie, formMeta.captchaSrc);
+  cookie = img.cookie;
+  var answer = "";
+  try {
+    answer = await ocrCaptchaWithOcrSpace(img.base64, params && params.ocrApiKey);
+  } catch (err) {
+    throw new Error(
+      "验证码自动识别失败：" +
+        String((err && err.message) || err) +
+        "。可在全局参数「验证码」手动填入后重试"
+    );
+  }
+  if (!answer || answer.length < 3) {
+    throw new Error("验证码识别结果无效，请在全局参数「验证码」手动填入 4～5 位字母后重试");
+  }
+  return { answer: answer, cookie: cookie };
 }
 
 async function loginJavdbWithPassword(params, options) {
@@ -1973,30 +2116,26 @@ async function loginJavdbWithPassword(params, options) {
   });
   var html = loginPage && loginPage.data ? String(loginPage.data) : "";
   if (!html) throw new Error("无法打开登录页");
-  if (/just a moment|cf-browser-verification|challenge-platform/i.test(html)) {
+  if (/just a moment|cf-browser-verification|challenge-platform|attention required/i.test(html) && !/user_sessions/i.test(html)) {
     throw new Error("登录页被 Cloudflare 拦截，请稍后重试或粘贴浏览器 Cookie");
   }
 
   var cookie = mergeCookieHeader(seedCookie, collectSetCookiePairs(loginPage));
-  var token = extractAuthenticityToken(html);
-  if (!token) throw new Error("未取得登录 CSRF，站点结构可能已变更");
+  var formMeta = extractLoginFormMeta(html);
+  if (!formMeta.token) throw new Error("未取得登录 CSRF，站点结构可能已变更");
 
-  if (loginFormHasCaptcha(html)) {
-    if (!options.forceLogin && seedCookie && /_jdb_session=/i.test(seedCookie)) {
-      return seedCookie;
-    }
-    throw new Error("站点登录需要验证码。请在浏览器登录后，把 Cookie（含 _jdb_session）粘贴到全局参数「Cookie」");
-  }
+  var captchaResolved = await resolveCaptchaAnswer(params, cookie, formMeta);
+  cookie = captchaResolved.cookie;
 
   var res = await httpPostForm(
     base + "/user_sessions",
     encodeForm({
-      authenticity_token: token,
+      authenticity_token: formMeta.token,
       email: email,
       password: password,
-      _rucaptcha: "",
+      _rucaptcha: captchaResolved.answer || "",
       remember: "1",
-      commit: "Sign in",
+      commit: formMeta.commit || "登入",
     }),
     params,
     cookie
@@ -2006,11 +2145,49 @@ async function loginJavdbWithPassword(params, options) {
   var finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || "");
   var stillLogin =
     /action=["']\/user_sessions["']/i.test(body) ||
-    /\/login/i.test(finalUrl) ||
+    (/\/login/i.test(finalUrl) && !/_jdb_session=/i.test(cookie)) ||
     isLoginRequiredHtml(body);
 
+  // 验证码错误时再试一次（重新拉图识别；若用户手填了验证码则不再自动重试）
+  if (stillLogin && formMeta.hasCaptcha && !normalizeCaptchaAnswer(params.captcha)) {
+    var retryPage = await Widget.http.get(loginUrl, {
+      headers: javdbHeaders(params, cookie),
+      allow_redirects: true,
+    });
+    var retryHtml = retryPage && retryPage.data ? String(retryPage.data) : "";
+    cookie = mergeCookieHeader(cookie, collectSetCookiePairs(retryPage));
+    formMeta = extractLoginFormMeta(retryHtml || html);
+    if (formMeta.token) {
+      captchaResolved = await resolveCaptchaAnswer(Object.assign({}, params, { captcha: "" }), cookie, formMeta);
+      cookie = captchaResolved.cookie;
+      res = await httpPostForm(
+        base + "/user_sessions",
+        encodeForm({
+          authenticity_token: formMeta.token,
+          email: email,
+          password: password,
+          _rucaptcha: captchaResolved.answer || "",
+          remember: "1",
+          commit: formMeta.commit || "登入",
+        }),
+        params,
+        cookie
+      );
+      cookie = mergeCookieHeader(cookie, collectSetCookiePairs(res));
+      body = res && res.data ? String(res.data) : "";
+      finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || "");
+      stillLogin =
+        /action=["']\/user_sessions["']/i.test(body) ||
+        (/\/login/i.test(finalUrl) && !/_jdb_session=/i.test(cookie)) ||
+        isLoginRequiredHtml(body);
+    }
+  }
+
   if (stillLogin || !/_jdb_session=/i.test(cookie)) {
-    throw new Error("账号登录失败，请检查账号密码，或粘贴浏览器 Cookie");
+    var hint = /[Ii]nvalid|[Ee]rror|错误|驗證碼|验证码|incorrect/i.test(body)
+      ? "账号密码或验证码不正确"
+      : "未拿到有效会话";
+    throw new Error("账号登录失败（" + hint + "）。可清空后重试，或在「验证码」手动填写后重试，也可粘贴 Cookie");
   }
   saveJavdbCookie(cookie);
   return cookie;
@@ -3383,7 +3560,7 @@ async function fetchHtml(url, params) {
     await ensureJavdbSession(params, { forceLogin: true });
     html = await once();
     if (isLoginRequiredHtml(html)) {
-      throw new Error("该页面需要登录。请填写账号密码，或粘贴含 _jdb_session 的 Cookie");
+      throw new Error("该页面需要登录。请填写账号密码（脚本会自动识别验证码），或粘贴含 _jdb_session 的 Cookie");
     }
   }
   writeHtmlFetchCache(url, html);
