@@ -1619,9 +1619,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.9.5",
+  version: "2.9.6",
   requiredVersion: "0.0.1",
-  description: "JavDB 列表/排行榜/TOP250/热播；账号密码登录，验证码仅智谱识别（多帧 GIF 合成）",
+  description: "JavDB 列表/排行榜/TOP250/热播；账号密码登录，兼容 Forward 把登录 302 当异常",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -2132,6 +2132,52 @@ function extractLoginFormMeta(html) {
   };
 }
 
+function isHttpRedirectStatus(code) {
+  var n = Number(code || 0);
+  return n === 301 || n === 302 || n === 303 || n === 307 || n === 308;
+}
+
+/** Forward 在 allow_redirects=false 时，常把 302 直接 throw，而不是返回 res */
+function parseRedirectFromError(err, base) {
+  if (!err) return null;
+  var status = Number(err.status || err.statusCode || err.code || 0);
+  var msg = String(err.message || err || "");
+  if (!isHttpRedirectStatus(status)) {
+    var m = msg.match(/\b(301|302|303|307|308)\b/);
+    if (m) status = Number(m[1]);
+  }
+  if (!isHttpRedirectStatus(status) && !/redirect|重定向|Location/i.test(msg)) {
+    return null;
+  }
+  if (!isHttpRedirectStatus(status)) status = 302;
+
+  var headers = err.headers || err.responseHeaders || (err.response && err.response.headers) || {};
+  var loc =
+    getHeaderValue({ headers: headers }, "location") ||
+    getHeaderValue({ headers: headers }, "Location") ||
+    "";
+  if (!loc) {
+    var lm = msg.match(/location[=:\s]+['"]?([^\s'",}]+)/i);
+    if (lm) loc = lm[1];
+  }
+  if (loc && loc.indexOf("http") !== 0) {
+    base = String(base || "").replace(/\/+$/, "");
+    if (loc.charAt(0) !== "/") loc = "/" + loc;
+    loc = base + loc;
+  }
+
+  return {
+    status: status,
+    data: err.data != null ? err.data : err.body != null ? err.body : "",
+    headers: headers.location || headers.Location ? headers : Object.assign({}, headers, loc ? { location: loc } : {}),
+    cookies: err.cookies || (err.response && err.response.cookies),
+    cookie: err.cookie || (err.response && err.response.cookie),
+    url: loc || "",
+    finalUrl: loc || "",
+    __fromRedirectError: true,
+  };
+}
+
 async function httpPostForm(url, body, params, cookie, options) {
   options = options || {};
   var headers = javdbHeaders(params, cookie, { loginUA: !!options.loginUA });
@@ -2140,25 +2186,50 @@ async function httpPostForm(url, body, params, cookie, options) {
   headers.Referer = javdbBase(params) + "/login";
   var payload = typeof body === "string" ? body : encodeForm(body || {});
   var allowRedirects = options.allowRedirects !== undefined ? !!options.allowRedirects : true;
-  var res;
-  if (Widget.http.post) {
-    // Forward: post(url, body, options)。日志里 PARAMS=[:] 只是 query 为空，不等于 body 没发。
-    // 同时写入 options.body，兼容个别运行时忽略第 2 参的情况。
-    res = await Widget.http.post(url, payload, {
-      headers: headers,
-      body: payload,
-      allow_redirects: allowRedirects,
-    });
-  } else if (Widget.http.request) {
-    res = await Widget.http.request({
-      url: url,
-      method: "POST",
-      headers: headers,
-      body: payload,
-      allow_redirects: allowRedirects,
-    });
-  } else {
+  var base = javdbBase(params);
+
+  async function doPost(follow) {
+    if (Widget.http.post) {
+      return Widget.http.post(url, payload, {
+        headers: headers,
+        body: payload,
+        allow_redirects: !!follow,
+      });
+    }
+    if (Widget.http.request) {
+      return Widget.http.request({
+        url: url,
+        method: "POST",
+        headers: headers,
+        body: payload,
+        allow_redirects: !!follow,
+      });
+    }
     throw new Error("当前环境不支持 POST");
+  }
+
+  var res;
+  try {
+    res = await doPost(allowRedirects);
+  } catch (err) {
+    // 登录成功时站点常回 302；Forward 可能直接抛错 —— 转成正常响应继续处理
+    var synthesized = parseRedirectFromError(err, base);
+    if (!allowRedirects && synthesized) {
+      res = synthesized;
+    } else if (!allowRedirects) {
+      // 再试自动跟随，避免把成功登录当失败
+      try {
+        res = await doPost(true);
+      } catch (err2) {
+        var syn2 = parseRedirectFromError(err2, base);
+        if (syn2) res = syn2;
+        else throw err;
+      }
+    } else {
+      var syn3 = parseRedirectFromError(err, base);
+      if (syn3) res = syn3;
+      else throw err;
+    }
   }
   return res;
 }
@@ -2778,17 +2849,23 @@ async function loginJavdbWithPassword(params, options) {
       cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
       var status = Number((res && res.status) || 0);
       var loc = responseLocation(res, base);
-      var body = res && res.data ? String(res.data) : "";
+      var body = res && res.data != null ? String(res.data) : "";
 
-      if (loc && (status === 0 || status === 301 || status === 302 || status === 303 || status === 307 || status === 308)) {
-        var follow = await Widget.http.get(loc, {
-          headers: javdbHeaders(params, cookie, { loginUA: true }),
-          allow_redirects: true,
-        });
-        cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(follow));
-        body = follow && follow.data ? String(follow.data) : body;
-        loc = String((follow && (follow.url || follow.finalUrl || follow.requestUrl)) || loc);
-        res = follow || res;
+      // 302/303：登录成功常见；Forward 可能已自动跟随，也可能需手动跟
+      if (loc && (status === 0 || isHttpRedirectStatus(status))) {
+        try {
+          var follow = await Widget.http.get(loc, {
+            headers: javdbHeaders(params, cookie, { loginUA: true }),
+            allow_redirects: true,
+          });
+          cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(follow));
+          body = follow && follow.data != null ? String(follow.data) : body;
+          loc = String((follow && (follow.url || follow.finalUrl || follow.requestUrl)) || loc);
+          res = follow || res;
+          status = Number((res && res.status) || 200);
+        } catch (followErr) {
+          // 跟随失败不立刻认输：若已有会话且离开登录页，下面还会判定
+        }
       } else if (!/_jdb_session=/i.test(cookie)) {
         cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
       }
@@ -2800,7 +2877,18 @@ async function loginJavdbWithPassword(params, options) {
         (/\/login/i.test(finalUrl) && !/_jdb_session=/i.test(cookie)) ||
         isLoginRequiredHtml(body);
 
+      // 跳离登录页 + 有会话 = 成功（302 已被正常消化）
       if (!stillLogin && /_jdb_session=/i.test(cookie)) {
+        saveJavdbCookie(cookie);
+        return cookie;
+      }
+      if (
+        isHttpRedirectStatus(status) === false &&
+        finalUrl &&
+        !/\/login|\/user_sessions/i.test(finalUrl) &&
+        /_jdb_session=/i.test(cookie) &&
+        !flash
+      ) {
         saveJavdbCookie(cookie);
         return cookie;
       }
@@ -2852,6 +2940,36 @@ async function loginJavdbWithPassword(params, options) {
       if (/_rucaptcha_session_id|Set-Cookie|隐藏了 Set-Cookie/i.test(lastErr)) break;
     } catch (err) {
       lastErr = String((err && err.message) || err);
+      // 纯 302 被运行时抛出：尝试当成功跳转处理一次，而不是当失败重试烧验证码
+      if (/\b(301|302|303|307|308)\b/.test(lastErr) || /redirect|重定向/i.test(lastErr)) {
+        try {
+          var recovered = parseRedirectFromError(err, base);
+          var hop = (recovered && recovered.url) || base + "/";
+          var after = await Widget.http.get(hop, {
+            headers: javdbHeaders(params, buildCleanLoginSeed(params), { loginUA: true }),
+            allow_redirects: true,
+          });
+          var afterCookie = mergeCookieHeader(
+            buildCleanLoginSeed(params),
+            collectAnyCookiePairs(recovered || {})
+          );
+          afterCookie = mergeCookieHeader(afterCookie, collectAnyCookiePairs(after || {}));
+          // 上面 cookie 信息可能不全：用探测页判断是否已登录
+          var probe2 = await Widget.http.get(base + "/rankings/top", {
+            headers: javdbHeaders(params, afterCookie, { loginUA: true }),
+            allow_redirects: true,
+          });
+          afterCookie = mergeCookieHeader(afterCookie, collectAnyCookiePairs(probe2));
+          var probeHtml2 = probe2 && probe2.data ? String(probe2.data) : "";
+          if (!isLoginRequiredHtml(probeHtml2) && htmlHasMovieLinks(probeHtml2) && /_jdb_session=/i.test(afterCookie)) {
+            saveJavdbCookie(afterCookie);
+            return afterCookie;
+          }
+          lastErr = "收到登录跳转(302)但未能确认会话，请重试";
+        } catch (e2) {
+          lastErr = "登录跳转(302)处理失败: " + String((e2 && e2.message) || e2);
+        }
+      }
       clearJavdbCookie();
       // 智谱/AI 错误或结构性错误：立即停止，不再空转重试
       if (
