@@ -1619,9 +1619,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.9.8",
+  version: "2.9.9",
   requiredVersion: "0.0.1",
-  description: "JavDB 列表/排行榜/TOP250/热播；登录态由模块自拼 Cookie，不依赖 Forward Set-Cookie",
+  description: "JavDB 列表/排行榜/TOP250/热播；登录每轮重新拉验证码 OCR，自拼 Cookie",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -2869,10 +2869,15 @@ function getOcrProxyEndpoint(params) {
 
 function absCaptchaUrl(base, captchaSrc) {
   var src = String(captchaSrc || "/rucaptcha/").trim();
-  if (src.indexOf("http") === 0) return src;
-  if (src.charAt(0) !== "/") src = "/" + src;
-  src = base + src;
-  if (src.indexOf("t=") < 0) src += (src.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
+  if (src.indexOf("http") === 0) {
+    // keep
+  } else {
+    if (src.charAt(0) !== "/") src = "/" + src;
+    src = base + src;
+  }
+  // 每次强制换 t=，避免缓存/表单旧 t 导致三次拉到同一张图
+  src = src.replace(/([?&])t=\d+/g, "$1").replace(/\?&/, "?").replace(/[?&]$/, "");
+  src += (src.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now() + "&r=" + Math.floor(Math.random() * 1e9);
   return src;
 }
 
@@ -2999,6 +3004,7 @@ async function loginJavdbWithPassword(params, options) {
   var lastErr = "";
   var lastCaptcha = "";
   var attemptsUsed = 0;
+  var ocrHistory = [];
 
   clearJavdbCookie();
 
@@ -3023,6 +3029,7 @@ async function loginJavdbWithPassword(params, options) {
 
       var captchaAnswer = "";
       if (formMeta.hasCaptcha) {
+        // 每一轮都重新拉验证码图 + OCR，不复用上一轮答案
         var captchaResult = await resolveCaptchaAnswer(params, jar, formMeta.captchaSrc);
         if (captchaResult && typeof captchaResult === "object") {
           captchaAnswer = captchaResult.answer || "";
@@ -3031,6 +3038,7 @@ async function loginJavdbWithPassword(params, options) {
           captchaAnswer = String(captchaResult || "");
         }
         lastCaptcha = captchaAnswer;
+        ocrHistory.push("#" + attempt + "=" + captchaAnswer);
       }
       if (formMeta.hasCaptcha && !getCookieValue(jar, "_rucaptcha_session_id")) {
         throw new Error("未拿到验证码会话 _rucaptcha_session_id，请重试");
@@ -3176,7 +3184,14 @@ async function loginJavdbWithPassword(params, options) {
   }
 
   throw new Error(
-    "账号登录失败：" + lastErr + "。已尝试 " + attemptsUsed + "/" + maxAttempts + " 次后停止"
+    "账号登录失败：" +
+      lastErr +
+      (ocrHistory.length ? "；各轮OCR[" + ocrHistory.join(", ") + "]" : "") +
+      "。已尝试 " +
+      attemptsUsed +
+      "/" +
+      maxAttempts +
+      " 次后停止（每轮应重新拉图识别，非同一验证码复用）"
   );
 }
 
