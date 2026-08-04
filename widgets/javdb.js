@@ -1619,9 +1619,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.9.4",
+  version: "2.9.5",
   requiredVersion: "0.0.1",
-  description: "JavDB 列表/排行榜/TOP250/热播；账号密码登录，验证码仅智谱识别（GIF 自动转 PNG）",
+  description: "JavDB 列表/排行榜/TOP250/热播；账号密码登录，验证码仅智谱识别（多帧 GIF 合成）",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -2138,13 +2138,15 @@ async function httpPostForm(url, body, params, cookie, options) {
   headers["Content-Type"] = "application/x-www-form-urlencoded";
   headers.Origin = javdbBase(params);
   headers.Referer = javdbBase(params) + "/login";
-  var payload = typeof body === "string" ? body : "";
+  var payload = typeof body === "string" ? body : encodeForm(body || {});
   var allowRedirects = options.allowRedirects !== undefined ? !!options.allowRedirects : true;
   var res;
   if (Widget.http.post) {
-    // Forward 官方签名: post(url, body, options) —— 切勿把 options 当 body
+    // Forward: post(url, body, options)。日志里 PARAMS=[:] 只是 query 为空，不等于 body 没发。
+    // 同时写入 options.body，兼容个别运行时忽略第 2 参的情况。
     res = await Widget.http.post(url, payload, {
       headers: headers,
+      body: payload,
       allow_redirects: allowRedirects,
     });
   } else if (Widget.http.request) {
@@ -2830,14 +2832,21 @@ async function loginJavdbWithPassword(params, options) {
         ? "；请填写全局参数「智谱 API Key」"
         : "";
       if (flash === "captcha" || flash.indexOf("flash:") === 0) {
+        // Cookie 有 _jdb_session 只代表访客会话，不代表已登录；验证码错仍会失败
+        lastErr =
+          "验证码识别错误 OCR=" +
+          captchaAnswer +
+          engineHint +
+          (flash.indexOf("flash:") === 0 ? "（站点：" + flash.slice(6) + "）" : "（站点：验证码错误）") +
+          "；有 Cookie≠已登录" +
+          needSolverHint;
+      } else {
         lastErr =
           "登录未通过 OCR=" +
           captchaAnswer +
           engineHint +
-          (flash.indexOf("flash:") === 0 ? "（" + flash.slice(6) + "）" : "（验证码错误）") +
+          "（请确认账密；有 Cookie≠已登录）" +
           needSolverHint;
-      } else {
-        lastErr = "登录未通过 OCR=" + captchaAnswer + engineHint + "（请确认账密）" + needSolverHint;
       }
       clearJavdbCookie();
       if (/_rucaptcha_session_id|Set-Cookie|隐藏了 Set-Cookie/i.test(lastErr)) break;
