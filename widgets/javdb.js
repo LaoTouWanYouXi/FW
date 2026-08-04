@@ -1619,9 +1619,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.10.1",
+  version: "2.10.2",
   requiredVersion: "0.0.1",
-  description: "JavDB；Cookie 优先且防访客 session 覆盖；失效后再账密+智谱",
+  description: "JavDB；修复登录墙误判；Cookie 优先校验后再账密",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -2104,16 +2104,32 @@ function htmlHasMovieLinks(html) {
   return /\/v\/[A-Za-z0-9]+/i.test(t);
 }
 
+/** 列表页主内容是否像有片单（排除导航里偶发的 /v/ 链接） */
+function htmlHasMovieListContent(html) {
+  var text = String(html || "");
+  if (/class=["'][^"']*movie-list|id=["'][^"']*movie-list/i.test(text)) {
+    return true;
+  }
+  if (/id=["']videos["']|class=["'][^"']*rankings/i.test(text) && /\/v\/[A-Za-z0-9]+/i.test(text)) {
+    return true;
+  }
+  // 主列表里多个影片卡片链接
+  var links = text.match(/href=["'][^"']*\/v\/[A-Za-z0-9]+["']/gi) || [];
+  return links.length >= 5;
+}
+
 function isLoginRequiredHtml(html) {
   var text = String(html || "");
   if (!text) return false;
-  // 有影片链接就不是登录墙（导航里常有「登录」二字，不能据此误判）
-  if (htmlHasMovieLinks(text)) return false;
+  // 先认登录墙文案/登录表单，再看影片链接（导航栏常有 /v/，不能用来排除登录墙）
   if (/此內容需要登入|此内容需要登录|需要登录|需要登入才能查看|請先登入|请先登录|会員限定|會員限定|会员限定/i.test(text)) {
     return true;
   }
-  // 真正的登录表单（含密码/验证码），而非页脚登录链接
   if (/action=["']\/user_sessions["']/i.test(text) && /name=["']password["']|name=["']_rucaptcha["']/i.test(text)) {
+    return true;
+  }
+  // 被踢回登录页
+  if (/<title[^>]*>[^<]*(登录|登入|Sign in|Log in)/i.test(text) && /name=["']password["']/i.test(text)) {
     return true;
   }
   return false;
@@ -2132,9 +2148,10 @@ function isValidJavdbSessionCookie(cookie) {
 function isAuthenticatedContentHtml(html) {
   var text = String(html || "");
   if (!text || isLoginRequiredHtml(text)) return false;
-  if (htmlHasMovieLinks(text)) return true;
-  if (/class=["'][^"']*movie-list|id=["'][^"']*movie-list/i.test(text)) return true;
-  if (/\/users\/sign_out|data-method=["']delete["'][^>]*sign_out|登出|註銷|注销/i.test(text)) return true;
+  if (/\/users\/sign_out|data-method=["']delete["'][^>]*sign_out|href=["'][^"']*sign_out|登出|註銷|注销/i.test(text)) {
+    return true;
+  }
+  if (htmlHasMovieListContent(text)) return true;
   return false;
 }
 
@@ -2238,10 +2255,15 @@ async function verifyJavdbSession(params, cookie, options) {
     return { ok: false, cookie: primary, html: "", reason: "Cookie 缺少有效 _jdb_session" };
   }
 
-  // 浏览器复制的 Cookie 多用桌面 UA；再试移动 UA
+  // 编码变体：已 URL 编码的优先保持原样；解码版仅作备选（避免破坏签名）
   var uaModes = [false, true];
   var variants = sessionEncodingVariants(primary);
   if (!variants.length) variants = [primary];
+  variants = [primary].concat(
+    variants.filter(function (v) {
+      return v !== primary;
+    })
+  );
 
   for (var vi = 0; vi < variants.length && vi < 4; vi++) {
     for (var ui = 0; ui < uaModes.length; ui++) {
@@ -5278,7 +5300,10 @@ async function fetchMovieList(path, params) {
     var browseItems = await enrichMovieItems(parseListItems(browseHtml, params), params);
     if (!browseItems.length) {
       if (isLoginRequiredHtml(browseHtml) || pathRequiresLogin(basePath)) {
-        throw new Error("未解析到影片列表（可能未登录或 Cookie 无效）。请更新含 _jdb_session 的 Cookie");
+        throw new Error(
+          "未解析到影片列表：页面仍像未登录。" +
+            "请确认 Cookie 含完整 _jdb_session=...（浏览器 Application 里整段复制），站点地址与复制 Cookie 时一致"
+        );
       }
       throw new Error("未解析到影片列表");
     }
