@@ -1619,9 +1619,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.9.6",
+  version: "2.9.7",
   requiredVersion: "0.0.1",
-  description: "JavDB 列表/排行榜/TOP250/热播；账号密码登录，兼容 Forward 把登录 302 当异常",
+  description: "JavDB 列表/排行榜/TOP250/热播；登录成功须经需登录页探测确认",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -2105,6 +2105,57 @@ function isValidJavdbSessionCookie(cookie) {
   var val = String(m[1] || "").trim().replace(/^["']+|["']+$/g, "");
   // 排除明显占位/空值
   return !!(val && val.length >= 8 && !/^(null|undefined|1|0)$/i.test(val));
+}
+
+/** 是否真正拿到需登录内容（不能只看有没有 _jdb_session，访客也有） */
+function isAuthenticatedContentHtml(html) {
+  var text = String(html || "");
+  if (!text || isLoginRequiredHtml(text)) return false;
+  if (htmlHasMovieLinks(text)) return true;
+  if (/class=["'][^"']*movie-list|id=["'][^"']*movie-list/i.test(text)) return true;
+  if (/\/users\/sign_out|data-method=["']delete["'][^>]*sign_out|登出|註銷|注销/i.test(text)) return true;
+  return false;
+}
+
+/**
+ * 用需登录页探测会话是否有效。返回 { ok, cookie, html, reason }
+ */
+async function verifyJavdbSession(params, cookie) {
+  var base = javdbBase(params);
+  cookie = normalizePastedCookie(cookie);
+  if (!isValidJavdbSessionCookie(cookie)) {
+    return { ok: false, cookie: cookie, html: "", reason: "无有效 _jdb_session" };
+  }
+  var probeUrl = base + "/rankings/top?locale=" + encodeURIComponent(javdbLocale(params));
+  var res;
+  try {
+    res = await Widget.http.get(probeUrl, {
+      headers: javdbHeaders(params, cookie, { loginUA: true }),
+      allow_redirects: true,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      cookie: cookie,
+      html: "",
+      reason: "探测请求失败: " + String((err && err.message) || err),
+    };
+  }
+  cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
+  var html = res && res.data != null ? String(res.data) : "";
+  var finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || probeUrl);
+  if (isAuthenticatedContentHtml(html)) {
+    return { ok: true, cookie: cookie, html: html, reason: "" };
+  }
+  if (isLoginRequiredHtml(html) || /\/login/i.test(finalUrl)) {
+    return { ok: false, cookie: cookie, html: html, reason: "探测页仍需登录" };
+  }
+  return {
+    ok: false,
+    cookie: cookie,
+    html: html,
+    reason: describeLoginWall(html, finalUrl),
+  };
 }
 
 function pathRequiresLogin(path) {
@@ -2778,7 +2829,7 @@ async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
 
 /**
  * 设备侧打开登录页/验证码（用户 IP），验证码交给 Cloudflare Worker OCR。
- * 有账密时始终从干净会话开始，避免残留 Cookie / 旧 _rucaptcha_session_id 干扰。
+ * 有账密时始终从干净会话开始；只有探测到需登录页真正可访问才算登录成功。
  */
 async function loginJavdbWithPassword(params, options) {
   options = options || {};
@@ -2795,6 +2846,9 @@ async function loginJavdbWithPassword(params, options) {
   var lastErr = "";
   var lastCaptcha = "";
   var attemptsUsed = 0;
+
+  // 清掉可能误存的「访客会话」
+  clearJavdbCookie();
 
   for (var attempt = 1; attempt <= maxAttempts; attempt++) {
     attemptsUsed = attempt;
@@ -2837,13 +2891,13 @@ async function loginJavdbWithPassword(params, options) {
         remember: "1",
         commit: formMeta.commit || "登入",
       };
-      // Rails 表单常带 utf8
       if (/name=["']utf8["']/i.test(html)) {
         formBody.utf8 = "✓";
       }
 
+      // 优先自动跟随 302：Forward 更容易把登录成功的 Set-Cookie 吃进后续响应
       var res = await httpPostForm(base + "/user_sessions", encodeForm(formBody), params, cookie, {
-        allowRedirects: false,
+        allowRedirects: true,
         loginUA: true,
       });
       cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
@@ -2851,7 +2905,6 @@ async function loginJavdbWithPassword(params, options) {
       var loc = responseLocation(res, base);
       var body = res && res.data != null ? String(res.data) : "";
 
-      // 302/303：登录成功常见；Forward 可能已自动跟随，也可能需手动跟
       if (loc && (status === 0 || isHttpRedirectStatus(status))) {
         try {
           var follow = await Widget.http.get(loc, {
@@ -2863,115 +2916,89 @@ async function loginJavdbWithPassword(params, options) {
           loc = String((follow && (follow.url || follow.finalUrl || follow.requestUrl)) || loc);
           res = follow || res;
           status = Number((res && res.status) || 200);
-        } catch (followErr) {
-          // 跟随失败不立刻认输：若已有会话且离开登录页，下面还会判定
-        }
-      } else if (!/_jdb_session=/i.test(cookie)) {
-        cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
+        } catch (followErr) {}
       }
 
       var finalUrl = String(loc || (res && (res.url || res.finalUrl || res.requestUrl)) || "");
       var flash = extractLoginFlashError(body);
-      var stillLogin =
-        /action=["']\/user_sessions["']/i.test(body) ||
-        (/\/login/i.test(finalUrl) && !/_jdb_session=/i.test(cookie)) ||
-        isLoginRequiredHtml(body);
-
-      // 跳离登录页 + 有会话 = 成功（302 已被正常消化）
-      if (!stillLogin && /_jdb_session=/i.test(cookie)) {
-        saveJavdbCookie(cookie);
-        return cookie;
-      }
-      if (
-        isHttpRedirectStatus(status) === false &&
-        finalUrl &&
-        !/\/login|\/user_sessions/i.test(finalUrl) &&
-        /_jdb_session=/i.test(cookie) &&
-        !flash
-      ) {
-        saveJavdbCookie(cookie);
-        return cookie;
-      }
-
-      // 登录成功跳转但运行时藏了 Set-Cookie：探测需登录页，并尝试从后续响应收会话
-      if (!stillLogin && !/_jdb_session=/i.test(cookie)) {
-        var probe = await Widget.http.get(base + "/rankings/top", {
-          headers: javdbHeaders(params, cookie, { loginUA: true }),
-          allow_redirects: true,
-        });
-        cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(probe));
-        var probeHtml = probe && probe.data ? String(probe.data) : "";
-        if (!isLoginRequiredHtml(probeHtml) && (htmlHasMovieLinks(probeHtml) || /_jdb_session=/i.test(cookie))) {
-          if (/_jdb_session=/i.test(cookie)) {
-            saveJavdbCookie(cookie);
-            return cookie;
-          }
-        }
-        lastErr =
-          "登录似已跳转但未读到 _jdb_session（运行时可能隐藏 Set-Cookie）。可稍后重试";
-        break;
-      }
-
-      if (flash === "credentials") {
-        throw new Error("邮箱或密码错误，请检查全局参数中的账号密码");
-      }
       var engineHint = params.__lastCaptchaEngine ? " engine=" + params.__lastCaptchaEngine : "";
       var needSolverHint = !String(params.zhipuApiKey || params.captchaSolverKey || "").trim()
         ? "；请填写全局参数「智谱 API Key」"
         : "";
+
+      if (flash === "credentials") {
+        throw new Error("邮箱或密码错误，请检查全局参数中的账号密码");
+      }
       if (flash === "captcha" || flash.indexOf("flash:") === 0) {
-        // Cookie 有 _jdb_session 只代表访客会话，不代表已登录；验证码错仍会失败
         lastErr =
           "验证码识别错误 OCR=" +
           captchaAnswer +
           engineHint +
           (flash.indexOf("flash:") === 0 ? "（站点：" + flash.slice(6) + "）" : "（站点：验证码错误）") +
-          "；有 Cookie≠已登录" +
           needSolverHint;
-      } else {
+        clearJavdbCookie();
+        continue;
+      }
+
+      // 唯一成功标准：需登录页真正能打开（访客 _jdb_session 不算）
+      var verified = await verifyJavdbSession(params, cookie);
+      if (verified.ok) {
+        saveJavdbCookie(verified.cookie);
+        return verified.cookie;
+      }
+
+      // 若 POST 后仍停在登录表单
+      if (
+        /action=["']\/user_sessions["']/i.test(body) ||
+        /\/login/i.test(finalUrl) ||
+        isLoginRequiredHtml(body)
+      ) {
         lastErr =
           "登录未通过 OCR=" +
           captchaAnswer +
           engineHint +
-          "（请确认账密；有 Cookie≠已登录）" +
+          "（请确认账密/验证码）" +
           needSolverHint;
+      } else {
+        lastErr =
+          "登录后会话无效：" +
+          (verified.reason || "探测失败") +
+          " OCR=" +
+          captchaAnswer +
+          engineHint +
+          "（Forward 可能未回传登录 Set-Cookie）";
       }
       clearJavdbCookie();
-      if (/_rucaptcha_session_id|Set-Cookie|隐藏了 Set-Cookie/i.test(lastErr)) break;
     } catch (err) {
       lastErr = String((err && err.message) || err);
-      // 纯 302 被运行时抛出：尝试当成功跳转处理一次，而不是当失败重试烧验证码
+      // 302 被抛出时：用错误里可能带的 Cookie 再探测，不要用干净 seed 丢掉会话
       if (/\b(301|302|303|307|308)\b/.test(lastErr) || /redirect|重定向/i.test(lastErr)) {
         try {
           var recovered = parseRedirectFromError(err, base);
-          var hop = (recovered && recovered.url) || base + "/";
-          var after = await Widget.http.get(hop, {
-            headers: javdbHeaders(params, buildCleanLoginSeed(params), { loginUA: true }),
-            allow_redirects: true,
-          });
-          var afterCookie = mergeCookieHeader(
+          var tryCookie = mergeCookieHeader(
             buildCleanLoginSeed(params),
             collectAnyCookiePairs(recovered || {})
           );
-          afterCookie = mergeCookieHeader(afterCookie, collectAnyCookiePairs(after || {}));
-          // 上面 cookie 信息可能不全：用探测页判断是否已登录
-          var probe2 = await Widget.http.get(base + "/rankings/top", {
-            headers: javdbHeaders(params, afterCookie, { loginUA: true }),
-            allow_redirects: true,
-          });
-          afterCookie = mergeCookieHeader(afterCookie, collectAnyCookiePairs(probe2));
-          var probeHtml2 = probe2 && probe2.data ? String(probe2.data) : "";
-          if (!isLoginRequiredHtml(probeHtml2) && htmlHasMovieLinks(probeHtml2) && /_jdb_session=/i.test(afterCookie)) {
-            saveJavdbCookie(afterCookie);
-            return afterCookie;
+          if (recovered && recovered.url) {
+            try {
+              var after = await Widget.http.get(recovered.url, {
+                headers: javdbHeaders(params, tryCookie, { loginUA: true }),
+                allow_redirects: true,
+              });
+              tryCookie = mergeCookieHeader(tryCookie, collectAnyCookiePairs(after));
+            } catch (eFollow) {}
           }
-          lastErr = "收到登录跳转(302)但未能确认会话，请重试";
+          var verified2 = await verifyJavdbSession(params, tryCookie);
+          if (verified2.ok) {
+            saveJavdbCookie(verified2.cookie);
+            return verified2.cookie;
+          }
+          lastErr = "收到跳转(302)但会话未生效：" + (verified2.reason || "");
         } catch (e2) {
           lastErr = "登录跳转(302)处理失败: " + String((e2 && e2.message) || e2);
         }
       }
       clearJavdbCookie();
-      // 智谱/AI 错误或结构性错误：立即停止，不再空转重试
       if (
         /智谱|图片输入格式|解析错误|未配置智谱|API Key|转码失败|邮箱或密码错误|不支持 POST|无法打开登录页|Cloudflare 拦截|_rucaptcha_session_id|隐藏了 Set-Cookie|OCR 失败|OCR 请求失败/i.test(
           lastErr
@@ -2994,11 +3021,19 @@ async function ensureJavdbSession(params, options) {
   var password = String(params.password || "").trim();
   var hasPassword = !!(email && password);
 
-  // 有账密：优先账密登录，忽略手动 Cookie 字段（避免残留会话干扰）
   if (hasPassword) {
-    var autoCookie = readAutoSessionCookie();
-    if (isValidJavdbSessionCookie(autoCookie) && !options.forceLogin) {
-      return autoCookie;
+    if (!options.forceLogin) {
+      var autoCookie = readAutoSessionCookie();
+      if (isValidJavdbSessionCookie(autoCookie)) {
+        var check = await verifyJavdbSession(params, autoCookie);
+        if (check.ok) {
+          saveJavdbCookie(check.cookie);
+          return check.cookie;
+        }
+        clearJavdbCookie();
+      }
+    } else {
+      clearJavdbCookie();
     }
     if (JAVDB_LOGIN_INFLIGHT) return JAVDB_LOGIN_INFLIGHT;
     JAVDB_LOGIN_INFLIGHT = loginJavdbWithPassword(params, {
@@ -3012,8 +3047,11 @@ async function ensureJavdbSession(params, options) {
 
   var cookie = readStoredJavdbCookie(params);
   if (isValidJavdbSessionCookie(cookie) && !options.forceLogin) {
-    saveJavdbCookie(cookie);
-    return cookie;
+    var check2 = await verifyJavdbSession(params, cookie);
+    if (check2.ok) {
+      saveJavdbCookie(check2.cookie);
+      return check2.cookie;
+    }
   }
   if (options.allowAnonymous) return "";
   throw new Error("该内容需要登录：请在全局参数填写账号和密码");
@@ -4441,7 +4479,10 @@ async function fetchHtml(url, params) {
       await ensureJavdbSession(params, { forceLogin: true });
       html = await once();
       if (isLoginRequiredHtml(html)) {
-        throw new Error("该页面需要登录，账密登录后仍未通过。请确认账号密码后重试");
+        throw new Error(
+          "该页面需要登录：账密流程已跑完，但会话仍无法打开需登录内容。" +
+            "常见原因：验证码仍错，或 Forward 未回传登录后的 _jdb_session。请看是否先出现「账号登录失败/验证码」类提示"
+        );
       }
     } else if (isValidJavdbSessionCookie(manualCookie)) {
       var wall = describeLoginWall(html, "");
