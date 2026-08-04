@@ -11,7 +11,16 @@ var JAVDB_SORT_FILTER = [
   "score_download",
   "fav_download",
 ];
-var GLOBAL_PARAM_KEYS = ["baseUrl", "locale", "email", "password", "cookie", "loginProxy"];
+var GLOBAL_PARAM_KEYS = [
+  "baseUrl",
+  "locale",
+  "email",
+  "password",
+  "cookie",
+  "loginProxy",
+  "captchaSolver",
+  "captchaSolverKey",
+];
 
 function syncGlobalParams(params) {
   params = params || {};
@@ -1604,9 +1613,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.9.0",
+  version: "2.9.2",
   requiredVersion: "0.0.1",
-  description: "JavDB 列表/排行榜/TOP250/热播、演员/系列/标签/片商；账号密码自动登录（验证码云端识别）",
+  description: "JavDB 列表/排行榜/TOP250/热播；账号密码登录，支持智谱/CapSolver/2Captcha 验证码识别",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -1653,7 +1662,28 @@ WidgetMetadata = {
       name: "loginProxy",
       title: "OCR 代理（可选）",
       type: "input",
-      description: "默认 https://dmm.laotou.ccwu.cc ，用于自动识别验证码",
+      description: "默认 https://dmm.laotou.ccwu.cc ，用于识别验证码",
+      value: "",
+    },
+    {
+      name: "captchaSolver",
+      title: "打码引擎（可选）",
+      type: "enumeration",
+      enumOptions: [
+        { title: "自动", value: "" },
+        { title: "智谱 GLM-4V（推荐有 Token 时）", value: "zhipu" },
+        { title: "CapSolver", value: "capsolver" },
+        { title: "2Captcha", value: "2captcha" },
+        { title: "TrueCaptcha", value: "truecaptcha" },
+      ],
+      value: "",
+      description: "有智谱 API Token 时选「智谱」；扭曲字母也可用 CapSolver/2Captcha",
+    },
+    {
+      name: "captchaSolverKey",
+      title: "打码 / 智谱 API Key",
+      type: "input",
+      description: "智谱填 open.bigmodel.cn 的 API Key；CapSolver/2Captcha 填对应 Key；TrueCaptcha 填 userid:apikey",
       value: "",
     },
   ],
@@ -2586,6 +2616,13 @@ async function ocrCaptchaViaProxy(params, payload) {
   var key = String(params.loginProxyKey || "").trim();
   if (key) headers["X-Login-Key"] = key;
   if (!Widget.http.post) throw new Error("当前环境不支持 POST");
+
+  payload = payload || {};
+  var solver = String((params && params.captchaSolver) || "").trim();
+  var solverKey = String((params && params.captchaSolverKey) || "").trim();
+  if (solver) payload.captchaSolver = solver;
+  if (solverKey) payload.captchaSolverKey = solverKey;
+
   var res;
   try {
     res = await Widget.http.post(endpoint, payload, {
@@ -2601,8 +2638,10 @@ async function ocrCaptchaViaProxy(params, payload) {
     throw new Error(String((data && (data.error || data.message)) || "OCR 失败"));
   }
   var answer = normalizeCaptchaAnswer(data.answer);
-  // JavDB rucaptcha 通常 4~5 位；过短多半是误识别
   if (!answer || answer.length < 4) throw new Error("OCR 结果过短: " + answer);
+  // 挂到 params 便于登录失败时提示用了哪个引擎
+  params.__lastCaptchaEngine = String(data.engine || data.solver || "");
+  params.__lastCaptchaWarning = String(data.warning || "");
   return answer;
 }
 
@@ -2789,13 +2828,19 @@ async function loginJavdbWithPassword(params, options) {
       if (flash === "credentials") {
         throw new Error("邮箱或密码错误，请检查全局参数中的账号密码");
       }
+      var engineHint = params.__lastCaptchaEngine ? " engine=" + params.__lastCaptchaEngine : "";
+      var needSolverHint = !String(params.captchaSolverKey || "").trim()
+        ? "；请在全局参数填写「打码 API Key」（CapSolver/2Captcha），通用 OCR 对扭曲验证码很容易错"
+        : "";
       if (flash === "captcha" || flash.indexOf("flash:") === 0) {
         lastErr =
           "登录未通过 OCR=" +
           captchaAnswer +
-          (flash.indexOf("flash:") === 0 ? "（" + flash.slice(6) + "）" : "（验证码错误）");
+          engineHint +
+          (flash.indexOf("flash:") === 0 ? "（" + flash.slice(6) + "）" : "（验证码错误）") +
+          needSolverHint;
       } else {
-        lastErr = "登录未通过 OCR=" + captchaAnswer + "（请确认账密）";
+        lastErr = "登录未通过 OCR=" + captchaAnswer + engineHint + "（请确认账密）" + needSolverHint;
       }
       clearJavdbCookie();
       if (/_rucaptcha_session_id|Set-Cookie|隐藏了 Set-Cookie/i.test(lastErr)) break;
