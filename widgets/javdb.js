@@ -1619,9 +1619,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.9.7",
+  version: "2.9.8",
   requiredVersion: "0.0.1",
-  description: "JavDB 列表/排行榜/TOP250/热播；登录成功须经需登录页探测确认",
+  description: "JavDB 列表/排行榜/TOP250/热播；登录态由模块自拼 Cookie，不依赖 Forward Set-Cookie",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -1846,9 +1846,12 @@ function javdbHeaders(params, cookieOverride, options) {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   };
-  var locale = javdbLocale(params);
-  var cookie = cookieOverride !== undefined ? cookieOverride : readStoredJavdbCookie(params || {});
-  headers.Cookie = mergeCookieHeader(cookie, ["locale=" + locale, "over18=1"]);
+  var raw =
+    cookieOverride !== undefined ? cookieOverride : readStoredJavdbCookie(params || {});
+  // 自己拼接 Cookie，不依赖 Forward 自动 Cookie 罐
+  headers.Cookie = assembleJavdbLoginCookie(params, raw, {
+    keepCaptcha: !!options.keepCaptcha,
+  });
   return headers;
 }
 
@@ -2119,43 +2122,72 @@ function isAuthenticatedContentHtml(html) {
 
 /**
  * 用需登录页探测会话是否有效。返回 { ok, cookie, html, reason }
+ * 会尝试：完整自拼 Cookie / 去掉旧 session 仅带偏好（避免盖掉运行时罐里的新会话）后再吸收。
  */
 async function verifyJavdbSession(params, cookie) {
   var base = javdbBase(params);
-  cookie = normalizePastedCookie(cookie);
-  if (!isValidJavdbSessionCookie(cookie)) {
-    return { ok: false, cookie: cookie, html: "", reason: "无有效 _jdb_session" };
-  }
-  var probeUrl = base + "/rankings/top?locale=" + encodeURIComponent(javdbLocale(params));
-  var res;
-  try {
-    res = await Widget.http.get(probeUrl, {
-      headers: javdbHeaders(params, cookie, { loginUA: true }),
-      allow_redirects: true,
-    });
-  } catch (err) {
+  var locale = javdbLocale(params);
+  var probeUrl = base + "/rankings/top?locale=" + encodeURIComponent(locale);
+
+  async function probeOnce(cookieHeader) {
+    cookieHeader = assembleJavdbLoginCookie(params, cookieHeader);
+    var res;
+    try {
+      res = await Widget.http.get(probeUrl, {
+        headers: javdbHeaders(params, cookieHeader, { loginUA: true }),
+        allow_redirects: true,
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        cookie: cookieHeader,
+        html: "",
+        reason: "探测请求失败: " + String((err && err.message) || err),
+      };
+    }
+    var merged = assembleJavdbLoginCookie(params, absorbCookies(cookieHeader, res));
+    var html = res && res.data != null ? String(res.data) : "";
+    var finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || probeUrl);
+    if (isAuthenticatedContentHtml(html)) {
+      return { ok: true, cookie: merged, html: html, reason: "" };
+    }
+    if (isLoginRequiredHtml(html) || /\/login/i.test(finalUrl)) {
+      return { ok: false, cookie: merged, html: html, reason: "探测页仍需登录" };
+    }
     return {
       ok: false,
-      cookie: cookie,
-      html: "",
-      reason: "探测请求失败: " + String((err && err.message) || err),
+      cookie: merged,
+      html: html,
+      reason: describeLoginWall(html, finalUrl),
     };
   }
-  cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
-  var html = res && res.data != null ? String(res.data) : "";
-  var finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || probeUrl);
-  if (isAuthenticatedContentHtml(html)) {
-    return { ok: true, cookie: cookie, html: html, reason: "" };
+
+  var primary = assembleJavdbLoginCookie(params, cookie);
+  if (isValidJavdbSessionCookie(primary)) {
+    var v1 = await probeOnce(primary);
+    if (v1.ok) return v1;
   }
-  if (isLoginRequiredHtml(html) || /\/login/i.test(finalUrl)) {
-    return { ok: false, cookie: cookie, html: html, reason: "探测页仍需登录" };
+
+  // 不带旧 _jdb_session：防止用访客 session 盖掉登录 POST 后运行时罐里的新会话；
+  // 若响应/罐里能抠到新 session，absorb 后即可自拼登录态。
+  var soft = assembleJavdbLoginCookie(
+    params,
+    stripCookieNames(primary, ["_jdb_session", "remember_user_token", "_rucaptcha_session_id"])
+  );
+  var v2 = await probeOnce(soft);
+  if (v2.ok) return v2;
+
+  // 编码变体再试一次（仅当已有 session 值）
+  if (isValidJavdbSessionCookie(primary)) {
+    var variants = sessionEncodingVariants(primary);
+    for (var i = 0; i < variants.length && i < 3; i++) {
+      if (variants[i] === primary) continue;
+      var v3 = await probeOnce(variants[i]);
+      if (v3.ok) return v3;
+    }
   }
-  return {
-    ok: false,
-    cookie: cookie,
-    html: html,
-    reason: describeLoginWall(html, finalUrl),
-  };
+
+  return v2.reason ? v2 : { ok: false, cookie: primary, html: "", reason: "无有效 _jdb_session" };
 }
 
 function pathRequiresLogin(path) {
@@ -2298,42 +2330,163 @@ function responseLocation(res, base) {
   return base + loc;
 }
 
-function collectAnyCookiePairs(res) {
-  var pairs = collectSetCookiePairs(res);
-  // 部分运行时把会话放在 cookies / cookie 字段而非 Set-Cookie
-  var extra = [];
-  if (res && res.cookies) {
-    if (typeof res.cookies === "string") {
-      extra = collectSetCookiePairs({ headers: { "set-cookie": res.cookies } });
-    } else if (Array.isArray(res.cookies)) {
-      extra = res.cookies
-        .map(function (c) {
-          if (typeof c === "string") return c.split(";")[0].trim();
-          if (c && c.name) return c.name + "=" + String(c.value == null ? "" : c.value);
-          return "";
-        })
-        .filter(Boolean);
-    } else if (typeof res.cookies === "object") {
-      extra = Object.keys(res.cookies).map(function (name) {
-        return name + "=" + String(res.cookies[name] == null ? "" : res.cookies[name]);
+function pushCookiePair(out, name, value) {
+  name = String(name || "").trim();
+  if (!name || value == null) return;
+  var val = String(value).trim();
+  if (!val) return;
+  // 去掉 Cookie 属性残留
+  if (/^(path|domain|expires|max-age|secure|httponly|samesite)$/i.test(name)) return;
+  out.push(name + "=" + val);
+}
+
+function pairsFromCookieLike(value) {
+  var out = [];
+  if (value == null) return out;
+  if (typeof value === "string") {
+    String(value)
+      .split(";")
+      .forEach(function (p) {
+        p = String(p || "").trim();
+        if (!p || p.indexOf("=") < 0) return;
+        var idx = p.indexOf("=");
+        pushCookiePair(out, p.slice(0, idx), p.slice(idx + 1));
       });
+    return out;
+  }
+  if (Array.isArray(value)) {
+    value.forEach(function (item) {
+      if (typeof item === "string") {
+        var first = String(item).split(";")[0].trim();
+        if (first.indexOf("=") > 0) out.push(first);
+      } else if (item && item.name != null) {
+        pushCookiePair(out, item.name, item.value);
+      }
+    });
+    return out;
+  }
+  if (typeof value === "object") {
+    Object.keys(value).forEach(function (k) {
+      var v = value[k];
+      if (v != null && typeof v === "object" && (v.value != null || v.Value != null)) {
+        pushCookiePair(out, k, v.value != null ? v.value : v.Value);
+      } else {
+        pushCookiePair(out, k, v);
+      }
+    });
+  }
+  return out;
+}
+
+/**
+ * 从 Forward 响应里尽量抠出 cookie 名值（不依赖 Set-Cookie 是否暴露）。
+ * 自己维护 jar，后续请求手动拼 Cookie 头。
+ */
+function collectAnyCookiePairs(res, depth) {
+  if (!res || depth > 2) return [];
+  depth = depth || 0;
+  var out = [];
+  var seen = {};
+
+  function addPairs(list) {
+    (list || []).forEach(function (pair) {
+      pair = String(pair || "").trim();
+      if (!pair || pair.indexOf("=") < 0) return;
+      var name = pair.split("=")[0].trim().toLowerCase();
+      if (!name || seen[name + "\0" + pair]) return;
+      seen[name + "\0" + pair] = true;
+      out.push(pair.split(";")[0].trim());
+    });
+  }
+
+  addPairs(collectSetCookiePairs(res));
+  addPairs(pairsFromCookieLike(res.cookies));
+  addPairs(pairsFromCookieLike(res.cookie));
+  addPairs(pairsFromCookieLike(res.setCookie));
+  addPairs(pairsFromCookieLike(res.set_cookie));
+  addPairs(pairsFromCookieLike(res.jar));
+  addPairs(pairsFromCookieLike(res.cookieJar));
+
+  addPairs(pairsFromCookieLike(getHeaderValue(res, "cookie")));
+  addPairs(pairsFromCookieLike(getHeaderValue(res, "Cookie")));
+  if (res.headers && typeof res.headers === "object" && typeof res.headers.get !== "function") {
+    addPairs(pairsFromCookieLike(res.headers.cookie || res.headers.Cookie));
+  }
+  if (res.requestHeaders) addPairs(pairsFromCookieLike(res.requestHeaders.Cookie || res.requestHeaders.cookie));
+  if (res.reqHeaders) addPairs(pairsFromCookieLike(res.reqHeaders.Cookie || res.reqHeaders.cookie));
+  if (depth < 2) {
+    if (res.request) addPairs(collectAnyCookiePairs(res.request, depth + 1));
+    if (res.response) addPairs(collectAnyCookiePairs(res.response, depth + 1));
+    if (res.raw) addPairs(collectAnyCookiePairs(res.raw, depth + 1));
+    if (res.config) addPairs(collectAnyCookiePairs(res.config, depth + 1));
+  }
+
+  var data = res.data;
+  if (data && typeof data === "object") {
+    addPairs(pairsFromCookieLike(data.cookie || data.cookies || data.setCookie));
+  } else if (typeof data === "string" && /_jdb_session=/i.test(data) && data.length < 4000) {
+    addPairs(pairsFromCookieLike(data));
+  }
+
+  return out;
+}
+
+/** 把本次响应里抠到的 cookie 合进我们自己的 jar 字符串 */
+function absorbCookies(jar, res) {
+  return mergeCookieHeader(jar, collectAnyCookiePairs(res));
+}
+
+/**
+ * 手动拼接登录态 Cookie（不交给 Forward 自动罐）。
+ * 保留站点偏好 + 会话；登录后去掉验证码会话。
+ */
+function assembleJavdbLoginCookie(params, jar, options) {
+  options = options || {};
+  jar = normalizePastedCookie(jar);
+  var locale = javdbLocale(params);
+  var map = {};
+
+  function put(name, value) {
+    name = String(name || "").trim();
+    if (!name || value == null || value === "") return;
+    map[name] = String(value).trim();
+  }
+
+  // 先吃 jar 里已有的
+  String(jar || "")
+    .split(";")
+    .forEach(function (part) {
+      part = String(part || "").trim();
+      if (!part || part.indexOf("=") < 0) return;
+      var i = part.indexOf("=");
+      put(part.slice(0, i).trim(), part.slice(i + 1).trim());
+    });
+
+  put("over18", map.over18 || "1");
+  put("locale", map.locale || locale);
+  if (!map.list_mode) put("list_mode", "h");
+  if (!map.theme) put("theme", "auto");
+
+  if (!options.keepCaptcha) {
+    delete map._rucaptcha_session_id;
+  }
+
+  // 稳定顺序，便于排查
+  var order = ["over18", "locale", "list_mode", "theme", "_jdb_session", "remember_user_token"];
+  var parts = [];
+  var used = {};
+  order.forEach(function (k) {
+    if (map[k] != null && map[k] !== "") {
+      parts.push(k + "=" + map[k]);
+      used[k] = true;
     }
-  }
-  if (res && res.cookie && typeof res.cookie === "string") {
-    extra = extra.concat(
-      String(res.cookie)
-        .split(";")
-        .map(function (p) {
-          return String(p || "").trim();
-        })
-        .filter(function (p) {
-          return p && p.indexOf("=") > 0;
-        })
-    );
-  }
-  if (!pairs.length) return extra;
-  if (!extra.length) return pairs;
-  return pairs.concat(extra);
+  });
+  Object.keys(map).forEach(function (k) {
+    if (used[k]) return;
+    if (/^_rucaptcha/i.test(k) && !options.keepCaptcha) return;
+    parts.push(k + "=" + map[k]);
+  });
+  return parts.join("; ");
 }
 
 function getCookieValue(cookie, name) {
@@ -2829,7 +2982,7 @@ async function resolveCaptchaAnswer(params, cookie, captchaSrc) {
 
 /**
  * 设备侧打开登录页/验证码（用户 IP），验证码交给 Cloudflare Worker OCR。
- * 有账密时始终从干净会话开始；只有探测到需登录页真正可访问才算登录成功。
+ * Cookie 由模块自己吸收并拼接，不依赖 Forward 回传 Set-Cookie。
  */
 async function loginJavdbWithPassword(params, options) {
   options = options || {};
@@ -2847,15 +3000,15 @@ async function loginJavdbWithPassword(params, options) {
   var lastCaptcha = "";
   var attemptsUsed = 0;
 
-  // 清掉可能误存的「访客会话」
   clearJavdbCookie();
 
   for (var attempt = 1; attempt <= maxAttempts; attempt++) {
     attemptsUsed = attempt;
     try {
-      var seedCookie = buildCleanLoginSeed(params);
+      // 自维护 jar：每一步 absorb 后手动拼接
+      var jar = assembleJavdbLoginCookie(params, buildCleanLoginSeed(params), { keepCaptcha: true });
       var loginPage = await Widget.http.get(loginUrl, {
-        headers: javdbHeaders(params, seedCookie, { loginUA: true }),
+        headers: javdbHeaders(params, jar, { loginUA: true }),
         allow_redirects: true,
       });
       var html = loginPage && loginPage.data ? String(loginPage.data) : "";
@@ -2864,23 +3017,23 @@ async function loginJavdbWithPassword(params, options) {
         throw new Error("登录页被 Cloudflare 拦截");
       }
 
-      var cookie = mergeCookieHeader(seedCookie, collectAnyCookiePairs(loginPage));
+      jar = assembleJavdbLoginCookie(params, absorbCookies(jar, loginPage), { keepCaptcha: true });
       var formMeta = extractLoginFormMeta(html);
       if (!formMeta.token) throw new Error("未取得登录 CSRF");
 
       var captchaAnswer = "";
       if (formMeta.hasCaptcha) {
-        var captchaResult = await resolveCaptchaAnswer(params, cookie, formMeta.captchaSrc);
+        var captchaResult = await resolveCaptchaAnswer(params, jar, formMeta.captchaSrc);
         if (captchaResult && typeof captchaResult === "object") {
           captchaAnswer = captchaResult.answer || "";
-          cookie = captchaResult.cookie || cookie;
+          jar = assembleJavdbLoginCookie(params, captchaResult.cookie || jar, { keepCaptcha: true });
         } else {
           captchaAnswer = String(captchaResult || "");
         }
         lastCaptcha = captchaAnswer;
       }
-      if (formMeta.hasCaptcha && !getCookieValue(cookie, "_rucaptcha_session_id")) {
-        throw new Error("未拿到 _rucaptcha_session_id（Forward 可能隐藏了 Set-Cookie）");
+      if (formMeta.hasCaptcha && !getCookieValue(jar, "_rucaptcha_session_id")) {
+        throw new Error("未拿到验证码会话 _rucaptcha_session_id，请重试");
       }
 
       var formBody = {
@@ -2895,27 +3048,27 @@ async function loginJavdbWithPassword(params, options) {
         formBody.utf8 = "✓";
       }
 
-      // 优先自动跟随 302：Forward 更容易把登录成功的 Set-Cookie 吃进后续响应
-      var res = await httpPostForm(base + "/user_sessions", encodeForm(formBody), params, cookie, {
+      var sessionBefore = getCookieValue(jar, "_jdb_session");
+      var res = await httpPostForm(base + "/user_sessions", encodeForm(formBody), params, jar, {
         allowRedirects: true,
         loginUA: true,
       });
-      cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(res));
+      jar = assembleJavdbLoginCookie(params, absorbCookies(jar, res), { keepCaptcha: true });
       var status = Number((res && res.status) || 0);
       var loc = responseLocation(res, base);
       var body = res && res.data != null ? String(res.data) : "";
 
+      // 若仍停在 3xx，手动跟一次；跟随时带上当前 jar（已 absorb 的最新值）
       if (loc && (status === 0 || isHttpRedirectStatus(status))) {
         try {
           var follow = await Widget.http.get(loc, {
-            headers: javdbHeaders(params, cookie, { loginUA: true }),
+            headers: javdbHeaders(params, jar, { loginUA: true }),
             allow_redirects: true,
           });
-          cookie = mergeCookieHeader(cookie, collectAnyCookiePairs(follow));
+          jar = assembleJavdbLoginCookie(params, absorbCookies(jar, follow), { keepCaptcha: true });
           body = follow && follow.data != null ? String(follow.data) : body;
           loc = String((follow && (follow.url || follow.finalUrl || follow.requestUrl)) || loc);
           res = follow || res;
-          status = Number((res && res.status) || 200);
         } catch (followErr) {}
       }
 
@@ -2925,6 +3078,7 @@ async function loginJavdbWithPassword(params, options) {
       var needSolverHint = !String(params.zhipuApiKey || params.captchaSolverKey || "").trim()
         ? "；请填写全局参数「智谱 API Key」"
         : "";
+      var sessionAfter = getCookieValue(jar, "_jdb_session");
 
       if (flash === "credentials") {
         throw new Error("邮箱或密码错误，请检查全局参数中的账号密码");
@@ -2940,14 +3094,21 @@ async function loginJavdbWithPassword(params, options) {
         continue;
       }
 
-      // 唯一成功标准：需登录页真正能打开（访客 _jdb_session 不算）
-      var verified = await verifyJavdbSession(params, cookie);
-      if (verified.ok) {
-        saveJavdbCookie(verified.cookie);
-        return verified.cookie;
+      // 登录后页面已带登出等标记：直接自拼登录态
+      if (isAuthenticatedContentHtml(body) && isValidJavdbSessionCookie(jar)) {
+        var ready = assembleJavdbLoginCookie(params, jar);
+        saveJavdbCookie(ready);
+        return ready;
       }
 
-      // 若 POST 后仍停在登录表单
+      // 用自拼 Cookie 探测；verify 内部还会试「不带旧 session」以免盖住新会话
+      var verified = await verifyJavdbSession(params, jar);
+      if (verified.ok) {
+        var okCookie = assembleJavdbLoginCookie(params, verified.cookie);
+        saveJavdbCookie(okCookie);
+        return okCookie;
+      }
+
       if (
         /action=["']\/user_sessions["']/i.test(body) ||
         /\/login/i.test(finalUrl) ||
@@ -2961,46 +3122,51 @@ async function loginJavdbWithPassword(params, options) {
           needSolverHint;
       } else {
         lastErr =
-          "登录后会话无效：" +
+          "登录态未生效：" +
           (verified.reason || "探测失败") +
           " OCR=" +
           captchaAnswer +
           engineHint +
-          "（Forward 可能未回传登录 Set-Cookie）";
+          (sessionBefore && sessionAfter && sessionBefore !== sessionAfter
+            ? "（已拼到新 _jdb_session）"
+            : "（_jdb_session 未变化）");
       }
       clearJavdbCookie();
     } catch (err) {
       lastErr = String((err && err.message) || err);
-      // 302 被抛出时：用错误里可能带的 Cookie 再探测，不要用干净 seed 丢掉会话
       if (/\b(301|302|303|307|308)\b/.test(lastErr) || /redirect|重定向/i.test(lastErr)) {
         try {
           var recovered = parseRedirectFromError(err, base);
-          var tryCookie = mergeCookieHeader(
-            buildCleanLoginSeed(params),
-            collectAnyCookiePairs(recovered || {})
+          var tryJar = assembleJavdbLoginCookie(
+            params,
+            absorbCookies(buildCleanLoginSeed(params), recovered),
+            { keepCaptcha: true }
           );
           if (recovered && recovered.url) {
             try {
               var after = await Widget.http.get(recovered.url, {
-                headers: javdbHeaders(params, tryCookie, { loginUA: true }),
+                headers: javdbHeaders(params, tryJar, { loginUA: true }),
                 allow_redirects: true,
               });
-              tryCookie = mergeCookieHeader(tryCookie, collectAnyCookiePairs(after));
+              tryJar = assembleJavdbLoginCookie(params, absorbCookies(tryJar, after), {
+                keepCaptcha: true,
+              });
             } catch (eFollow) {}
           }
-          var verified2 = await verifyJavdbSession(params, tryCookie);
+          var verified2 = await verifyJavdbSession(params, tryJar);
           if (verified2.ok) {
-            saveJavdbCookie(verified2.cookie);
-            return verified2.cookie;
+            var ok2 = assembleJavdbLoginCookie(params, verified2.cookie);
+            saveJavdbCookie(ok2);
+            return ok2;
           }
-          lastErr = "收到跳转(302)但会话未生效：" + (verified2.reason || "");
+          lastErr = "收到跳转(302)但登录态未生效：" + (verified2.reason || "");
         } catch (e2) {
           lastErr = "登录跳转(302)处理失败: " + String((e2 && e2.message) || e2);
         }
       }
       clearJavdbCookie();
       if (
-        /智谱|图片输入格式|解析错误|未配置智谱|API Key|转码失败|邮箱或密码错误|不支持 POST|无法打开登录页|Cloudflare 拦截|_rucaptcha_session_id|隐藏了 Set-Cookie|OCR 失败|OCR 请求失败/i.test(
+        /智谱|图片输入格式|解析错误|未配置智谱|API Key|转码失败|邮箱或密码错误|不支持 POST|无法打开登录页|Cloudflare 拦截|_rucaptcha_session_id|OCR 失败|OCR 请求失败/i.test(
           lastErr
         )
       ) {
@@ -4480,8 +4646,8 @@ async function fetchHtml(url, params) {
       html = await once();
       if (isLoginRequiredHtml(html)) {
         throw new Error(
-          "该页面需要登录：账密流程已跑完，但会话仍无法打开需登录内容。" +
-            "常见原因：验证码仍错，或 Forward 未回传登录后的 _jdb_session。请看是否先出现「账号登录失败/验证码」类提示"
+          "该页面需要登录：账密流程已跑完，但自拼登录态仍无法打开内容。" +
+            "请查看是否有验证码错误；或把浏览器登录后的 Cookie 填到全局参数作备用"
         );
       }
     } else if (isValidJavdbSessionCookie(manualCookie)) {
