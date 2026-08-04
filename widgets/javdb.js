@@ -1619,9 +1619,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.9.3",
+  version: "2.9.4",
   requiredVersion: "0.0.1",
-  description: "JavDB 列表/排行榜/TOP250/热播；账号密码登录，验证码仅用智谱 GLM-4V 识别",
+  description: "JavDB 列表/排行榜/TOP250/热播；账号密码登录，验证码仅智谱识别（GIF 自动转 PNG）",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -2718,11 +2718,13 @@ async function loginJavdbWithPassword(params, options) {
 
   var base = javdbBase(params);
   var loginUrl = base + "/login";
-  var maxAttempts = 5;
+  var maxAttempts = 3;
   var lastErr = "";
   var lastCaptcha = "";
+  var attemptsUsed = 0;
 
   for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    attemptsUsed = attempt;
     try {
       var seedCookie = buildCleanLoginSeed(params);
       var loginPage = await Widget.http.get(loginUrl, {
@@ -2842,19 +2844,19 @@ async function loginJavdbWithPassword(params, options) {
     } catch (err) {
       lastErr = String((err && err.message) || err);
       clearJavdbCookie();
-      if (/邮箱或密码错误|不支持 POST|无法打开登录页|Cloudflare 拦截|_rucaptcha_session_id|隐藏了 Set-Cookie/i.test(lastErr)) {
+      // 智谱/AI 错误或结构性错误：立即停止，不再空转重试
+      if (
+        /智谱|图片输入格式|解析错误|未配置智谱|API Key|转码失败|邮箱或密码错误|不支持 POST|无法打开登录页|Cloudflare 拦截|_rucaptcha_session_id|隐藏了 Set-Cookie|OCR 失败|OCR 请求失败/i.test(
+          lastErr
+        )
+      ) {
         break;
       }
     }
   }
 
   throw new Error(
-    "账号登录失败：" +
-      lastErr +
-      (lastCaptcha ? "" : "") +
-      "。已重试 " +
-      maxAttempts +
-      " 次验证码；请确认账密正确后稍后重试"
+    "账号登录失败：" + lastErr + "。已尝试 " + attemptsUsed + "/" + maxAttempts + " 次后停止"
   );
 }
 
