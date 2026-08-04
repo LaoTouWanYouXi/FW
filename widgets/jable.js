@@ -5,7 +5,7 @@ WidgetMetadata = {
   description: "Jable分类浏览.全局搜索.标签.女优.预告.推荐.聚合",
   author: "nibiru｜MakkaPakka｜廿二日",
   site: "https://jable.tv",
-  version: "2.6.0",
+  version: "2.6.1",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1502,24 +1502,25 @@ async function loadDetail(link) {
     if (recViews)    descParts.push(`观看: ${recViews}`);
 
     const itemCover = recCover || detailPosterCover || jableCover;
+    const recDvdId = extractDvdId(recLink);
     relatedItems.push({
-      id: recLink,
+      id: recDvdId || recLink,
       type: "url",
       title: recTitle,
       backdropPath: itemCover || undefined,
       posterPath: itemCover || undefined,
       durationText: recDuration,
-      description: descParts.length ? descParts.join(" | ") : undefined,
+      description: descParts.length ? descParts.join(" | ") : (recDvdId ? `番号: ${recDvdId}` : undefined),
       mediaType: "movie",
       link: recLink,
     });
   });
 
   const item = {
-    id: link,
+    id: dvdId || link,
     type: "detail",
     title,
-    description,
+    description: description || (dvdId ? `番号: ${dvdId}` : undefined),
     videoUrl: playbackUrl,
     playerType: "ijk",
     customHeaders: {
