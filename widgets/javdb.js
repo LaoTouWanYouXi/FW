@@ -1619,9 +1619,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.9.9",
+  version: "2.10.0",
   requiredVersion: "0.0.1",
-  description: "JavDB 列表/排行榜/TOP250/热播；登录每轮重新拉验证码 OCR，自拼 Cookie",
+  description: "JavDB；登录优先 Cookie（校验有效期），失效后再账密+智谱验证码",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -1644,24 +1644,24 @@ WidgetMetadata = {
       value: "zh",
     },
     {
+      name: "cookie",
+      title: "Cookie（可选）",
+      type: "input",
+      description: "优先使用。填浏览器登录后的 Cookie（含 _jdb_session）；有效则跳过账密，失效后再用账号密码",
+      value: "",
+    },
+    {
       name: "email",
       title: "账号/邮箱",
       type: "input",
-      description: "TOP250/热播等需登录板块必填；验证码由云端自动识别",
+      description: "Cookie 无效或未填时，用于自动登录（需同时填密码与智谱 Key）",
       value: "",
     },
     {
       name: "password",
       title: "密码",
       type: "input",
-      description: "与账号一起用于自动登录（有账密时优先走账密，忽略 Cookie）",
-      value: "",
-    },
-    {
-      name: "cookie",
-      title: "Cookie（可选）",
-      type: "input",
-      description: "可不填。仅在不使用账密时作为备用登录态",
+      description: "与账号一起；仅当 Cookie 缺失/过期时才走账密登录",
       value: "",
     },
     {
@@ -1675,7 +1675,7 @@ WidgetMetadata = {
       name: "zhipuApiKey",
       title: "智谱 API Key",
       type: "input",
-      description: "必填。open.bigmodel.cn 的 API Key，用于识别登录验证码（仅智谱，无其它引擎）",
+      description: "账密自动登录时必填。open.bigmodel.cn 的 API Key，用于识别验证码",
       value: "",
     },
   ],
@@ -2041,15 +2041,7 @@ function normalizePastedCookie(raw) {
 
 function readStoredJavdbCookie(params) {
   params = params || {};
-  var hasPassword = !!(String(params.email || "").trim() && String(params.password || "").trim());
-  // 账密模式：只用自动登录产生的会话，忽略手动 Cookie 字段（避免残留干扰）
-  if (hasPassword) {
-    try {
-      var autoSession = Widget.storage.get(JAVDB_COOKIE_STORAGE_KEY);
-      if (autoSession) return normalizePastedCookie(autoSession);
-    } catch (err) {}
-    return "";
-  }
+  // 优先全局参数里粘贴的 Cookie，再读自动登录缓存
   var fromParam = normalizePastedCookie(params.cookie);
   if (fromParam) return fromParam;
   try {
@@ -2061,6 +2053,32 @@ function readStoredJavdbCookie(params) {
     if (storedParam) return normalizePastedCookie(storedParam);
   } catch (err3) {}
   return "";
+}
+
+/** 收集所有可用 Cookie 候选（去重），用于「先 Cookie 后账密」 */
+function collectJavdbCookieCandidates(params) {
+  params = params || {};
+  var list = [];
+  var seen = {};
+  function add(raw) {
+    var c = normalizePastedCookie(raw);
+    if (!c || !isValidJavdbSessionCookie(c)) return;
+    var key = getCookieValue(c, "_jdb_session") || c;
+    if (seen[key]) return;
+    seen[key] = true;
+    list.push(assembleJavdbLoginCookie(params, c));
+  }
+  add(params.cookie);
+  try {
+    add(Widget.storage.get(JAVDB_COOKIE_STORAGE_KEY));
+  } catch (e1) {}
+  try {
+    add(Widget.storage.get("javdb.global.cookie"));
+  } catch (e2) {}
+  try {
+    add(readAutoSessionCookie());
+  } catch (e3) {}
+  return list;
 }
 
 function saveJavdbCookie(cookie) {
@@ -3202,40 +3220,35 @@ async function ensureJavdbSession(params, options) {
   var password = String(params.password || "").trim();
   var hasPassword = !!(email && password);
 
-  if (hasPassword) {
-    if (!options.forceLogin) {
-      var autoCookie = readAutoSessionCookie();
-      if (isValidJavdbSessionCookie(autoCookie)) {
-        var check = await verifyJavdbSession(params, autoCookie);
-        if (check.ok) {
-          saveJavdbCookie(check.cookie);
-          return check.cookie;
-        }
-        clearJavdbCookie();
+  // 1) 先 Cookie：有则探测是否过期/仍有效
+  if (!options.forceLogin) {
+    var candidates = collectJavdbCookieCandidates(params);
+    for (var i = 0; i < candidates.length; i++) {
+      var check = await verifyJavdbSession(params, candidates[i]);
+      if (check.ok) {
+        saveJavdbCookie(check.cookie);
+        return check.cookie;
       }
-    } else {
-      clearJavdbCookie();
     }
+    // 候选都失效：清自动缓存，避免反复用过期会话
+    if (candidates.length) clearJavdbCookie();
+  } else {
+    clearJavdbCookie();
+  }
+
+  // 2) Cookie 无效/没有 → 再账密登录
+  if (hasPassword) {
     if (JAVDB_LOGIN_INFLIGHT) return JAVDB_LOGIN_INFLIGHT;
     JAVDB_LOGIN_INFLIGHT = loginJavdbWithPassword(params, {
       forceLogin: !!options.forceLogin,
-      ignoreCookie: true,
     }).finally(function () {
       JAVDB_LOGIN_INFLIGHT = null;
     });
     return JAVDB_LOGIN_INFLIGHT;
   }
 
-  var cookie = readStoredJavdbCookie(params);
-  if (isValidJavdbSessionCookie(cookie) && !options.forceLogin) {
-    var check2 = await verifyJavdbSession(params, cookie);
-    if (check2.ok) {
-      saveJavdbCookie(check2.cookie);
-      return check2.cookie;
-    }
-  }
   if (options.allowAnonymous) return "";
-  throw new Error("该内容需要登录：请在全局参数填写账号和密码");
+  throw new Error("该内容需要登录：请在全局参数填写 Cookie，或填写账号和密码");
 }
 
 
@@ -4654,30 +4667,28 @@ async function fetchHtml(url, params) {
   var html = await once();
   if (isLoginRequiredHtml(html)) {
     var hasPassword = !!(String(params.email || "").trim() && String(params.password || "").trim());
-    var manualCookie = normalizePastedCookie(params.cookie) || readStoredJavdbCookie(params);
+    var manualCookie = normalizePastedCookie(params.cookie);
+    var hadCookie = isValidJavdbSessionCookie(manualCookie) || isValidJavdbSessionCookie(readStoredJavdbCookie(params));
+
+    // Cookie 已失效：清缓存后，有账密再登录；仅 Cookie 则直接报错
     clearJavdbCookie();
     if (hasPassword) {
       await ensureJavdbSession(params, { forceLogin: true });
       html = await once();
       if (isLoginRequiredHtml(html)) {
         throw new Error(
-          "该页面需要登录：账密流程已跑完，但自拼登录态仍无法打开内容。" +
-            "请查看是否有验证码错误；或把浏览器登录后的 Cookie 填到全局参数作备用"
+          "该页面需要登录：Cookie 无效且账密登录后仍无法打开。" +
+            "请更新 Cookie，或检查账号密码/验证码识别"
         );
       }
-    } else if (isValidJavdbSessionCookie(manualCookie)) {
-      var wall = describeLoginWall(html, "");
+    } else if (hadCookie || isValidJavdbSessionCookie(manualCookie)) {
       throw new Error(
-        "Cookie 未被接受（" +
-          wall +
-          "）。请改用账号密码登录，或确认站点地址与 Cookie 域名一致后重试"
+        "Cookie 已失效或未被接受（" +
+          describeLoginWall(html, "") +
+          "）。请更新全局参数中的 Cookie，或改填账号密码自动登录"
       );
     } else {
-      await ensureJavdbSession(params, { forceLogin: true });
-      html = await once();
-      if (isLoginRequiredHtml(html)) {
-        throw new Error("该页面需要登录。请在全局参数填写账号和密码");
-      }
+      throw new Error("该页面需要登录。请在全局参数填写 Cookie，或填写账号和密码");
     }
   }
   // 不缓存空列表/登录墙，避免一直「未解析到影片」
