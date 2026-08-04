@@ -1619,9 +1619,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.10.0",
+  version: "2.10.1",
   requiredVersion: "0.0.1",
-  description: "JavDB；登录优先 Cookie（校验有效期），失效后再账密+智谱验证码",
+  description: "JavDB；Cookie 优先且防访客 session 覆盖；失效后再账密+智谱",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -1647,7 +1647,7 @@ WidgetMetadata = {
       name: "cookie",
       title: "Cookie（可选）",
       type: "input",
-      description: "优先使用。填浏览器登录后的 Cookie（含 _jdb_session）；有效则跳过账密，失效后再用账号密码",
+      description: "优先使用。粘贴浏览器 Cookie，至少含 _jdb_session=...（不要只复制值）；有 remember_user_token 一并粘上。勿加引号",
       value: "",
     },
     {
@@ -2140,21 +2140,68 @@ function isAuthenticatedContentHtml(html) {
 
 /**
  * 用需登录页探测会话是否有效。返回 { ok, cookie, html, reason }
- * 会尝试：完整自拼 Cookie / 去掉旧 session 仅带偏好（避免盖掉运行时罐里的新会话）后再吸收。
+ * pasteCookie=true：校验用户粘贴的 Cookie，禁止被响应里的访客 _jdb_session 覆盖。
  */
-async function verifyJavdbSession(params, cookie) {
+async function verifyJavdbSession(params, cookie, options) {
+  options = options || {};
+  var pasteMode = options.preserveSession !== false; // 默认保护已有登录 session
   var base = javdbBase(params);
   var locale = javdbLocale(params);
   var probeUrl = base + "/rankings/top?locale=" + encodeURIComponent(locale);
+  var lastFail = { ok: false, cookie: cookie, html: "", reason: "探测失败" };
 
-  async function probeOnce(cookieHeader) {
-    cookieHeader = assembleJavdbLoginCookie(params, cookieHeader);
-    var res;
-    try {
-      res = await Widget.http.get(probeUrl, {
-        headers: javdbHeaders(params, cookieHeader, { loginUA: true }),
-        allow_redirects: true,
+  function mergePreservingSession(existing, res) {
+    var pairs = collectAnyCookiePairs(res);
+    if (pasteMode && isValidJavdbSessionCookie(existing)) {
+      // 登录墙/跳转常会 Set-Cookie 新的访客 session，绝不能盖掉用户的登录态
+      pairs = pairs.filter(function (p) {
+        return !/^_jdb_session=/i.test(String(p || "")) && !/^remember_user_token=/i.test(String(p || ""));
       });
+    }
+    return assembleJavdbLoginCookie(params, mergeCookieHeader(existing, pairs));
+  }
+
+  async function probeOnce(cookieHeader, useLoginUA) {
+    cookieHeader = assembleJavdbLoginCookie(params, cookieHeader);
+    var res = null;
+    var html = "";
+    var finalUrl = probeUrl;
+
+    // 优先手动跟跳转，整段请求都带同一登录 Cookie，避免运行时罐换成访客 session
+    try {
+      var currentUrl = probeUrl;
+      for (var hop = 0; hop < 5; hop++) {
+        try {
+          res = await Widget.http.get(currentUrl, {
+            headers: javdbHeaders(params, cookieHeader, { loginUA: !!useLoginUA }),
+            allow_redirects: false,
+          });
+        } catch (errRedirect) {
+          res = null;
+        }
+        if (!res) {
+          res = await Widget.http.get(currentUrl, {
+            headers: javdbHeaders(params, cookieHeader, { loginUA: !!useLoginUA }),
+            allow_redirects: true,
+          });
+          html = res && res.data != null ? String(res.data) : "";
+          finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || currentUrl);
+          cookieHeader = mergePreservingSession(cookieHeader, res);
+          break;
+        }
+        cookieHeader = mergePreservingSession(cookieHeader, res);
+        var status = Number((res && res.status) || 0);
+        var loc = responseLocation(res, base);
+        var bodyText = res.data != null ? String(res.data) : "";
+        if (loc && (isHttpRedirectStatus(status) || (status === 0 && bodyText.length < 80))) {
+          currentUrl = loc;
+          finalUrl = loc;
+          continue;
+        }
+        html = bodyText;
+        finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || currentUrl);
+        break;
+      }
     } catch (err) {
       return {
         ok: false,
@@ -2163,49 +2210,58 @@ async function verifyJavdbSession(params, cookie) {
         reason: "探测请求失败: " + String((err && err.message) || err),
       };
     }
-    var merged = assembleJavdbLoginCookie(params, absorbCookies(cookieHeader, res));
-    var html = res && res.data != null ? String(res.data) : "";
-    var finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || probeUrl);
+
     if (isAuthenticatedContentHtml(html)) {
-      return { ok: true, cookie: merged, html: html, reason: "" };
+      return { ok: true, cookie: cookieHeader, html: html, reason: "" };
+    }
+    if (/just a moment|cf-browser-verification|challenge-platform|attention required/i.test(html)) {
+      return { ok: false, cookie: cookieHeader, html: html, reason: "探测被 Cloudflare 拦截" };
     }
     if (isLoginRequiredHtml(html) || /\/login/i.test(finalUrl)) {
-      return { ok: false, cookie: merged, html: html, reason: "探测页仍需登录" };
+      return {
+        ok: false,
+        cookie: cookieHeader,
+        html: html,
+        reason: "站点未接受该 Cookie（需登录页）",
+      };
     }
     return {
       ok: false,
-      cookie: merged,
+      cookie: cookieHeader,
       html: html,
       reason: describeLoginWall(html, finalUrl),
     };
   }
 
   var primary = assembleJavdbLoginCookie(params, cookie);
-  if (isValidJavdbSessionCookie(primary)) {
-    var v1 = await probeOnce(primary);
-    if (v1.ok) return v1;
+  if (!isValidJavdbSessionCookie(primary)) {
+    return { ok: false, cookie: primary, html: "", reason: "Cookie 缺少有效 _jdb_session" };
   }
 
-  // 不带旧 _jdb_session：防止用访客 session 盖掉登录 POST 后运行时罐里的新会话；
-  // 若响应/罐里能抠到新 session，absorb 后即可自拼登录态。
-  var soft = assembleJavdbLoginCookie(
-    params,
-    stripCookieNames(primary, ["_jdb_session", "remember_user_token", "_rucaptcha_session_id"])
-  );
-  var v2 = await probeOnce(soft);
-  if (v2.ok) return v2;
+  // 浏览器复制的 Cookie 多用桌面 UA；再试移动 UA
+  var uaModes = [false, true];
+  var variants = sessionEncodingVariants(primary);
+  if (!variants.length) variants = [primary];
 
-  // 编码变体再试一次（仅当已有 session 值）
-  if (isValidJavdbSessionCookie(primary)) {
-    var variants = sessionEncodingVariants(primary);
-    for (var i = 0; i < variants.length && i < 3; i++) {
-      if (variants[i] === primary) continue;
-      var v3 = await probeOnce(variants[i]);
-      if (v3.ok) return v3;
+  for (var vi = 0; vi < variants.length && vi < 4; vi++) {
+    for (var ui = 0; ui < uaModes.length; ui++) {
+      var hit = await probeOnce(variants[vi], uaModes[ui]);
+      if (hit.ok) return hit;
+      lastFail = hit;
     }
   }
 
-  return v2.reason ? v2 : { ok: false, cookie: primary, html: "", reason: "无有效 _jdb_session" };
+  // 仅账密登录后的特殊场景：允许不带旧 session 试一次（依赖运行时罐）
+  if (options.allowSoftProbe) {
+    var soft = assembleJavdbLoginCookie(
+      params,
+      stripCookieNames(primary, ["_jdb_session", "remember_user_token", "_rucaptcha_session_id"])
+    );
+    var softHit = await probeOnce(soft, true);
+    if (softHit.ok) return softHit;
+  }
+
+  return lastFail;
 }
 
 function pathRequiresLogin(path) {
@@ -3128,7 +3184,10 @@ async function loginJavdbWithPassword(params, options) {
       }
 
       // 用自拼 Cookie 探测；verify 内部还会试「不带旧 session」以免盖住新会话
-      var verified = await verifyJavdbSession(params, jar);
+      var verified = await verifyJavdbSession(params, jar, {
+        preserveSession: true,
+        allowSoftProbe: true,
+      });
       if (verified.ok) {
         var okCookie = assembleJavdbLoginCookie(params, verified.cookie);
         saveJavdbCookie(okCookie);
@@ -3179,7 +3238,10 @@ async function loginJavdbWithPassword(params, options) {
               });
             } catch (eFollow) {}
           }
-          var verified2 = await verifyJavdbSession(params, tryJar);
+          var verified2 = await verifyJavdbSession(params, tryJar, {
+            preserveSession: true,
+            allowSoftProbe: true,
+          });
           if (verified2.ok) {
             var ok2 = assembleJavdbLoginCookie(params, verified2.cookie);
             saveJavdbCookie(ok2);
@@ -3220,18 +3282,29 @@ async function ensureJavdbSession(params, options) {
   var password = String(params.password || "").trim();
   var hasPassword = !!(email && password);
 
-  // 1) 先 Cookie：有则探测是否过期/仍有效
+  // 1) 先 Cookie：有则探测是否仍被站点接受
   if (!options.forceLogin) {
     var candidates = collectJavdbCookieCandidates(params);
+    var lastCookieReason = "";
     for (var i = 0; i < candidates.length; i++) {
-      var check = await verifyJavdbSession(params, candidates[i]);
+      var check = await verifyJavdbSession(params, candidates[i], {
+        preserveSession: true,
+        allowSoftProbe: false,
+      });
       if (check.ok) {
         saveJavdbCookie(check.cookie);
         return check.cookie;
       }
+      lastCookieReason = check.reason || lastCookieReason;
     }
-    // 候选都失效：清自动缓存，避免反复用过期会话
     if (candidates.length) clearJavdbCookie();
+    if (candidates.length && !hasPassword) {
+      throw new Error(
+        "Cookie 未被站点接受" +
+          (lastCookieReason ? "（" + lastCookieReason + "）" : "") +
+          "。请重新从浏览器复制完整 Cookie（建议包含 _jdb_session，有则一并带上 remember_user_token），或改填账号密码"
+      );
+    }
   } else {
     clearJavdbCookie();
   }
