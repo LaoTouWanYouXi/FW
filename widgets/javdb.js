@@ -901,6 +901,7 @@ var JAVDB_MAKER_OPTIONS = [
 /* ========================= Config ========================= */
 
 var JAVDB_DEFAULT_BASE = "https://javdb.com";
+var JAVDB_BROWSE_PROXY = "https://move.laotou.ccwu.cc";
 var JAVDB_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 var JAVDB_MOBILE_UA =
@@ -910,7 +911,7 @@ var SEARCH_PREFIX = "search:";
 var ID_TITLE_SEP = "~";
 var SORT_MAP = { published: "0", score: "1", fav: "2" };
 var COOKIE_PARAM_KEYS = ["cookie", "Cookie", "sessionCookie", "javdbCookie", "javdb_cookie"];
-var GLOBAL_KEYS = ["baseUrl", "locale", "cookie"];
+var GLOBAL_KEYS = ["baseUrl", "locale", "cookie", "userAgent"];
 var HTML_FETCH_CACHE = {};
 var HTML_FETCH_CACHE_TTL_MS = 3 * 60 * 1000;
 
@@ -954,9 +955,10 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "3.0.1",
+  version: "3.2.0",
   requiredVersion: "0.0.1",
-  description: "JavDB 分类浏览（演员/系列/标签/片商）；Cookie 直连（Workers 代理对 javdb 无效）",
+  description:
+    "JavDB 分类浏览；优先 WebView 无感直连（同 jable），失败再云端过验证；Cookie 须配对 UA",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -980,10 +982,18 @@ WidgetMetadata = {
     },
     {
       name: "cookie",
-      title: "Cookie（必填）",
+      title: "Cookie（可选，须配对 UA）",
       type: "input",
       description:
-        "手机浏览器打开 javdb.com 通过验证后，复制整段 Cookie（务必含 cf_clearance；建议同网同设备）。支持 ; 或 & 分隔，勿加引号",
+        "不要只贴 cf_clearance。须从同一浏览器复制【整段 Cookie】，并填写下方完全相同的 User-Agent。只贴 Cookie 不填 UA 会立刻被废（绑定 IP+UA+TLS）。优先可留空，让 WebView 无感直连",
+      value: "",
+    },
+    {
+      name: "userAgent",
+      title: "User-Agent（有 Cookie 时必填）",
+      type: "input",
+      description:
+        "与复制 Cookie 的浏览器 UA 必须逐字相同。iOS Safari 可在「设置→Safari→高级→网站数据」旁用书签脚本，或电脑远程调试复制。缺省时脚本不会用 Cookie 直连，避免废掉 clearance",
       value: "",
     },
   ],
@@ -1328,26 +1338,35 @@ function searchUrl(base, keyword, params) {
   return buildPageUrl(base, path, params);
 }
 
-/* ========================= PageFetcher（Cookie 直连；Workers 代理对 javdb 无效） ========================= */
+/* ========================= PageFetcher =========================
+ * jable「无感」：站点风控弱 + 普通 Widget.http 即可。
+ * javdb：Managed Challenge + cf_clearance 绑定 IP+UA+TLS。
+ *   - 只贴 Cookie、脚本改用默认 UA → 必废
+ *   - App URLSession TLS ≠ Safari → 即便 Cookie+UA 也可能 403
+ * 策略：
+ *   1) WebView 无感直连（不手动塞 Cookie，靠 requiresWebView 会话）
+ *   2) 云端 /browse 真实 Chromium 过验证
+ *   3) Cookie + 用户提供的同源 UA 锁定直连（二者缺一不可）
+ */
 
-function requestHeaders(params, cookie, useMobile) {
+function resolveUserAgent(params, mode) {
+  var custom = String((params && params.userAgent) || "").trim();
+  if (custom) return custom;
+  if (mode === "cookie") return ""; // 有 Cookie 却无 UA：禁止猜 UA
+  return JAVDB_MOBILE_UA; // WebView 无感：贴近手机
+}
+
+function requestHeaders(params, cookie, mode) {
   var base = siteBase(params);
+  var ua = resolveUserAgent(params, mode);
   var headers = {
-    "User-Agent": useMobile ? JAVDB_MOBILE_UA : JAVDB_UA,
+    "User-Agent": ua || JAVDB_MOBILE_UA,
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     Referer: base + "/",
-    "Cache-Control": "no-cache",
-    Pragma: "no-cache",
-    "Upgrade-Insecure-Requests": "1",
   };
-  if (!useMobile) {
-    headers["Sec-Fetch-Dest"] = "document";
-    headers["Sec-Fetch-Mode"] = "navigate";
-    headers["Sec-Fetch-Site"] = "none";
-    headers["Sec-Fetch-User"] = "?1";
-  }
-  if (cookie) headers.Cookie = String(cookie);
+  // 仅在「显式 Cookie 模式」写入 Cookie；WebView 模式交给 App 会话，避免覆盖 jar
+  if (mode === "cookie" && cookie) headers.Cookie = String(cookie);
   return headers;
 }
 
@@ -1366,10 +1385,7 @@ function isUsableListHtml(html) {
   var text = String(html || "");
   if (!text || text.length < 800) return false;
   if (isChallengeHtml(text)) return false;
-  return (
-    /movie-list|video-title/i.test(text) ||
-    /href=["']\/v\/[A-Za-z0-9]+["']/i.test(text)
-  );
+  return /movie-list|video-title/i.test(text) || /href=["']\/v\/[A-Za-z0-9]+["']/i.test(text);
 }
 
 function isForbiddenError(err) {
@@ -1397,6 +1413,30 @@ function writeHtmlCache(url, html) {
   } catch (e) {}
 }
 
+function getHeaderCI(res, name) {
+  if (!res || !res.headers) return "";
+  var headers = res.headers;
+  var want = String(name || "").toLowerCase();
+  if (typeof headers.get === "function") {
+    try {
+      return String(headers.get(name) || headers.get(want) || "");
+    } catch (e) {}
+  }
+  for (var key in headers) {
+    if (!Object.prototype.hasOwnProperty.call(headers, key)) continue;
+    if (String(key).toLowerCase() === want) {
+      var val = headers[key];
+      return Array.isArray(val) ? String(val[0] || "") : String(val || "");
+    }
+  }
+  return "";
+}
+
+function browseProxyBase(params) {
+  var custom = String((params && params.htmlProxyWorker) || readStore("javdb.global.htmlProxyWorker") || "").trim();
+  return (custom || JAVDB_BROWSE_PROXY).replace(/\/+$/, "");
+}
+
 function cookieHintMessage(params, detail) {
   var diag = "";
   try {
@@ -1404,69 +1444,106 @@ function cookieHintMessage(params, detail) {
   } catch (e) {
     diag = "Cookie诊断失败";
   }
+  var ua = String((params && params.userAgent) || "").trim();
   return (
-    "JavDB 被 Cloudflare/风控拦截（" +
+    "JavDB 无法像 jable 那样纯 HTTP 无感过验证（CF 校验 TLS 指纹）。" +
+    "当前：" +
     diag +
+    ", UA=" +
+    (ua ? "已填" : "未填") +
     (detail ? "；" + detail : "") +
-    "）。请用【与 App 同一网络的手机浏览器】打开站点地址完成验证，复制整段 Cookie（必须含 cf_clearance）到全局参数后重试。注意：电脑 Cookie 通常不能给手机用；Workers 代理对 javdb 无效请勿依赖。"
+    "。建议：①留空 Cookie，依赖 WebView/云端过验证；②若手贴 Cookie，必须同时粘贴同源 User-Agent（只贴 cf_clearance 无效）。"
   );
 }
 
-/**
- * 直连拉页。Alamofire 遇 403 会直接抛 unacceptable，需 Cookie(cf_clearance) 同出口。
- */
-async function fetchViaDirect(url, params, cookie) {
-  var attempts = [
-    { mobile: true, label: "mobile" },
-    { mobile: false, label: "desktop" },
-  ];
-  // 有 cf_clearance 时优先移动 UA（与手机浏览器更接近）
-  if (!getCookieValue(cookie, "cf_clearance")) {
-    attempts = [
-      { mobile: false, label: "desktop" },
-      { mobile: true, label: "mobile" },
-    ];
-  }
-  var lastErr = null;
-  for (var i = 0; i < attempts.length; i++) {
-    try {
-      var res = await Widget.http.get(url, {
-        headers: requestHeaders(params, cookie, attempts[i].mobile),
-        allow_redirects: true,
-        timeout: 30000,
-      });
-      if (!res || res.data == null) {
-        lastErr = new Error("空响应");
-        continue;
-      }
-      var status = Number(res.status || res.statusCode || 0);
-      var body = typeof res.data === "string" ? res.data : String(res.data);
-      if (status === 403 || isForbiddenError({ message: "HTTP " + status })) {
-        lastErr = new Error("HTTP 403");
-        continue;
-      }
-      if (status >= 400 && !body) {
-        lastErr = new Error("HTTP " + status);
-        continue;
-      }
-      if (isUsableListHtml(body) || (!isChallengeHtml(body) && body.length > 2000)) {
-        return body;
-      }
-      lastErr = new Error(isChallengeHtml(body) ? "仍遇CF挑战" : "正文不可用");
-    } catch (err) {
-      lastErr = err;
-      if (!isForbiddenError(err)) {
-        // 非 403 网络错误也继续试另一种 UA
-        continue;
-      }
-    }
-  }
-  throw lastErr || new Error("直连失败");
+function acceptHtmlBody(body) {
+  if (isUsableListHtml(body)) return true;
+  if (!isChallengeHtml(body) && body && body.length > 2000) return true;
+  return false;
 }
 
 /**
- * 拉取策略（v3.0.1）：
- * 仅 Cookie 直连。move.laotou /browse|/html 对 javdb 会因 Workers 出口被封返回 403/502，已移除。
+ * 1) WebView 无感：不塞 Cookie，贴近 jable 的裸请求。
+ */
+async function fetchViaWebViewNative(url, params) {
+  var res = await Widget.http.get(url, {
+    headers: requestHeaders(params, "", "webview"),
+    allow_redirects: true,
+    timeout: 35000,
+  });
+  if (!res || res.data == null) throw new Error("空响应");
+  var status = Number(res.status || res.statusCode || 0);
+  var body = typeof res.data === "string" ? res.data : String(res.data);
+  if (status === 403) throw new Error("HTTP 403");
+  if (status >= 400 && !body) throw new Error("HTTP " + status);
+  if (acceptHtmlBody(body)) return body;
+  throw new Error(isChallengeHtml(body) ? "WebView仍遇CF" : "正文不可用");
+}
+
+/**
+ * 2) 云端 Chromium 过 CF。
+ */
+async function fetchViaBrowse(url, params, cookie) {
+  var base = browseProxyBase(params);
+  var proxyUrl =
+    base +
+    "/browse?url=" +
+    encodeURIComponent(String(url || "")) +
+    (cookie ? "&cookie=" + encodeURIComponent(String(cookie)) : "");
+  var res = await Widget.http.get(proxyUrl, {
+    headers: { Accept: "text/html,application/json" },
+    allow_redirects: true,
+    timeout: 100000,
+  });
+  if (!res || res.data == null) throw new Error("browse 空响应");
+  var status = Number(res.status || res.statusCode || 0);
+  var body = typeof res.data === "string" ? res.data : String(res.data);
+  if (/^\s*\{/.test(body) && /"error"\s*:/.test(body)) {
+    var msg = body;
+    try {
+      var j = JSON.parse(body);
+      msg = (j && (j.message || j.error)) || msg;
+    } catch (e) {}
+    throw new Error(String(msg).slice(0, 160));
+  }
+  if (status >= 400) throw new Error("browse HTTP " + status);
+  if (isChallengeHtml(body) && !isUsableListHtml(body)) throw new Error("browse 仍遇 CF");
+  var jar = getHeaderCI(res, "X-Proxy-Cookie") || getHeaderCI(res, "x-proxy-cookie");
+  if (jar && getCookieValue(jar, "cf_clearance")) {
+    var merged = assembleCookie(params, jar);
+    params.cookie = merged;
+    writeStore("javdb.global.cookie", merged);
+    // browse 出口 UA 固定为桌面 Chrome；仅当用户未手填 UA 时写入供后续直连
+    if (!String(params.userAgent || "").trim()) {
+      params.userAgent = JAVDB_UA;
+      writeStore("javdb.global.userAgent", JAVDB_UA);
+    }
+  }
+  return body;
+}
+
+/**
+ * 3) Cookie 直连：必须用户提供同源 UA，绝不擅自换 UA。
+ */
+async function fetchViaCookieLocked(url, params, cookie) {
+  var ua = String(params.userAgent || "").trim();
+  if (!getCookieValue(cookie, "cf_clearance")) throw new Error("无cf_clearance");
+  if (!ua) throw new Error("有Cookie但未填同源UA（会废掉clearance）");
+  var res = await Widget.http.get(url, {
+    headers: requestHeaders(params, cookie, "cookie"),
+    allow_redirects: true,
+    timeout: 30000,
+  });
+  if (!res || res.data == null) throw new Error("空响应");
+  var status = Number(res.status || res.statusCode || 0);
+  var body = typeof res.data === "string" ? res.data : String(res.data);
+  if (status === 403 || (status >= 400 && !body)) throw new Error("HTTP " + (status || 403));
+  if (acceptHtmlBody(body)) return body;
+  throw new Error(isChallengeHtml(body) ? "仍遇CF挑战" : "正文不可用");
+}
+
+/**
+ * 拉取策略（v3.2）：WebView 无感 → 云端 browse → Cookie+UA
  */
 async function fetchPageHtml(url, params) {
   params = syncParams(params || {});
@@ -1476,21 +1553,42 @@ async function fetchPageHtml(url, params) {
   var cookie = assembleCookie(params, params.cookie);
   params.cookie = cookie;
   if (cookie) writeStore("javdb.global.cookie", cookie);
+  if (params.userAgent) writeStore("javdb.global.userAgent", params.userAgent);
 
+  var errors = [];
+
+  // 1) WebView 无感（不手动塞 Cookie）
   try {
-    var html = await fetchViaDirect(url, params, cookie);
-    if (isUsableListHtml(html) || (!isChallengeHtml(html) && html && html.length > 2000)) {
-      if (isUsableListHtml(html)) writeHtmlCache(url, html);
-      return html;
-    }
-    throw new Error(isChallengeHtml(html) ? "仍遇CF挑战" : "正文不可用");
-  } catch (err) {
-    var msg = String((err && err.message) || err || "");
-    if (isForbiddenError(err) || /CF挑战|正文不可用|空响应|HTTP 403/i.test(msg)) {
-      throw new Error(cookieHintMessage(params, msg.slice(0, 60)));
-    }
-    throw err;
+    var nativeHtml = await fetchViaWebViewNative(url, params);
+    if (isUsableListHtml(nativeHtml)) writeHtmlCache(url, nativeHtml);
+    return nativeHtml;
+  } catch (nativeErr) {
+    errors.push("webview:" + String((nativeErr && nativeErr.message) || nativeErr).slice(0, 70));
   }
+
+  // 2) 云端过验证
+  try {
+    var browsed = await fetchViaBrowse(url, params, cookie);
+    if (acceptHtmlBody(browsed)) {
+      if (isUsableListHtml(browsed)) writeHtmlCache(url, browsed);
+      return browsed;
+    }
+    errors.push("browse:正文不可用");
+  } catch (browseErr) {
+    errors.push("browse:" + String((browseErr && browseErr.message) || browseErr).slice(0, 80));
+  }
+
+  // 3) Cookie + 同源 UA
+  cookie = assembleCookie(params, params.cookie);
+  try {
+    var direct = await fetchViaCookieLocked(url, params, cookie);
+    if (isUsableListHtml(direct)) writeHtmlCache(url, direct);
+    return direct;
+  } catch (directErr) {
+    errors.push("cookie:" + String((directErr && directErr.message) || directErr).slice(0, 80));
+  }
+
+  throw new Error(cookieHintMessage(params, errors.join(" | ")));
 }
 
 /* ========================= CardScanner（列表） ========================= */
