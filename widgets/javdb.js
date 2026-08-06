@@ -1619,9 +1619,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.10.2",
+  version: "2.10.3",
   requiredVersion: "0.0.1",
-  description: "JavDB；修复登录墙误判；Cookie 优先校验后再账密",
+  description: "JavDB；捕获站点 403 并回退 UA；Cookie 优先后再账密",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -1841,11 +1841,22 @@ function javdbLocale(params) {
 
 function javdbHeaders(params, cookieOverride, options) {
   options = options || {};
+  var base = javdbBase(params);
   var headers = {
     "User-Agent": options.loginUA ? JAVDB_LOGIN_UA : JAVDB_UA,
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    Referer: options.referer || base + "/",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+    "Upgrade-Insecure-Requests": "1",
   };
+  if (!options.loginUA) {
+    headers["Sec-Fetch-Dest"] = "document";
+    headers["Sec-Fetch-Mode"] = "navigate";
+    headers["Sec-Fetch-Site"] = options.referer ? "same-origin" : "none";
+    headers["Sec-Fetch-User"] = "?1";
+  }
   var raw =
     cookieOverride !== undefined ? cookieOverride : readStoredJavdbCookie(params || {});
   // 自己拼接 Cookie，不依赖 Forward 自动 Cookie 罐
@@ -1853,6 +1864,50 @@ function javdbHeaders(params, cookieOverride, options) {
     keepCaptcha: !!options.keepCaptcha,
   });
   return headers;
+}
+
+function isForbiddenHttpError(err) {
+  var msg = String((err && err.message) || err || "");
+  return /unacceptable:\s*403|\b403\b|banned your access|Access Denied|站点拦截当前网络/i.test(msg);
+}
+
+function javdbForbiddenMessage() {
+  return (
+    "JavDB 返回 403（当前网络/IP 被站点拦截）。请切换网络或代理后重试；" +
+    "若短时间登录/请求过多，可能需等待数日解封。也可在浏览器打开 javdb.com 确认能否访问"
+  );
+}
+
+/**
+ * 对 javdb.com 的 GET：Forward 遇非 2xx 会抛 unacceptable。
+ * 默认 403 时自动换桌面/移动 UA 各试一次；options.singleUa 时只试指定 UA。
+ */
+async function javdbHttpGet(url, params, cookie, options) {
+  options = options || {};
+  var preferLoginUa = !!options.loginUA;
+  var uaModes = options.singleUa
+    ? [preferLoginUa]
+    : options.loginUA === false || options.loginUA === true
+      ? [preferLoginUa, !preferLoginUa]
+      : [false, true];
+  var lastErr = null;
+  for (var i = 0; i < uaModes.length; i++) {
+    try {
+      return await Widget.http.get(url, {
+        headers: javdbHeaders(params, cookie, {
+          loginUA: uaModes[i],
+          referer: options.referer,
+          keepCaptcha: !!options.keepCaptcha,
+        }),
+        allow_redirects: options.allow_redirects !== false,
+        timeout: options.timeout,
+      });
+    } catch (err) {
+      lastErr = err;
+      if (!isForbiddenHttpError(err)) throw err;
+    }
+  }
+  throw new Error(javdbForbiddenMessage());
 }
 
 var JAVDB_COOKIE_STORAGE_KEY = "javdb.global.sessionCookie";
@@ -2189,18 +2244,39 @@ async function verifyJavdbSession(params, cookie, options) {
       var currentUrl = probeUrl;
       for (var hop = 0; hop < 5; hop++) {
         try {
-          res = await Widget.http.get(currentUrl, {
-            headers: javdbHeaders(params, cookieHeader, { loginUA: !!useLoginUA }),
+          res = await javdbHttpGet(currentUrl, params, cookieHeader, {
+            loginUA: !!useLoginUA,
             allow_redirects: false,
+            singleUa: true,
           });
         } catch (errRedirect) {
+          if (isForbiddenHttpError(errRedirect) || /403/.test(String((errRedirect && errRedirect.message) || ""))) {
+            return {
+              ok: false,
+              cookie: cookieHeader,
+              html: "",
+              reason: "HTTP 403",
+            };
+          }
           res = null;
         }
-        if (!res) {
-          res = await Widget.http.get(currentUrl, {
-            headers: javdbHeaders(params, cookieHeader, { loginUA: !!useLoginUA }),
-            allow_redirects: true,
-          });
+        if (!res || res.data == null) {
+          try {
+            res = await javdbHttpGet(currentUrl, params, cookieHeader, {
+              loginUA: !!useLoginUA,
+              allow_redirects: true,
+              singleUa: true,
+            });
+          } catch (errFollow) {
+            return {
+              ok: false,
+              cookie: cookieHeader,
+              html: "",
+              reason: isForbiddenHttpError(errFollow) || /403/.test(String((errFollow && errFollow.message) || ""))
+                ? "HTTP 403"
+                : "探测请求失败: " + String((errFollow && errFollow.message) || errFollow),
+            };
+          }
           html = res && res.data != null ? String(res.data) : "";
           finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || currentUrl);
           cookieHeader = mergePreservingSession(cookieHeader, res);
@@ -2224,7 +2300,9 @@ async function verifyJavdbSession(params, cookie, options) {
         ok: false,
         cookie: cookieHeader,
         html: "",
-        reason: "探测请求失败: " + String((err && err.message) || err),
+        reason: isForbiddenHttpError(err) || /403/.test(String((err && err.message) || ""))
+          ? "HTTP 403"
+          : "探测请求失败: " + String((err && err.message) || err),
       };
     }
 
@@ -3109,9 +3187,11 @@ async function loginJavdbWithPassword(params, options) {
     try {
       // 自维护 jar：每一步 absorb 后手动拼接
       var jar = assembleJavdbLoginCookie(params, buildCleanLoginSeed(params), { keepCaptcha: true });
-      var loginPage = await Widget.http.get(loginUrl, {
-        headers: javdbHeaders(params, jar, { loginUA: true }),
+      var loginPage = await javdbHttpGet(loginUrl, params, jar, {
+        loginUA: true,
         allow_redirects: true,
+        keepCaptcha: true,
+        referer: base + "/",
       });
       var html = loginPage && loginPage.data ? String(loginPage.data) : "";
       if (!html) throw new Error("无法打开登录页");
@@ -3165,9 +3245,11 @@ async function loginJavdbWithPassword(params, options) {
       // 若仍停在 3xx，手动跟一次；跟随时带上当前 jar（已 absorb 的最新值）
       if (loc && (status === 0 || isHttpRedirectStatus(status))) {
         try {
-          var follow = await Widget.http.get(loc, {
-            headers: javdbHeaders(params, jar, { loginUA: true }),
+          var follow = await javdbHttpGet(loc, params, jar, {
+            loginUA: true,
             allow_redirects: true,
+            keepCaptcha: true,
+            referer: base + "/login",
           });
           jar = assembleJavdbLoginCookie(params, absorbCookies(jar, follow), { keepCaptcha: true });
           body = follow && follow.data != null ? String(follow.data) : body;
@@ -3251,9 +3333,11 @@ async function loginJavdbWithPassword(params, options) {
           );
           if (recovered && recovered.url) {
             try {
-              var after = await Widget.http.get(recovered.url, {
-                headers: javdbHeaders(params, tryJar, { loginUA: true }),
+              var after = await javdbHttpGet(recovered.url, params, tryJar, {
+                loginUA: true,
                 allow_redirects: true,
+                keepCaptcha: true,
+                referer: base + "/login",
               });
               tryJar = assembleJavdbLoginCookie(params, absorbCookies(tryJar, after), {
                 keepCaptcha: true,
@@ -3276,7 +3360,7 @@ async function loginJavdbWithPassword(params, options) {
       }
       clearJavdbCookie();
       if (
-        /智谱|图片输入格式|解析错误|未配置智谱|API Key|转码失败|邮箱或密码错误|不支持 POST|无法打开登录页|Cloudflare 拦截|_rucaptcha_session_id|OCR 失败|OCR 请求失败/i.test(
+        /智谱|图片输入格式|解析错误|未配置智谱|API Key|转码失败|邮箱或密码错误|不支持 POST|无法打开登录页|Cloudflare 拦截|_rucaptcha_session_id|OCR 失败|OCR 请求失败|\b403\b|站点拦截/i.test(
           lastErr
         )
       ) {
@@ -3320,6 +3404,9 @@ async function ensureJavdbSession(params, options) {
       lastCookieReason = check.reason || lastCookieReason;
     }
     if (candidates.length) clearJavdbCookie();
+    if (/HTTP 403|站点拦截|unacceptable:\s*403/i.test(lastCookieReason)) {
+      throw new Error(javdbForbiddenMessage());
+    }
     if (candidates.length && !hasPassword) {
       throw new Error(
         "Cookie 未被站点接受" +
@@ -4681,6 +4768,23 @@ async function fetchHtml(url, params) {
 
   async function onceWithCookie(cookie) {
     cookie = normalizePastedCookie(cookie);
+    var uaModes = [false, true];
+    var lastErr = null;
+
+    for (var ui = 0; ui < uaModes.length; ui++) {
+      try {
+        return await fetchHtmlOnce(cookie, uaModes[ui]);
+      } catch (err) {
+        lastErr = err;
+        if (!isForbiddenHttpError(err)) throw err;
+      }
+    }
+    throw lastErr && /站点拦截|JavDB 返回 403/i.test(String((lastErr && lastErr.message) || ""))
+      ? lastErr
+      : new Error(javdbForbiddenMessage());
+  }
+
+  async function fetchHtmlOnce(cookie, useLoginUA) {
     var currentUrl = url;
     var res = null;
     var html = "";
@@ -4690,22 +4794,35 @@ async function fetchHtml(url, params) {
       // 手动跟随跳转，避免运行时 Cookie 罐用匿名 _jdb_session 覆盖用户会话
       try {
         res = await Widget.http.get(currentUrl, {
-          headers: javdbHeaders(params, cookie),
+          headers: javdbHeaders(params, cookie, {
+            loginUA: !!useLoginUA,
+            referer: javdbBase(params) + "/",
+          }),
           allow_redirects: false,
         });
       } catch (errRedirect) {
+        if (isForbiddenHttpError(errRedirect)) throw errRedirect;
         res = null;
       }
-      if (!res || !res.data) {
-        res = await Widget.http.get(currentUrl, {
-          headers: javdbHeaders(params, cookie),
-          allow_redirects: true,
-        });
+      if (!res || res.data == null || res.data === "") {
+        try {
+          res = await Widget.http.get(currentUrl, {
+            headers: javdbHeaders(params, cookie, {
+              loginUA: !!useLoginUA,
+              referer: javdbBase(params) + "/",
+            }),
+            allow_redirects: true,
+          });
+        } catch (errFollow) {
+          if (isForbiddenHttpError(errFollow)) throw errFollow;
+          throw new Error("请求失败: " + String((errFollow && errFollow.message) || errFollow));
+        }
         html = res && res.data ? String(res.data) : "";
         finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || currentUrl);
         break;
       }
       if (res.status && Number(res.status) >= 400) {
+        if (Number(res.status) === 403) throw new Error(javdbForbiddenMessage());
         throw new Error("HTTP " + res.status + " " + currentUrl);
       }
 
