@@ -67,12 +67,6 @@ function describeCookiePresence(cookie) {
   );
 }
 
-function isCfOrForbiddenProbeReason(reason) {
-  return /HTTP 403|站点拦截|Cloudflare|unacceptable:\s*403|探测被 Cloudflare|banned your access/i.test(
-    String(reason || "")
-  );
-}
-
 function syncGlobalParams(params) {
   params = params || {};
   // 先把别名 Cookie 归一到 params.cookie，避免只写了 Cookie/嵌套字段时丢参
@@ -1682,9 +1676,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.11.2",
+  version: "2.13.0",
   requiredVersion: "0.0.1",
-  description: "JavDB；兼容 & 分隔 Cookie；需含 cf_clearance；WebView 模式",
+  description: "JavDB；代理优先拉页+直连回退；Cookie 齐全不再误提示粘贴",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -1944,21 +1938,8 @@ function isForbiddenHttpError(err) {
   return /unacceptable:\s*403|\b403\b|banned your access|Access Denied|站点拦截当前网络/i.test(msg);
 }
 
-function javdbForbiddenMessage(params) {
-  var diag = "";
-  try {
-    diag = "（" + describeCookiePresence(pickRawCookieFromParams(params || {})) + "）";
-  } catch (e) {
-    diag = "";
-  }
-  return (
-    "JavDB 被 Cloudflare 人机验证拦截（浏览器能开、App 纯 HTTP 不能过 JS 挑战）" +
-    diag +
-    "。请用同一网络的浏览器打开 javdb.com 完成验证后，从 DevTools→Application→Cookies 复制整段 Cookie（必须含 cf_clearance+_jdb_session），粘贴到模块全局参数「Cookie」后重新打开"
-  );
-}
-
 var JAVDB_HTML_PROXY_DEFAULT = "https://move.laotou.ccwu.cc";
+var JAVDB_HTML_PROXY_TIMEOUT_MS = 25000;
 
 function getJavdbHtmlProxyBase(params) {
   var custom = "";
@@ -1968,6 +1949,15 @@ function getJavdbHtmlProxyBase(params) {
     ).trim();
   } catch (e) {}
   return String(custom || JAVDB_HTML_PROXY_DEFAULT).replace(/\/+$/, "");
+}
+
+function getJavdbHtmlProxyHeaders() {
+  var headers = { Accept: "text/html,application/json" };
+  try {
+    var key = Widget.storage.get("javdb.global.dmmProbeApiKey");
+    if (key) headers["X-Probe-Key"] = String(key);
+  } catch (e) {}
+  return headers;
 }
 
 function cookieHasCfClearance(cookie) {
@@ -1986,72 +1976,153 @@ function isCloudflareChallengeHtml(html) {
   return false;
 }
 
-function shouldUseBrowserProxy(params) {
-  var flag = String((params && params.useBrowserProxy) || "").trim().toLowerCase();
-  if (flag === "1" || flag === "true" || flag === "yes" || flag === "on") return true;
+function isProxyErrorPayload(body) {
+  var text = String(body || "").trim();
+  if (!text || text.charAt(0) !== "{") return false;
   try {
-    var stored = String(Widget.storage.get("javdb.global.useBrowserProxy") || "").trim().toLowerCase();
-    return stored === "1" || stored === "true" || stored === "yes" || stored === "on";
+    var data = JSON.parse(text);
+    return !!(data && (data.error || data.message));
   } catch (e) {
     return false;
   }
 }
 
+/** 页面是否已可用于解析列表/详情（非 CF、非登录墙） */
+function isUsableJavdbHtml(html) {
+  var text = String(html || "");
+  if (!text || text.length < 200) return false;
+  if (isProxyErrorPayload(text) || isCloudflareChallengeHtml(text)) return false;
+  if (isLoginRequiredHtml(text)) return false;
+  return (
+    /movie-list|video-title|grid-item|class=["'][^"']*panel-block|\/v\/[A-Za-z0-9]+/i.test(text) &&
+    /<html[\s>]|<body[\s>]/i.test(text)
+  );
+}
+
 /**
- * 可选：走 Cloudflare Browser Rendering（/browse）。
- * 注意：CF 浏览器农场 IP 对 javdb 常仍过不了挑战，默认关闭，避免空等 60s。
+ * 失败提示：Cookie 字段已齐全时绝不再要求「重新粘贴」。
+ * 根因多半是出口 IP / TLS 与签发 cf_clearance 的浏览器不一致。
  */
-async function fetchHtmlViaBrowserProxy(url, params, cookie) {
+function javdbFetchFailMessage(params, stage, detail) {
+  var cookie = "";
+  try {
+    cookie = assembleJavdbLoginCookie(params, readStoredJavdbCookie(params || {}));
+  } catch (e) {
+    cookie = normalizePastedCookie(pickRawCookieFromParams(params || {}));
+  }
+  var hasSession = isValidJavdbSessionCookie(cookie);
+  var hasCf = cookieHasCfClearance(cookie);
+  var hint = describeCookiePresence(cookie);
+  var extra = detail ? "；" + String(detail).slice(0, 160) : "";
+  if (hasSession && hasCf) {
+    return (
+      "JavDB 拉取失败（" +
+      stage +
+      "，" +
+      hint +
+      "）" +
+      extra +
+      "。Cookie 已齐全，无需再粘贴；请让 Forward 与浏览器走同一出口 IP/代理后重试（cf_clearance 绑定签发时的网络）"
+    );
+  }
+  if (hasSession && !hasCf) {
+    return (
+      "JavDB 拉取失败（" +
+      stage +
+      "，" +
+      hint +
+      "）" +
+      extra +
+      "。已有 _jdb_session 但缺少 cf_clearance：请从浏览器复制完整 Cookie 一次即可"
+    );
+  }
+  return (
+    "JavDB 拉取失败（" +
+    stage +
+    "，" +
+    hint +
+    "）" +
+    extra +
+    "。请在全局参数填写完整 Cookie，或填写账号密码"
+  );
+}
+
+/**
+ * 代理优先（与 missav 同 Worker）：GET /html?url=&cookie=
+ */
+async function fetchJavdbHtmlViaProxy(url, params, cookie) {
   var base = getJavdbHtmlProxyBase(params);
   if (!base) throw new Error("未配置 HTML 代理");
   var proxyUrl =
     base +
-    "/browse?url=" +
+    "/html?url=" +
     encodeURIComponent(String(url || "")) +
     (cookie ? "&cookie=" + encodeURIComponent(String(cookie)) : "");
-  var headers = { Accept: "text/html,application/json" };
-  try {
-    var key = Widget.storage.get("javdb.global.dmmProbeApiKey");
-    if (key) headers["X-Probe-Key"] = String(key);
-  } catch (e) {}
   var res = await Widget.http.get(proxyUrl, {
-    headers: headers,
+    headers: getJavdbHtmlProxyHeaders(),
     allow_redirects: true,
-    timeout: 60000,
+    timeout: JAVDB_HTML_PROXY_TIMEOUT_MS,
   });
-  if (!res || res.data == null) throw new Error("浏览器代理空响应");
+  if (!res || res.data == null) throw new Error("代理空响应");
   var status = Number(res.status || res.statusCode || 0);
   var html = typeof res.data === "string" ? res.data : String(res.data);
-  if (status >= 400 || /^[\s]*\{/.test(html)) {
+  if (isProxyErrorPayload(html)) {
     var errMsg = html;
     try {
       var j = JSON.parse(html);
       errMsg = (j && (j.message || j.error)) || errMsg;
     } catch (e2) {}
-    throw new Error("浏览器代理失败: " + String(errMsg).slice(0, 180));
+    throw new Error(String(errMsg).slice(0, 180));
   }
-  if (isCloudflareChallengeHtml(html) || !/movie-list|video-title|grid-item|javdb/i.test(html)) {
-    throw new Error("浏览器代理仍未通过 Cloudflare 挑战");
-  }
-  var proxiedCookie = "";
+  if (status >= 400) throw new Error("代理 HTTP " + status);
+  if (isCloudflareChallengeHtml(html)) throw new Error("代理仍遇 Cloudflare 挑战");
+  return html;
+}
+
+/** 直连源站：单次 GET，跟随重定向 */
+async function fetchJavdbHtmlDirect(url, params, cookie) {
+  cookie = assembleJavdbLoginCookie(params, cookie);
+  var res;
   try {
-    proxiedCookie =
-      getHeaderValue(res, "x-proxy-cookie") ||
-      getHeaderValue(res, "X-Proxy-Cookie") ||
-      "";
-  } catch (e3) {}
-  if (proxiedCookie) {
-    cookie = assembleJavdbLoginCookie(params, mergeCookieHeader(cookie, proxiedCookie.split("; ")));
-    if (getCookieValue(cookie, "cf_clearance") || isValidJavdbSessionCookie(cookie)) {
-      saveJavdbCookie(cookie);
+    res = await Widget.http.get(url, {
+      headers: javdbHeaders(params, cookie, {
+        loginUA: true,
+        referer: javdbBase(params) + "/",
+      }),
+      allow_redirects: true,
+      timeout: 30000,
+    });
+  } catch (err) {
+    if (isForbiddenHttpError(err)) {
+      var err2 = new Error("HTTP 403");
+      err2.code = 403;
+      throw err2;
     }
+    throw new Error("请求失败: " + String((err && err.message) || err));
   }
-  return { html: html, cookie: cookie, finalUrl: url };
+  var html = res && res.data != null ? String(res.data) : "";
+  if (!html) throw new Error("空响应");
+  var status = Number((res && res.status) || 0);
+  if (status === 403) {
+    var e403 = new Error("HTTP 403");
+    e403.code = 403;
+    throw e403;
+  }
+  if (status >= 400) throw new Error("HTTP " + status);
+
+  var pairs = collectAnyCookiePairs(res);
+  if (isValidJavdbSessionCookie(cookie)) {
+    pairs = pairs.filter(function (p) {
+      return !/^_jdb_session=/i.test(String(p || ""));
+    });
+  }
+  cookie = mergeCookieHeader(cookie, pairs);
+  if (isValidJavdbSessionCookie(cookie)) saveJavdbCookie(cookie);
+  return { html: html, cookie: cookie };
 }
 
 /**
- * 对 javdb.com 的 GET：Forward 遇非 2xx 会抛 unacceptable。
- * 默认 403 时自动换桌面/移动 UA 各试一次；options.singleUa 时只试指定 UA。
+ * 登录流程用的轻量 GET：403 时换 UA 再试；失败抛 HTTP 403（不弹粘贴文案）。
  */
 async function javdbHttpGet(url, params, cookie, options) {
   options = options || {};
@@ -2078,7 +2149,7 @@ async function javdbHttpGet(url, params, cookie, options) {
       if (!isForbiddenHttpError(err)) throw err;
     }
   }
-  throw new Error(javdbForbiddenMessage(params));
+  throw new Error("HTTP 403");
 }
 var JAVDB_LOGIN_INFLIGHT = null;
 /** Cloudflare Worker：服务端拉验证码并识别后完成登录（走已通的自定义域名） */
@@ -2179,47 +2250,6 @@ function looksLikeBareJdbSessionValue(text) {
   return false;
 }
 
-function rebuildCookieWithSession(cookie, sessionValue) {
-  var parts = String(cookie || "")
-    .split(";")
-    .map(function (p) {
-      return String(p || "").trim();
-    })
-    .filter(function (p) {
-      return p && !/^_jdb_session\s*=/i.test(p);
-    });
-  parts.unshift("_jdb_session=" + String(sessionValue || "").trim());
-  return parts.join("; ");
-}
-
-function sessionEncodingVariants(cookie) {
-  var text = normalizePastedCookie(cookie);
-  var m = text.match(/(?:^|;\s*)_jdb_session=([^;]+)/i);
-  if (!m || !m[1]) return text ? [text] : [];
-  var val = String(m[1] || "").trim().replace(/^["']+|["']+$/g, "");
-  var out = [];
-  var seen = {};
-  function add(v) {
-    if (!v) return;
-    var c = rebuildCookieWithSession(text, v);
-    if (seen[c]) return;
-    seen[c] = true;
-    out.push(c);
-  }
-  add(val);
-  if (/%[0-9A-Fa-f]{2}/.test(val)) {
-    try {
-      add(decodeURIComponent(val));
-    } catch (err) {}
-  }
-  if (/[+\/=]/.test(val) && !/%[0-9A-Fa-f]{2}/.test(val)) {
-    try {
-      add(encodeURIComponent(val));
-    } catch (err2) {}
-  }
-  return out;
-}
-
 function normalizePastedCookie(raw) {
   var text = String(raw || "").trim();
   if (!text) return "";
@@ -2286,33 +2316,6 @@ function readStoredJavdbCookie(params) {
     if (storedParam) return normalizePastedCookie(storedParam);
   } catch (err3) {}
   return "";
-}
-
-/** 收集所有可用 Cookie 候选（去重），用于「先 Cookie 后账密」 */
-function collectJavdbCookieCandidates(params) {
-  params = params || {};
-  var list = [];
-  var seen = {};
-  function add(raw) {
-    var c = normalizePastedCookie(raw);
-    if (!c || !isValidJavdbSessionCookie(c)) return;
-    var key = getCookieValue(c, "_jdb_session") || c;
-    if (seen[key]) return;
-    seen[key] = true;
-    list.push(assembleJavdbLoginCookie(params, c));
-  }
-  add(params.cookie);
-  add(pickRawCookieFromParams(params));
-  try {
-    add(Widget.storage.get(JAVDB_COOKIE_STORAGE_KEY));
-  } catch (e1) {}
-  try {
-    add(Widget.storage.get("javdb.global.cookie"));
-  } catch (e2) {}
-  try {
-    add(readAutoSessionCookie());
-  } catch (e3) {}
-  return list;
 }
 
 function saveJavdbCookie(cookie) {
@@ -2390,157 +2393,70 @@ function isAuthenticatedContentHtml(html) {
 }
 
 /**
- * 用需登录页探测会话是否有效。返回 { ok, cookie, html, reason }
- * pasteCookie=true：校验用户粘贴的 Cookie，禁止被响应里的访客 _jdb_session 覆盖。
+ * 登录后轻量确认：只请求一次 TOP250。
+ * 成功标准 = 页面本身已是登录内容；不再做编码变体 / UA 矩阵 / CF 假通过。
  */
 async function verifyJavdbSession(params, cookie, options) {
   options = options || {};
-  var pasteMode = options.preserveSession !== false; // 默认保护已有登录 session
   var base = javdbBase(params);
   var locale = javdbLocale(params);
   var probeUrl = base + "/rankings/top?locale=" + encodeURIComponent(locale);
-  var lastFail = { ok: false, cookie: cookie, html: "", reason: "探测失败" };
+  var cookieHeader = assembleJavdbLoginCookie(params, cookie);
 
-  function mergePreservingSession(existing, res) {
-    var pairs = collectAnyCookiePairs(res);
-    if (pasteMode && isValidJavdbSessionCookie(existing)) {
-      // 登录墙/跳转常会 Set-Cookie 新的访客 session，绝不能盖掉用户的登录态
-      pairs = pairs.filter(function (p) {
-        return !/^_jdb_session=/i.test(String(p || "")) && !/^remember_user_token=/i.test(String(p || ""));
-      });
-    }
-    return assembleJavdbLoginCookie(params, mergeCookieHeader(existing, pairs));
+  if (!isValidJavdbSessionCookie(cookieHeader)) {
+    return { ok: false, cookie: cookieHeader, html: "", reason: "Cookie 缺少有效 _jdb_session" };
   }
 
-  async function probeOnce(cookieHeader, useLoginUA) {
-    cookieHeader = assembleJavdbLoginCookie(params, cookieHeader);
-    var res = null;
-    var html = "";
-    var finalUrl = probeUrl;
-
-    // 优先手动跟跳转，整段请求都带同一登录 Cookie，避免运行时罐换成访客 session
+  async function once(useCookie, useLoginUA) {
+    var jar = assembleJavdbLoginCookie(params, useCookie);
+    var res;
     try {
-      var currentUrl = probeUrl;
-      for (var hop = 0; hop < 5; hop++) {
-        try {
-          res = await javdbHttpGet(currentUrl, params, cookieHeader, {
-            loginUA: !!useLoginUA,
-            allow_redirects: false,
-            singleUa: true,
-          });
-        } catch (errRedirect) {
-          if (isForbiddenHttpError(errRedirect) || /403/.test(String((errRedirect && errRedirect.message) || ""))) {
-            return {
-              ok: false,
-              cookie: cookieHeader,
-              html: "",
-              reason: "HTTP 403",
-            };
-          }
-          res = null;
-        }
-        if (!res || res.data == null) {
-          try {
-            res = await javdbHttpGet(currentUrl, params, cookieHeader, {
-              loginUA: !!useLoginUA,
-              allow_redirects: true,
-              singleUa: true,
-            });
-          } catch (errFollow) {
-            return {
-              ok: false,
-              cookie: cookieHeader,
-              html: "",
-              reason: isForbiddenHttpError(errFollow) || /403/.test(String((errFollow && errFollow.message) || ""))
-                ? "HTTP 403"
-                : "探测请求失败: " + String((errFollow && errFollow.message) || errFollow),
-            };
-          }
-          html = res && res.data != null ? String(res.data) : "";
-          finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || currentUrl);
-          cookieHeader = mergePreservingSession(cookieHeader, res);
-          break;
-        }
-        cookieHeader = mergePreservingSession(cookieHeader, res);
-        var status = Number((res && res.status) || 0);
-        var loc = responseLocation(res, base);
-        var bodyText = res.data != null ? String(res.data) : "";
-        if (loc && (isHttpRedirectStatus(status) || (status === 0 && bodyText.length < 80))) {
-          currentUrl = loc;
-          finalUrl = loc;
-          continue;
-        }
-        html = bodyText;
-        finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || currentUrl);
-        break;
-      }
+      res = await javdbHttpGet(probeUrl, params, jar, {
+        loginUA: !!useLoginUA,
+        allow_redirects: true,
+        singleUa: true,
+      });
     } catch (err) {
+      var msg = String((err && err.message) || err);
       return {
         ok: false,
-        cookie: cookieHeader,
+        cookie: jar,
         html: "",
-        reason: isForbiddenHttpError(err) || /403/.test(String((err && err.message) || ""))
-          ? "HTTP 403"
-          : "探测请求失败: " + String((err && err.message) || err),
+        reason: isForbiddenHttpError(err) || /403/.test(msg) ? "HTTP 403" : "探测请求失败: " + msg,
       };
     }
+    var html = res && res.data != null ? String(res.data) : "";
+    var finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || probeUrl);
+    var pairs = collectAnyCookiePairs(res).filter(function (p) {
+      return !/^_jdb_session=/i.test(String(p || "")) && !/^remember_user_token=/i.test(String(p || ""));
+    });
+    jar = assembleJavdbLoginCookie(params, mergeCookieHeader(jar, pairs));
 
     if (isAuthenticatedContentHtml(html)) {
-      return { ok: true, cookie: cookieHeader, html: html, reason: "" };
+      return { ok: true, cookie: jar, html: html, reason: "" };
     }
-    if (/just a moment|cf-browser-verification|challenge-platform|attention required/i.test(html)) {
-      return { ok: false, cookie: cookieHeader, html: html, reason: "探测被 Cloudflare 拦截" };
+    if (isCloudflareChallengeHtml(html)) {
+      return { ok: false, cookie: jar, html: html, reason: "探测被 Cloudflare 拦截" };
     }
     if (isLoginRequiredHtml(html) || /\/login/i.test(finalUrl)) {
-      return {
-        ok: false,
-        cookie: cookieHeader,
-        html: html,
-        reason: "站点未接受该 Cookie（需登录页）",
-      };
+      return { ok: false, cookie: jar, html: html, reason: "站点未接受该 Cookie（需登录页）" };
     }
-    return {
-      ok: false,
-      cookie: cookieHeader,
-      html: html,
-      reason: describeLoginWall(html, finalUrl),
-    };
+    return { ok: false, cookie: jar, html: html, reason: describeLoginWall(html, finalUrl) };
   }
 
-  var primary = assembleJavdbLoginCookie(params, cookie);
-  if (!isValidJavdbSessionCookie(primary)) {
-    return { ok: false, cookie: primary, html: "", reason: "Cookie 缺少有效 _jdb_session" };
-  }
+  var hit = await once(cookieHeader, true);
+  if (hit.ok) return hit;
 
-  // 编码变体：已 URL 编码的优先保持原样；解码版仅作备选（避免破坏签名）
-  var uaModes = [false, true];
-  var variants = sessionEncodingVariants(primary);
-  if (!variants.length) variants = [primary];
-  variants = [primary].concat(
-    variants.filter(function (v) {
-      return v !== primary;
-    })
-  );
-
-  for (var vi = 0; vi < variants.length && vi < 4; vi++) {
-    for (var ui = 0; ui < uaModes.length; ui++) {
-      var hit = await probeOnce(variants[vi], uaModes[ui]);
-      if (hit.ok) return hit;
-      lastFail = hit;
-    }
-  }
-
-  // 仅账密登录后的特殊场景：允许不带旧 session 试一次（依赖运行时罐）
   if (options.allowSoftProbe) {
     var soft = assembleJavdbLoginCookie(
       params,
-      stripCookieNames(primary, ["_jdb_session", "remember_user_token", "_rucaptcha_session_id"])
+      stripCookieNames(cookieHeader, ["_jdb_session", "remember_user_token", "_rucaptcha_session_id"])
     );
-    var softHit = await probeOnce(soft, true);
+    var softHit = await once(soft, true);
     if (softHit.ok) return softHit;
   }
 
-  return lastFail;
+  return hit;
 }
 
 function pathRequiresLogin(path) {
@@ -3577,62 +3493,27 @@ async function loginJavdbWithPassword(params, options) {
   );
 }
 
+/**
+ * 取可用会话：有格式正确的 Cookie 直接用（真正是否有效由拉目标页判定）。
+ * 不再预探测 / 多候选轮询 / CF 假通过。
+ */
 async function ensureJavdbSession(params, options) {
   options = options || {};
-  params = params || {};
-  // 保证全局 Cookie 已同步进 params / storage，再收集候选
-  params = syncGlobalParams(params);
+  params = syncGlobalParams(params || {});
   var email = String(params.email || "").trim();
   var password = String(params.password || "").trim();
   var hasPassword = !!(email && password);
 
-  // 1) 先 Cookie：有则探测是否仍被站点接受
   if (!options.forceLogin) {
-    var candidates = collectJavdbCookieCandidates(params);
-    var lastCookieReason = "";
-    var trustedFallback = "";
-    for (var i = 0; i < candidates.length; i++) {
-      var check = await verifyJavdbSession(params, candidates[i], {
-        preserveSession: true,
-        allowSoftProbe: false,
-      });
-      if (check.ok) {
-        saveJavdbCookie(check.cookie);
-        return check.cookie;
-      }
-      lastCookieReason = check.reason || lastCookieReason;
-      // 探测被 CF/403 拦：Cookie 仍可能有效，绝不能当成「没填」清空后重报
-      if (
-        isCfOrForbiddenProbeReason(check.reason) &&
-        isValidJavdbSessionCookie(candidates[i])
-      ) {
-        trustedFallback = assembleJavdbLoginCookie(params, candidates[i]);
-        saveJavdbCookie(trustedFallback);
-        return trustedFallback;
-      }
-    }
-    // 仅「明确登录墙拒绝」时清自动 session；CF 失败保留
-    if (candidates.length && !isCfOrForbiddenProbeReason(lastCookieReason)) {
-      clearJavdbCookie();
-    }
-    if (trustedFallback) {
-      saveJavdbCookie(trustedFallback);
-      return trustedFallback;
-    }
-    if (candidates.length && !hasPassword) {
-      throw new Error(
-        "Cookie 未被站点接受" +
-          (lastCookieReason ? "（" + lastCookieReason + "）" : "") +
-          "。" +
-          describeCookiePresence(candidates[0]) +
-          "。请重新从浏览器复制完整 Cookie（须含 _jdb_session，建议带 cf_clearance / remember），或改填账号密码"
-      );
+    var cookie = assembleJavdbLoginCookie(params, readStoredJavdbCookie(params));
+    if (isValidJavdbSessionCookie(cookie)) {
+      saveJavdbCookie(cookie);
+      return cookie;
     }
   } else {
     clearJavdbCookie();
   }
 
-  // 2) Cookie 无效/没有 → 再账密登录
   if (hasPassword) {
     if (JAVDB_LOGIN_INFLIGHT) return JAVDB_LOGIN_INFLIGHT;
     JAVDB_LOGIN_INFLIGHT = loginJavdbWithPassword(params, {
@@ -3644,6 +3525,7 @@ async function ensureJavdbSession(params, options) {
   }
 
   if (options.allowAnonymous) return "";
+
   var rawHint = pickRawCookieFromParams(params);
   throw new Error(
     "该内容需要登录：未读到有效 _jdb_session（" +
@@ -4970,207 +4852,120 @@ function describeLoginWall(html, finalUrl) {
   return "未拿到已登录内容";
 }
 
+/**
+ * 获取页面 HTML（重构）：
+ * 1) Worker /html 代理（带 Cookie）
+ * 2) 直连源站
+ * 3) 登录墙且有账密 → 登录后再直连
+ * Cookie 字段齐全时不再提示「重新粘贴」。
+ */
 async function fetchHtml(url, params) {
   var cached = readHtmlFetchCache(url);
-  if (cached && !isLoginRequiredHtml(cached)) return cached;
+  if (cached && isUsableJavdbHtml(cached)) return cached;
 
-  params = params || {};
+  params = syncGlobalParams(params || {});
   var pathOnly = "";
   try {
     pathOnly = String(url || "").replace(/^https?:\/\/[^/]+/i, "");
   } catch (err) {
     pathOnly = String(url || "");
   }
-  if (pathRequiresLogin(pathOnly) || params.forceLogin) {
+
+  var cookie = assembleJavdbLoginCookie(params, readStoredJavdbCookie(params));
+  var needsLogin = pathRequiresLogin(pathOnly) || !!params.forceLogin;
+  if (needsLogin && !isValidJavdbSessionCookie(cookie)) {
     var ensured = await ensureJavdbSession(params, { allowAnonymous: false });
     if (ensured) {
-      params.cookie = ensured;
-      saveJavdbCookie(ensured);
+      cookie = assembleJavdbLoginCookie(params, ensured);
+      params.cookie = cookie;
+      saveJavdbCookie(cookie);
     }
   }
 
-  async function onceWithCookie(cookie) {
-    cookie = normalizePastedCookie(cookie);
-    var uaModes = [false, true];
-    var lastErr = null;
+  var stages = [];
+  var html = "";
+  var lastHtml = "";
 
-    for (var ui = 0; ui < uaModes.length; ui++) {
-      try {
-        return await fetchHtmlOnce(cookie, uaModes[ui]);
-      } catch (err) {
-        lastErr = err;
-        if (!isForbiddenHttpError(err)) throw err;
-      }
+  // 1) 代理优先
+  try {
+    html = await fetchJavdbHtmlViaProxy(url, params, cookie);
+    lastHtml = html;
+    if (isUsableJavdbHtml(html)) {
+      if (htmlHasMovieLinks(html)) writeHtmlFetchCache(url, html);
+      return html;
     }
-    throw lastErr && /站点拦截|JavDB 返回 403/i.test(String((lastErr && lastErr.message) || ""))
-      ? lastErr
-      : new Error(javdbForbiddenMessage(params));
+    if (html && !isCloudflareChallengeHtml(html) && !isLoginRequiredHtml(html)) {
+      if (htmlHasMovieLinks(html)) writeHtmlFetchCache(url, html);
+      return html;
+    }
+    stages.push(
+      isCloudflareChallengeHtml(html) ? "proxy:CF" : isLoginRequiredHtml(html) ? "proxy:登录墙" : "proxy:正文不可用"
+    );
+  } catch (proxyErr) {
+    stages.push("proxy:" + String((proxyErr && proxyErr.message) || proxyErr).slice(0, 80));
   }
 
-  async function fetchHtmlOnce(cookie, useLoginUA) {
-    var currentUrl = url;
-    var res = null;
-    var html = "";
-    var finalUrl = url;
-
-    for (var hop = 0; hop < 6; hop++) {
-      // 手动跟随跳转，避免运行时 Cookie 罐用匿名 _jdb_session 覆盖用户会话
-      try {
-        res = await Widget.http.get(currentUrl, {
-          headers: javdbHeaders(params, cookie, {
-            loginUA: !!useLoginUA,
-            referer: javdbBase(params) + "/",
-          }),
-          allow_redirects: false,
-        });
-      } catch (errRedirect) {
-        if (isForbiddenHttpError(errRedirect)) throw errRedirect;
-        res = null;
-      }
-      if (!res || res.data == null || res.data === "") {
-        try {
-          res = await Widget.http.get(currentUrl, {
-            headers: javdbHeaders(params, cookie, {
-              loginUA: !!useLoginUA,
-              referer: javdbBase(params) + "/",
-            }),
-            allow_redirects: true,
-          });
-        } catch (errFollow) {
-          if (isForbiddenHttpError(errFollow)) throw errFollow;
-          throw new Error("请求失败: " + String((errFollow && errFollow.message) || errFollow));
-        }
-        html = res && res.data ? String(res.data) : "";
-        finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || currentUrl);
-        break;
-      }
-      if (res.status && Number(res.status) >= 400) {
-        if (Number(res.status) === 403) throw new Error(javdbForbiddenMessage(params));
-        throw new Error("HTTP " + res.status + " " + currentUrl);
-      }
-
-      var pairs = collectAnyCookiePairs(res);
-      if (isValidJavdbSessionCookie(cookie)) {
-        pairs = pairs.filter(function (p) {
-          return !/^_jdb_session=/i.test(String(p || ""));
-        });
-      }
-      cookie = mergeCookieHeader(cookie, pairs);
-
-      var status = Number((res && res.status) || 0);
-      var loc = responseLocation(res, javdbBase(params));
-      var bodyText = res.data != null ? String(res.data) : "";
-      // 明确 3xx：手动跳转并继续带上用户 Cookie
-      if (loc && status >= 301 && status <= 308) {
-        currentUrl = loc;
-        finalUrl = loc;
-        continue;
-      }
-      // 部分运行时 status=0 且只有 Location、正文为空
-      if (loc && status === 0 && bodyText.length < 80) {
-        currentUrl = loc;
-        finalUrl = loc;
-        continue;
-      }
-
-      html = bodyText;
-      finalUrl = String((res && (res.url || res.finalUrl || res.requestUrl)) || currentUrl);
-      break;
+  // 2) 直连
+  try {
+    var direct = await fetchJavdbHtmlDirect(url, params, cookie);
+    html = direct.html;
+    lastHtml = html;
+    cookie = direct.cookie || cookie;
+    if (isUsableJavdbHtml(html)) {
+      if (htmlHasMovieLinks(html)) writeHtmlFetchCache(url, html);
+      return html;
     }
-
-    if (!html) throw new Error("空响应: " + url);
-    if (cookie && /_jdb_session=/i.test(cookie)) saveJavdbCookie(cookie);
-    return { html: html, cookie: cookie, finalUrl: finalUrl };
-  }
-
-  async function once() {
-    var primary = readStoredJavdbCookie(params);
-    var variants = isValidJavdbSessionCookie(primary) ? sessionEncodingVariants(primary) : [primary];
-    if (!variants.length) variants = [primary || ""];
-
-    var last = null;
-    var lastForbidden = null;
-    for (var i = 0; i < variants.length; i++) {
-      try {
-        last = await onceWithCookie(variants[i]);
-        if (isCloudflareChallengeHtml(last.html)) {
-          lastForbidden = new Error(javdbForbiddenMessage(params));
-          continue;
-        }
-        if (!isLoginRequiredHtml(last.html)) {
-          if (last.cookie && /_jdb_session=/i.test(last.cookie)) saveJavdbCookie(last.cookie);
-          return last.html;
-        }
-      } catch (err) {
-        if (isForbiddenHttpError(err) || isCloudflareChallengeHtml(String((err && err.message) || ""))) {
-          lastForbidden = err;
-          continue;
-        }
-        throw err;
-      }
+    if (html && !isCloudflareChallengeHtml(html) && !isLoginRequiredHtml(html)) {
+      if (htmlHasMovieLinks(html)) writeHtmlFetchCache(url, html);
+      return html;
     }
-
-    // 直连被 CF managed challenge 拦住
-    if (lastForbidden || (last && isCloudflareChallengeHtml(last.html))) {
-      if (shouldUseBrowserProxy(params)) {
-        try {
-          var via = await fetchHtmlViaBrowserProxy(url, params, primary || "");
-          return via.html;
-        } catch (proxyErr) {
-          throw new Error(
-            javdbForbiddenMessage(params) +
-              "；浏览器代理：" +
-              String((proxyErr && proxyErr.message) || proxyErr).slice(0, 120)
-          );
-        }
+    stages.push(
+      isCloudflareChallengeHtml(html) ? "direct:CF" : isLoginRequiredHtml(html) ? "direct:登录墙" : "direct:正文不可用"
+    );
+  } catch (directErr) {
+    stages.push("direct:" + String((directErr && directErr.message) || directErr).slice(0, 80));
+    if (!isForbiddenHttpError(directErr) && !(directErr && directErr.code === 403)) {
+      // 非 403 的网络错误直接抛出
+      if (!/HTTP 403/i.test(String((directErr && directErr.message) || ""))) {
+        throw directErr;
       }
-      var hasCf = cookieHasCfClearance(primary || "");
-      throw new Error(
-        javdbForbiddenMessage(params) +
-          (hasCf
-            ? "。已检测到 cf_clearance 仍失败：请重新在浏览器通过验证并更新 Cookie（须与当前网络一致）"
-            : "。当前 Cookie 缺少 cf_clearance")
-      );
-    }
-    return last ? last.html : "";
-  }
-
-  var html = await once();
-  if (isLoginRequiredHtml(html)) {
-    var hasPassword = !!(String(params.email || "").trim() && String(params.password || "").trim());
-    var manualCookie = normalizePastedCookie(params.cookie);
-    var hadCookie = isValidJavdbSessionCookie(manualCookie) || isValidJavdbSessionCookie(readStoredJavdbCookie(params));
-
-    // Cookie 已失效：清缓存后，有账密再登录；仅 Cookie 则直接报错
-    clearJavdbCookie();
-    if (hasPassword) {
-      await ensureJavdbSession(params, { forceLogin: true });
-      html = await once();
-      if (isLoginRequiredHtml(html)) {
-        throw new Error(
-          "该页面需要登录：Cookie 无效且账密登录后仍无法打开。" +
-            "请更新 Cookie，或检查账号密码/验证码识别"
-        );
-      }
-    } else if (hadCookie || isValidJavdbSessionCookie(manualCookie)) {
-      throw new Error(
-        "Cookie 已失效或未被接受（" +
-          describeLoginWall(html, "") +
-          "；" +
-          describeCookiePresence(manualCookie || readStoredJavdbCookie(params)) +
-          "）。请更新全局参数中的 Cookie，或改填账号密码自动登录"
-      );
-    } else {
-      throw new Error(
-        "该页面需要登录。未读到有效 Cookie（" +
-          describeCookiePresence(pickRawCookieFromParams(params)) +
-          "）。请在全局参数填写 Cookie，或填写账号和密码"
-      );
     }
   }
-  // 不缓存空列表/登录墙，避免一直「未解析到影片」
-  if (htmlHasMovieLinks(html)) writeHtmlFetchCache(url, html);
-  return html;
+
+  // 3) 登录墙 + 账密
+  var hasPassword = !!(String(params.email || "").trim() && String(params.password || "").trim());
+  if ((isLoginRequiredHtml(lastHtml) || needsLogin) && hasPassword) {
+    try {
+      clearJavdbCookie();
+      var loggedIn = await ensureJavdbSession(params, { forceLogin: true });
+      if (loggedIn) {
+        cookie = assembleJavdbLoginCookie(params, loggedIn);
+        params.cookie = cookie;
+        saveJavdbCookie(cookie);
+      }
+      var afterLogin = await fetchJavdbHtmlDirect(url, params, cookie);
+      html = afterLogin.html;
+      lastHtml = html;
+      if (isUsableJavdbHtml(html) || (html && !isCloudflareChallengeHtml(html) && !isLoginRequiredHtml(html))) {
+        if (htmlHasMovieLinks(html)) writeHtmlFetchCache(url, html);
+        return html;
+      }
+      stages.push("login-retry:仍失败");
+    } catch (loginErr) {
+      stages.push("login:" + String((loginErr && loginErr.message) || loginErr).slice(0, 80));
+    }
+  }
+
+  var stageNote = stages.join(" | ") || "无阶段信息";
+  if (isCloudflareChallengeHtml(lastHtml) || /:CF|HTTP 403/i.test(stageNote)) {
+    throw new Error(javdbFetchFailMessage(params, "Cloudflare", stageNote));
+  }
+  if (isLoginRequiredHtml(lastHtml)) {
+    throw new Error(
+      javdbFetchFailMessage(params, "登录墙", describeLoginWall(lastHtml, "") + "；" + stageNote)
+    );
+  }
+  throw new Error(javdbFetchFailMessage(params, "无有效正文", stageNote));
 }
 
 function parseListItems(html, params) {
