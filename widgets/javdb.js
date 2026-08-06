@@ -21,8 +21,65 @@ var GLOBAL_PARAM_KEYS = [
   "zhipuApiKey",
 ];
 
+function pickRawCookieFromParams(params) {
+  params = params || {};
+  var keys = ["cookie", "Cookie", "sessionCookie", "javdbCookie", "javdb_cookie"];
+  for (var i = 0; i < keys.length; i++) {
+    var v = params[keys[i]];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  }
+  try {
+    var nested = params.globalParams || params.global || null;
+    if (nested && typeof nested === "object") {
+      for (var j = 0; j < keys.length; j++) {
+        var nv = nested[keys[j]];
+        if (nv !== undefined && nv !== null && String(nv).trim() !== "") return nv;
+      }
+    }
+  } catch (eNest) {}
+  try {
+    var stored = Widget.storage.get("javdb.global.cookie");
+    if (stored) return stored;
+  } catch (eStore) {}
+  try {
+    var session = Widget.storage.get("javdb.global.sessionCookie");
+    if (session) return session;
+  } catch (eSes) {}
+  return "";
+}
+
+function describeCookiePresence(cookie) {
+  var c = normalizePastedCookie(cookie);
+  if (!c) return "未读到Cookie";
+  var session = getCookieValue(c, "_jdb_session");
+  var cf = getCookieValue(c, "cf_clearance");
+  var remember =
+    getCookieValue(c, "remember_user_token") || getCookieValue(c, "remember_me_token");
+  return (
+    "已读长度=" +
+    c.length +
+    ", _jdb_session=" +
+    (session ? "有(" + session.length + "字)" : "无") +
+    ", cf_clearance=" +
+    (cf ? "有(" + cf.length + "字)" : "无") +
+    ", remember=" +
+    (remember ? "有" : "无")
+  );
+}
+
+function isCfOrForbiddenProbeReason(reason) {
+  return /HTTP 403|站点拦截|Cloudflare|unacceptable:\s*403|探测被 Cloudflare|banned your access/i.test(
+    String(reason || "")
+  );
+}
+
 function syncGlobalParams(params) {
   params = params || {};
+  // 先把别名 Cookie 归一到 params.cookie，避免只写了 Cookie/嵌套字段时丢参
+  if (!params.cookie || String(params.cookie).trim() === "") {
+    var picked = pickRawCookieFromParams(params);
+    if (picked) params.cookie = picked;
+  }
   for (var i = 0; i < GLOBAL_PARAM_KEYS.length; i++) {
     var key = GLOBAL_PARAM_KEYS[i];
     if (params[key] !== undefined && params[key] !== null && String(params[key]) !== "") {
@@ -31,7 +88,8 @@ function syncGlobalParams(params) {
       Widget.storage.set("javdb.global." + key, val);
     }
   }
-  return Object.assign({}, params, getEffectiveParams(params));
+  var effective = getEffectiveParams(params);
+  return Object.assign({}, params, effective);
 }
 
 function getEffectiveParams(params) {
@@ -48,6 +106,11 @@ function getEffectiveParams(params) {
       }
     }
   }
+  if (!out.cookie || String(out.cookie).trim() === "") {
+    var altCookie = pickRawCookieFromParams(params);
+    if (altCookie) out.cookie = altCookie;
+  }
+  if (out.cookie) out.cookie = normalizePastedCookie(out.cookie);
   if (!out.baseUrl) out.baseUrl = JAVDB_DEFAULT_BASE;
   if (!out.locale) out.locale = "zh";
   // 兼容旧参数名 captchaSolverKey
@@ -1619,9 +1682,9 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "2.11.0",
+  version: "2.11.2",
   requiredVersion: "0.0.1",
-  description: "JavDB；应对 Cloudflare 验证：粘贴含 cf_clearance 的浏览器 Cookie；WebView 模式",
+  description: "JavDB；兼容 & 分隔 Cookie；需含 cf_clearance；WebView 模式",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -1648,7 +1711,7 @@ WidgetMetadata = {
       title: "Cookie（可选）",
       type: "input",
       description:
-        "优先使用。浏览器通过 Cloudflare 验证后，从 DevTools→Application→Cookies 复制整段（务必含 cf_clearance，及 _jdb_session）。勿加引号",
+        "优先使用。浏览器通过验证后复制 Cookie。支持 ; 或 & 分隔。务必含 cf_clearance 与 _jdb_session。勿加引号",
       value: "",
     },
     {
@@ -1881,10 +1944,17 @@ function isForbiddenHttpError(err) {
   return /unacceptable:\s*403|\b403\b|banned your access|Access Denied|站点拦截当前网络/i.test(msg);
 }
 
-function javdbForbiddenMessage() {
+function javdbForbiddenMessage(params) {
+  var diag = "";
+  try {
+    diag = "（" + describeCookiePresence(pickRawCookieFromParams(params || {})) + "）";
+  } catch (e) {
+    diag = "";
+  }
   return (
-    "JavDB 被 Cloudflare 人机验证拦截（浏览器能开、App 纯 HTTP 不能过 JS 挑战）。" +
-    "请用同一网络的浏览器打开 javdb.com 完成验证后，从 DevTools→Application→Cookies 复制整段 Cookie（必须含 cf_clearance），粘贴到模块全局参数「Cookie」"
+    "JavDB 被 Cloudflare 人机验证拦截（浏览器能开、App 纯 HTTP 不能过 JS 挑战）" +
+    diag +
+    "。请用同一网络的浏览器打开 javdb.com 完成验证后，从 DevTools→Application→Cookies 复制整段 Cookie（必须含 cf_clearance+_jdb_session），粘贴到模块全局参数「Cookie」后重新打开"
   );
 }
 
@@ -2008,10 +2078,8 @@ async function javdbHttpGet(url, params, cookie, options) {
       if (!isForbiddenHttpError(err)) throw err;
     }
   }
-  throw new Error(javdbForbiddenMessage());
+  throw new Error(javdbForbiddenMessage(params));
 }
-
-var JAVDB_COOKIE_STORAGE_KEY = "javdb.global.sessionCookie";
 var JAVDB_LOGIN_INFLIGHT = null;
 /** Cloudflare Worker：服务端拉验证码并识别后完成登录（走已通的自定义域名） */
 var JAVDB_LOGIN_PROXY_DEFAULT = "https://dmm.laotou.ccwu.cc";
@@ -2167,6 +2235,15 @@ function normalizePastedCookie(raw) {
   }
   text = text.replace(/^['"`]+|['"`]+$/g, "");
   text = text.replace(/\r?\n+/g, "; ");
+  // 部分导出工具用 & 分隔（像 querystring），标准 Cookie 头必须用 ;
+  // 仅当几乎没有分号、且出现 &name= 形态时转换，避免误伤值内编码
+  if (
+    /(?:^|[;&\s])_jdb_session\s*=/i.test(text) &&
+    /&[A-Za-z_][A-Za-z0-9_]*=/.test(text) &&
+    (text.match(/;/g) || []).length < 2
+  ) {
+    text = text.replace(/&(?=[A-Za-z_][A-Za-z0-9_]*=)/g, "; ");
+  }
   text = text.replace(/;;+/g, ";").replace(/^\s*;\s*|\s*;\s*$/g, "").trim();
   // _jdb_session: value / _jdb_session = value → 标准 name=value
   text = text.replace(/_jdb_session\s*[:=]\s*/gi, "_jdb_session=");
@@ -2183,7 +2260,7 @@ function normalizePastedCookie(raw) {
   }
   // 从杂乱粘贴中强制抽出会话段
   if (!/(?:^|;\s*)_jdb_session=/i.test(text)) {
-    var sessionMatch = String(raw || "").match(/_jdb_session\s*[:=]\s*([^\s;,"']+)/i);
+    var sessionMatch = String(raw || "").match(/_jdb_session\s*[:=]\s*([^\s;,"'&]+)/i);
     if (sessionMatch && sessionMatch[1]) {
       text = (text ? text + "; " : "") + "_jdb_session=" + sessionMatch[1];
     }
@@ -2225,6 +2302,7 @@ function collectJavdbCookieCandidates(params) {
     list.push(assembleJavdbLoginCookie(params, c));
   }
   add(params.cookie);
+  add(pickRawCookieFromParams(params));
   try {
     add(Widget.storage.get(JAVDB_COOKIE_STORAGE_KEY));
   } catch (e1) {}
@@ -2742,6 +2820,14 @@ function assembleJavdbLoginCookie(params, jar, options) {
   if (!map.list_mode) put("list_mode", "h");
   if (!map.theme) put("theme", "auto");
 
+  // 站点有时发 remember_me_token，有时发 remember_user_token，两边都保留
+  if (map.remember_me_token && !map.remember_user_token) {
+    put("remember_user_token", map.remember_me_token);
+  }
+  if (map.remember_user_token && !map.remember_me_token) {
+    put("remember_me_token", map.remember_user_token);
+  }
+
   if (!options.keepCaptcha) {
     delete map._rucaptcha_session_id;
   }
@@ -2755,6 +2841,7 @@ function assembleJavdbLoginCookie(params, jar, options) {
     "cf_clearance",
     "_jdb_session",
     "remember_user_token",
+    "remember_me_token",
   ];
   var parts = [];
   var used = {};
@@ -3493,6 +3580,8 @@ async function loginJavdbWithPassword(params, options) {
 async function ensureJavdbSession(params, options) {
   options = options || {};
   params = params || {};
+  // 保证全局 Cookie 已同步进 params / storage，再收集候选
+  params = syncGlobalParams(params);
   var email = String(params.email || "").trim();
   var password = String(params.password || "").trim();
   var hasPassword = !!(email && password);
@@ -3501,6 +3590,7 @@ async function ensureJavdbSession(params, options) {
   if (!options.forceLogin) {
     var candidates = collectJavdbCookieCandidates(params);
     var lastCookieReason = "";
+    var trustedFallback = "";
     for (var i = 0; i < candidates.length; i++) {
       var check = await verifyJavdbSession(params, candidates[i], {
         preserveSession: true,
@@ -3511,16 +3601,31 @@ async function ensureJavdbSession(params, options) {
         return check.cookie;
       }
       lastCookieReason = check.reason || lastCookieReason;
+      // 探测被 CF/403 拦：Cookie 仍可能有效，绝不能当成「没填」清空后重报
+      if (
+        isCfOrForbiddenProbeReason(check.reason) &&
+        isValidJavdbSessionCookie(candidates[i])
+      ) {
+        trustedFallback = assembleJavdbLoginCookie(params, candidates[i]);
+        saveJavdbCookie(trustedFallback);
+        return trustedFallback;
+      }
     }
-    if (candidates.length) clearJavdbCookie();
-    if (/HTTP 403|站点拦截|unacceptable:\s*403/i.test(lastCookieReason)) {
-      throw new Error(javdbForbiddenMessage());
+    // 仅「明确登录墙拒绝」时清自动 session；CF 失败保留
+    if (candidates.length && !isCfOrForbiddenProbeReason(lastCookieReason)) {
+      clearJavdbCookie();
+    }
+    if (trustedFallback) {
+      saveJavdbCookie(trustedFallback);
+      return trustedFallback;
     }
     if (candidates.length && !hasPassword) {
       throw new Error(
         "Cookie 未被站点接受" +
           (lastCookieReason ? "（" + lastCookieReason + "）" : "") +
-          "。请重新从浏览器复制完整 Cookie（建议包含 _jdb_session，有则一并带上 remember_user_token），或改填账号密码"
+          "。" +
+          describeCookiePresence(candidates[0]) +
+          "。请重新从浏览器复制完整 Cookie（须含 _jdb_session，建议带 cf_clearance / remember），或改填账号密码"
       );
     }
   } else {
@@ -3539,7 +3644,12 @@ async function ensureJavdbSession(params, options) {
   }
 
   if (options.allowAnonymous) return "";
-  throw new Error("该内容需要登录：请在全局参数填写 Cookie，或填写账号和密码");
+  var rawHint = pickRawCookieFromParams(params);
+  throw new Error(
+    "该内容需要登录：未读到有效 _jdb_session（" +
+      describeCookiePresence(rawHint || params.cookie) +
+      "）。请在全局参数填写完整 Cookie，或填写账号和密码"
+  );
 }
 
 
@@ -4872,7 +4982,11 @@ async function fetchHtml(url, params) {
     pathOnly = String(url || "");
   }
   if (pathRequiresLogin(pathOnly) || params.forceLogin) {
-    await ensureJavdbSession(params, { allowAnonymous: false });
+    var ensured = await ensureJavdbSession(params, { allowAnonymous: false });
+    if (ensured) {
+      params.cookie = ensured;
+      saveJavdbCookie(ensured);
+    }
   }
 
   async function onceWithCookie(cookie) {
@@ -4890,7 +5004,7 @@ async function fetchHtml(url, params) {
     }
     throw lastErr && /站点拦截|JavDB 返回 403/i.test(String((lastErr && lastErr.message) || ""))
       ? lastErr
-      : new Error(javdbForbiddenMessage());
+      : new Error(javdbForbiddenMessage(params));
   }
 
   async function fetchHtmlOnce(cookie, useLoginUA) {
@@ -4931,7 +5045,7 @@ async function fetchHtml(url, params) {
         break;
       }
       if (res.status && Number(res.status) >= 400) {
-        if (Number(res.status) === 403) throw new Error(javdbForbiddenMessage());
+        if (Number(res.status) === 403) throw new Error(javdbForbiddenMessage(params));
         throw new Error("HTTP " + res.status + " " + currentUrl);
       }
 
@@ -4980,7 +5094,7 @@ async function fetchHtml(url, params) {
       try {
         last = await onceWithCookie(variants[i]);
         if (isCloudflareChallengeHtml(last.html)) {
-          lastForbidden = new Error(javdbForbiddenMessage());
+          lastForbidden = new Error(javdbForbiddenMessage(params));
           continue;
         }
         if (!isLoginRequiredHtml(last.html)) {
@@ -5004,7 +5118,7 @@ async function fetchHtml(url, params) {
           return via.html;
         } catch (proxyErr) {
           throw new Error(
-            javdbForbiddenMessage() +
+            javdbForbiddenMessage(params) +
               "；浏览器代理：" +
               String((proxyErr && proxyErr.message) || proxyErr).slice(0, 120)
           );
@@ -5012,7 +5126,7 @@ async function fetchHtml(url, params) {
       }
       var hasCf = cookieHasCfClearance(primary || "");
       throw new Error(
-        javdbForbiddenMessage() +
+        javdbForbiddenMessage(params) +
           (hasCf
             ? "。已检测到 cf_clearance 仍失败：请重新在浏览器通过验证并更新 Cookie（须与当前网络一致）"
             : "。当前 Cookie 缺少 cf_clearance")
@@ -5042,10 +5156,16 @@ async function fetchHtml(url, params) {
       throw new Error(
         "Cookie 已失效或未被接受（" +
           describeLoginWall(html, "") +
+          "；" +
+          describeCookiePresence(manualCookie || readStoredJavdbCookie(params)) +
           "）。请更新全局参数中的 Cookie，或改填账号密码自动登录"
       );
     } else {
-      throw new Error("该页面需要登录。请在全局参数填写 Cookie，或填写账号和密码");
+      throw new Error(
+        "该页面需要登录。未读到有效 Cookie（" +
+          describeCookiePresence(pickRawCookieFromParams(params)) +
+          "）。请在全局参数填写 Cookie，或填写账号和密码"
+      );
     }
   }
   // 不缓存空列表/登录墙，避免一直「未解析到影片」
