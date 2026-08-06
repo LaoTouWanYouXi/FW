@@ -901,7 +901,6 @@ var JAVDB_MAKER_OPTIONS = [
 /* ========================= Config ========================= */
 
 var JAVDB_DEFAULT_BASE = "https://javdb.com";
-var JAVDB_HTML_PROXY = "https://move.laotou.ccwu.cc";
 var JAVDB_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 var JAVDB_MOBILE_UA =
@@ -910,8 +909,10 @@ var JAVDB_MOBILE_UA =
 var SEARCH_PREFIX = "search:";
 var ID_TITLE_SEP = "~";
 var SORT_MAP = { published: "0", score: "1", fav: "2" };
-
-var GLOBAL_KEYS = ["baseUrl", "locale", "cookie", "htmlProxyWorker"];
+var COOKIE_PARAM_KEYS = ["cookie", "Cookie", "sessionCookie", "javdbCookie", "javdb_cookie"];
+var GLOBAL_KEYS = ["baseUrl", "locale", "cookie"];
+var HTML_FETCH_CACHE = {};
+var HTML_FETCH_CACHE_TTL_MS = 3 * 60 * 1000;
 
 /* ========================= WidgetMetadata ========================= */
 
@@ -953,9 +954,9 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "3.0.0",
+  version: "3.0.1",
   requiredVersion: "0.0.1",
-  description: "JavDB 分类浏览（演员/系列/标签/片商）；WebView 直连优先，代理回退",
+  description: "JavDB 分类浏览（演员/系列/标签/片商）；Cookie 直连（Workers 代理对 javdb 无效）",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
@@ -979,9 +980,10 @@ WidgetMetadata = {
     },
     {
       name: "cookie",
-      title: "Cookie（可选）",
+      title: "Cookie（必填）",
       type: "input",
-      description: "遇 Cloudflare/封禁时可粘贴浏览器 Cookie（含 cf_clearance）",
+      description:
+        "手机浏览器打开 javdb.com 通过验证后，复制整段 Cookie（务必含 cf_clearance；建议同网同设备）。支持 ; 或 & 分隔，勿加引号",
       value: "",
     },
   ],
@@ -1041,19 +1043,130 @@ function writeStore(key, value) {
   } catch (e) {}
 }
 
+function pickRawCookie(params) {
+  params = params || {};
+  for (var i = 0; i < COOKIE_PARAM_KEYS.length; i++) {
+    var v = params[COOKIE_PARAM_KEYS[i]];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return String(v);
+  }
+  try {
+    var nested = params.globalParams || params.global || null;
+    if (nested && typeof nested === "object") {
+      for (var j = 0; j < COOKIE_PARAM_KEYS.length; j++) {
+        var nv = nested[COOKIE_PARAM_KEYS[j]];
+        if (nv !== undefined && nv !== null && String(nv).trim() !== "") return String(nv);
+      }
+    }
+  } catch (eNest) {}
+  var stored = readStore("javdb.global.cookie") || readStore("javdb.global.sessionCookie");
+  return stored ? String(stored) : "";
+}
+
+function looksLikeBareSession(text) {
+  var s = String(text || "").trim();
+  if (!s || s.indexOf("=") >= 0 || s.indexOf(";") >= 0) return false;
+  return s.length >= 40 && /^[A-Za-z0-9_-]+$/.test(s);
+}
+
+function normalizePastedCookie(raw) {
+  var text = String(raw || "").trim();
+  if (!text) return "";
+  if (
+    (text.charAt(0) === '"' && text.charAt(text.length - 1) === '"') ||
+    (text.charAt(0) === "'" && text.charAt(text.length - 1) === "'")
+  ) {
+    text = text.slice(1, -1).trim();
+  }
+  if (looksLikeBareSession(text)) return "_jdb_session=" + text;
+  // 支持浏览器复制成 a=1&b=2
+  if (text.indexOf(";") < 0 && text.indexOf("&") >= 0 && text.indexOf("=") >= 0) {
+    text = text.split("&").join("; ");
+  }
+  var parts = text.split(/;\s*/);
+  var map = {};
+  var order = [];
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i].trim();
+    if (!p || p.indexOf("=") < 0) continue;
+    var name = p.slice(0, p.indexOf("=")).trim();
+    var value = p.slice(p.indexOf("=") + 1).trim();
+    if (!name) continue;
+    if (!map[name]) order.push(name);
+    map[name] = value;
+  }
+  return order
+    .map(function (n) {
+      return n + "=" + map[n];
+    })
+    .join("; ");
+}
+
+function getCookieValue(cookie, name) {
+  var re = new RegExp("(?:^|;\\s*)" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "=([^;]*)", "i");
+  var m = String(cookie || "").match(re);
+  return m ? m[1] : "";
+}
+
+function assembleCookie(params, raw) {
+  params = params || {};
+  var cookie = normalizePastedCookie(raw || pickRawCookie(params));
+  var map = {};
+  var order = [];
+  function put(name, value) {
+    if (!name || value === undefined || value === null || String(value) === "") return;
+    if (!map[name]) order.push(name);
+    map[name] = String(value);
+  }
+  String(cookie || "")
+    .split(/;\s*/)
+    .forEach(function (chunk) {
+      if (!chunk || chunk.indexOf("=") < 0) return;
+      put(chunk.slice(0, chunk.indexOf("=")).trim(), chunk.slice(chunk.indexOf("=") + 1).trim());
+    });
+  put("locale", String(params.locale || "zh"));
+  put("over18", "1");
+  put("theme", map.theme || "auto");
+  return order
+    .map(function (n) {
+      return n + "=" + map[n];
+    })
+    .join("; ");
+}
+
+function describeCookie(cookie) {
+  var c = normalizePastedCookie(cookie);
+  if (!c) return "未读到Cookie";
+  return (
+    "长度=" +
+    c.length +
+    ", cf_clearance=" +
+    (getCookieValue(c, "cf_clearance") ? "有" : "无") +
+    ", _jdb_session=" +
+    (getCookieValue(c, "_jdb_session") ? "有" : "无")
+  );
+}
+
 function syncParams(params) {
   params = params || {};
+  if (!params.cookie || String(params.cookie).trim() === "") {
+    var picked = pickRawCookie(params);
+    if (picked) params.cookie = picked;
+  }
   var out = {};
   for (var i = 0; i < GLOBAL_KEYS.length; i++) {
     var key = GLOBAL_KEYS[i];
     var val = params[key];
     if (val !== undefined && val !== null && String(val).trim() !== "") {
-      out[key] = String(val).trim();
+      out[key] = key === "cookie" ? normalizePastedCookie(val) : String(val).trim();
       writeStore("javdb.global." + key, out[key]);
     } else {
       var stored = readStore("javdb.global." + key);
       if (stored) out[key] = String(stored);
     }
+  }
+  if (!out.cookie) {
+    var alt = pickRawCookie(params);
+    if (alt) out.cookie = normalizePastedCookie(alt);
   }
   if (!out.baseUrl) out.baseUrl = JAVDB_DEFAULT_BASE;
   if (!out.locale) out.locale = "zh";
@@ -1062,11 +1175,6 @@ function syncParams(params) {
 
 function siteBase(params) {
   return String((params && params.baseUrl) || JAVDB_DEFAULT_BASE).replace(/\/+$/, "") || JAVDB_DEFAULT_BASE;
-}
-
-function proxyBase(params) {
-  var custom = String((params && params.htmlProxyWorker) || readStore("javdb.global.htmlProxyWorker") || "").trim();
-  return (custom || JAVDB_HTML_PROXY).replace(/\/+$/, "");
 }
 
 /* ========================= CategoryPath ========================= */
@@ -1220,17 +1328,25 @@ function searchUrl(base, keyword, params) {
   return buildPageUrl(base, path, params);
 }
 
-/* ========================= PageFetcher ========================= */
+/* ========================= PageFetcher（Cookie 直连；Workers 代理对 javdb 无效） ========================= */
 
-function requestHeaders(params, cookie) {
+function requestHeaders(params, cookie, useMobile) {
   var base = siteBase(params);
   var headers = {
-    "User-Agent": cookie ? JAVDB_MOBILE_UA : JAVDB_UA,
-    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "User-Agent": useMobile ? JAVDB_MOBILE_UA : JAVDB_UA,
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     Referer: base + "/",
     "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+    "Upgrade-Insecure-Requests": "1",
   };
+  if (!useMobile) {
+    headers["Sec-Fetch-Dest"] = "document";
+    headers["Sec-Fetch-Mode"] = "navigate";
+    headers["Sec-Fetch-Site"] = "none";
+    headers["Sec-Fetch-User"] = "?1";
+  }
   if (cookie) headers.Cookie = String(cookie);
   return headers;
 }
@@ -1250,75 +1366,131 @@ function isUsableListHtml(html) {
   var text = String(html || "");
   if (!text || text.length < 800) return false;
   if (isChallengeHtml(text)) return false;
-  return /movie-list|video-title|class=["'][^"']*box[^"']*["'][^>]*href=["']\/v\//i.test(text) || /href=["']\/v\/[A-Za-z0-9]+["']/i.test(text);
+  return (
+    /movie-list|video-title/i.test(text) ||
+    /href=["']\/v\/[A-Za-z0-9]+["']/i.test(text)
+  );
 }
 
-async function httpGetText(url, headers, timeout) {
-  var res = await Widget.http.get(url, {
-    headers: headers || {},
-    allow_redirects: true,
-    timeout: timeout || 30000,
-  });
-  if (!res || res.data == null) throw new Error("空响应");
-  var status = Number(res.status || res.statusCode || 0);
-  var body = typeof res.data === "string" ? res.data : String(res.data);
-  if (status >= 400 && !body) throw new Error("HTTP " + status);
-  return { status: status, body: body };
+function isForbiddenError(err) {
+  var msg = String((err && err.message) || err || "");
+  return /unacceptable:\s*403|\b403\b|banned your access|Access Denied|站点拦截/i.test(msg);
 }
 
-async function fetchViaDirect(url, params, cookie) {
-  var got = await httpGetText(url, requestHeaders(params, cookie), 30000);
-  return got.body;
-}
-
-async function fetchViaProxy(url, params, cookie, mode) {
-  var base = proxyBase(params);
-  var endpoint = mode === "browse" ? "/browse" : "/html";
-  var proxyUrl =
-    base +
-    endpoint +
-    "?url=" +
-    encodeURIComponent(String(url || "")) +
-    (cookie ? "&cookie=" + encodeURIComponent(String(cookie)) : "");
-  var got = await httpGetText(proxyUrl, { Accept: "text/html,application/json" }, mode === "browse" ? 60000 : 25000);
-  var body = got.body;
-  if (/^\s*\{/.test(body) && /"error"\s*:/.test(body)) {
-    var msg = body;
-    try {
-      var j = JSON.parse(body);
-      msg = (j && (j.message || j.error)) || msg;
-    } catch (e) {}
-    throw new Error(String(msg).slice(0, 160));
+function readHtmlCache(url) {
+  try {
+    var hit = HTML_FETCH_CACHE[url];
+    if (!hit) return "";
+    if (Date.now() - hit.at > HTML_FETCH_CACHE_TTL_MS) {
+      delete HTML_FETCH_CACHE[url];
+      return "";
+    }
+    return hit.html || "";
+  } catch (e) {
+    return "";
   }
-  if (got.status >= 400) throw new Error("代理 HTTP " + got.status);
-  return body;
+}
+
+function writeHtmlCache(url, html) {
+  try {
+    HTML_FETCH_CACHE[url] = { at: Date.now(), html: html };
+  } catch (e) {}
+}
+
+function cookieHintMessage(params, detail) {
+  var diag = "";
+  try {
+    diag = describeCookie(assembleCookie(params, pickRawCookie(params)));
+  } catch (e) {
+    diag = "Cookie诊断失败";
+  }
+  return (
+    "JavDB 被 Cloudflare/风控拦截（" +
+    diag +
+    (detail ? "；" + detail : "") +
+    "）。请用【与 App 同一网络的手机浏览器】打开站点地址完成验证，复制整段 Cookie（必须含 cf_clearance）到全局参数后重试。注意：电脑 Cookie 通常不能给手机用；Workers 代理对 javdb 无效请勿依赖。"
+  );
 }
 
 /**
- * 拉取策略（新）：WebView 直连 → browse 代理 → html 代理
+ * 直连拉页。Alamofire 遇 403 会直接抛 unacceptable，需 Cookie(cf_clearance) 同出口。
+ */
+async function fetchViaDirect(url, params, cookie) {
+  var attempts = [
+    { mobile: true, label: "mobile" },
+    { mobile: false, label: "desktop" },
+  ];
+  // 有 cf_clearance 时优先移动 UA（与手机浏览器更接近）
+  if (!getCookieValue(cookie, "cf_clearance")) {
+    attempts = [
+      { mobile: false, label: "desktop" },
+      { mobile: true, label: "mobile" },
+    ];
+  }
+  var lastErr = null;
+  for (var i = 0; i < attempts.length; i++) {
+    try {
+      var res = await Widget.http.get(url, {
+        headers: requestHeaders(params, cookie, attempts[i].mobile),
+        allow_redirects: true,
+        timeout: 30000,
+      });
+      if (!res || res.data == null) {
+        lastErr = new Error("空响应");
+        continue;
+      }
+      var status = Number(res.status || res.statusCode || 0);
+      var body = typeof res.data === "string" ? res.data : String(res.data);
+      if (status === 403 || isForbiddenError({ message: "HTTP " + status })) {
+        lastErr = new Error("HTTP 403");
+        continue;
+      }
+      if (status >= 400 && !body) {
+        lastErr = new Error("HTTP " + status);
+        continue;
+      }
+      if (isUsableListHtml(body) || (!isChallengeHtml(body) && body.length > 2000)) {
+        return body;
+      }
+      lastErr = new Error(isChallengeHtml(body) ? "仍遇CF挑战" : "正文不可用");
+    } catch (err) {
+      lastErr = err;
+      if (!isForbiddenError(err)) {
+        // 非 403 网络错误也继续试另一种 UA
+        continue;
+      }
+    }
+  }
+  throw lastErr || new Error("直连失败");
+}
+
+/**
+ * 拉取策略（v3.0.1）：
+ * 仅 Cookie 直连。move.laotou /browse|/html 对 javdb 会因 Workers 出口被封返回 403/502，已移除。
  */
 async function fetchPageHtml(url, params) {
   params = syncParams(params || {});
-  var cookie = String(params.cookie || "").trim();
-  var errors = [];
-  var stages = [
-    { name: "direct", run: function () { return fetchViaDirect(url, params, cookie); } },
-    { name: "browse", run: function () { return fetchViaProxy(url, params, cookie, "browse"); } },
-    { name: "proxy", run: function () { return fetchViaProxy(url, params, cookie, "html"); } },
-  ];
+  var cached = readHtmlCache(url);
+  if (cached && isUsableListHtml(cached)) return cached;
 
-  for (var i = 0; i < stages.length; i++) {
-    try {
-      var html = await stages[i].run();
-      if (isUsableListHtml(html) || (!isChallengeHtml(html) && html && html.length > 2000)) {
-        return html;
-      }
-      errors.push(stages[i].name + ":正文不可用");
-    } catch (err) {
-      errors.push(stages[i].name + ":" + String((err && err.message) || err).slice(0, 80));
+  var cookie = assembleCookie(params, params.cookie);
+  params.cookie = cookie;
+  if (cookie) writeStore("javdb.global.cookie", cookie);
+
+  try {
+    var html = await fetchViaDirect(url, params, cookie);
+    if (isUsableListHtml(html) || (!isChallengeHtml(html) && html && html.length > 2000)) {
+      if (isUsableListHtml(html)) writeHtmlCache(url, html);
+      return html;
     }
+    throw new Error(isChallengeHtml(html) ? "仍遇CF挑战" : "正文不可用");
+  } catch (err) {
+    var msg = String((err && err.message) || err || "");
+    if (isForbiddenError(err) || /CF挑战|正文不可用|空响应|HTTP 403/i.test(msg)) {
+      throw new Error(cookieHintMessage(params, msg.slice(0, 60)));
+    }
+    throw err;
   }
-  throw new Error("页面获取失败 [" + errors.join(" | ") + "]");
 }
 
 /* ========================= CardScanner（列表） ========================= */
