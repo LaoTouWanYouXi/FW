@@ -903,13 +903,28 @@ var JAVDB_MAKER_OPTIONS = [
 /* ========================= Config ========================= */
 
 var API_BASE = "https://jdforrepam.com/api";
-var JAVDB_SITE = "https://javdb.com";
+var API_SITE = "https://javdb.com";
 var JD_SIG_SALT = "lpw6vgqzsp";
 var JD_SIG_KEY =
   "71cf27bb3c0bcdf207b64abecddc970098c7421ee7203b9cdae54478478a199e7d5a6e1a57691123c1a931c057842fb73ba3b3c83bcd69c17ccf174081e3d8aa";
 var SEARCH_PREFIX = "search:";
 var ID_TITLE_SEP = "~";
 var CATEGORY_KIND_CODE = { actors: "a", makers: "m", series: "s", tags: "t", directors: "d" };
+var MOVIE_TYPE_CODE = { all: "all", censored: "0", uncensored: "1", western: "2", fc2: "3" };
+var LATEST_FILTER_ENUM = [
+  { title: "全部", value: "all" },
+  { title: "有码", value: "censored" },
+  { title: "无码", value: "uncensored" },
+  { title: "欧美", value: "western" },
+  { title: "FC2", value: "fc2" },
+];
+var TOP250_TYPE_ENUM = [
+  { title: "全部", value: "all" },
+  { title: "有码", value: "0" },
+  { title: "无码", value: "1" },
+  { title: "欧美", value: "2" },
+  { title: "FC2", value: "3" },
+];
 var SORT_API_MAP = {
   published: { sort_by: "release", order_by: "desc" },
   score: { sort_by: "score", order_by: "desc" },
@@ -967,11 +982,11 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.0.0",
+  version: "4.1.0",
   requiredVersion: "0.0.1",
-  description: "JavDB 分类浏览（API 直连，绕过 CF）；支持账号密码登录",
+  description: "JavDB API：最近更新 / TOP250 / 演员/系列/标签/片商；支持账号密码登录",
   author: "老头",
-  site: "https://github.com/InchStudio/ForwardWidgets",
+  site: API_SITE,
   detailCacheDuration: 3600,
   globalParams: [
     {
@@ -989,7 +1004,7 @@ WidgetMetadata = {
       name: "email",
       title: "账号（邮箱）",
       type: "input",
-      description: "JavDB App 账号，用于 API 登录获取 JWT（可选；浏览列表可不登录）",
+      description: "JavDB App 账号；TOP250 需登录。浏览最近更新/分类可不登录",
       value: "",
     },
     {
@@ -1008,6 +1023,40 @@ WidgetMetadata = {
     },
   ],
   modules: [
+    {
+      id: "latest",
+      title: "最近更新",
+      description: "最新上架影片",
+      functionName: "loadLatest",
+      cacheDuration: 1800,
+      params: [
+        {
+          name: "filter_by",
+          title: "分类",
+          type: "enumeration",
+          enumOptions: LATEST_FILTER_ENUM,
+          value: "all",
+        },
+        { name: "page", title: "页码", type: "page", value: "1" },
+      ],
+    },
+    {
+      id: "top250",
+      title: "TOP250",
+      description: "JavDB TOP250（需登录）",
+      functionName: "loadTop250",
+      cacheDuration: 3600,
+      params: [
+        {
+          name: "type",
+          title: "分类",
+          type: "enumeration",
+          enumOptions: TOP250_TYPE_ENUM,
+          value: "all",
+        },
+        { name: "page", title: "页码", type: "page", value: "1" },
+      ],
+    },
     {
       id: "actors",
       title: "演员",
@@ -1799,6 +1848,74 @@ function mapMagnets(magnets) {
 
 /* ========================= Handlers ========================= */
 
+function normalizeLatestFilter(raw) {
+  var text = String(raw || "all").trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(MOVIE_TYPE_CODE, text)) {
+    return MOVIE_TYPE_CODE[text] === "all" ? "all" : text;
+  }
+  if (text === "0") return "censored";
+  if (text === "1") return "uncensored";
+  if (text === "2") return "western";
+  if (text === "3") return "fc2";
+  return "all";
+}
+
+function normalizeTop250Type(raw) {
+  var text = String(raw || "all").trim().toLowerCase();
+  if (text === "all" || text === "") return "all";
+  if (text === "censored") return "0";
+  if (text === "uncensored") return "1";
+  if (text === "western") return "2";
+  if (text === "fc2") return "3";
+  if (/^[0-3]$/.test(text)) return text;
+  return "all";
+}
+
+async function loadLatest(params) {
+  try {
+    params = await ensureApiSession(params || {});
+    var page = Number(params.page || params.from || 1);
+    var filterBy = normalizeLatestFilter(params.filter_by);
+    var data = await apiGet(
+      "/v1/movies/latest",
+      { page: page, filter_by: filterBy },
+      params
+    );
+    var movies = (data && data.movies) || [];
+    if (!movies.length) throw new Error("暂无最近更新");
+    return movies.map(mapListMovie);
+  } catch (error) {
+    console.error("[javdb] 最近更新失败:", error.message || error);
+    throw error;
+  }
+}
+
+async function loadTop250(params) {
+  try {
+    params = await ensureApiSession(params || {}, { requireAuth: true });
+    var page = Number(params.page || params.from || 1);
+    var type = normalizeTop250Type(params.type);
+    var query = { page: page };
+    if (type !== "all") {
+      query.type = type;
+      query.filter_by = type;
+    } else {
+      query.filter_by = "all";
+    }
+    var data = await apiGet("/v1/movies/top", query, params);
+    var movies = (data && data.movies) || [];
+    if (!movies.length) throw new Error("TOP250 无数据（请确认已登录）");
+    return movies.map(mapListMovie);
+  } catch (error) {
+    var msg = String((error && error.message) || error || "");
+    if (/請登錄|请登录|JWT|登录|帳號|账号/i.test(msg)) {
+      throw new Error("TOP250 需要登录：请在全局参数填写账号密码或 API Token");
+    }
+    console.error("[javdb] TOP250 失败:", msg);
+    throw error;
+  }
+}
+
 async function loadCategoryList(params) {
   var target = resolveCategoryTarget(params);
   params = await ensureApiSession(target.params);
@@ -1956,7 +2073,10 @@ if (typeof module !== "undefined" && module.exports) {
     buildJdSignature: buildJdSignature,
     extractToken: extractToken,
     loadPage: loadPage,
+    loadLatest: loadLatest,
+    loadTop250: loadTop250,
     loadDetail: loadDetail,
     loginAccount: loginAccount,
+    WidgetMetadata: typeof WidgetMetadata !== "undefined" ? WidgetMetadata : null,
   };
 }
