@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.5.5",
+  version: "1.5.6",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -2127,7 +2127,6 @@ const DMM_PROBE_WORKER_CACHE = {};
 const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
 const DMM_PROBE_BATCH_SIZE = 20;
 const DMM_PROBE_BATCH_TIMEOUT_MS = 60000;
-const RESOLVE_FULL_VIDEO_BUDGET_MS = 2500;
 const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
 const DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
 const DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
@@ -3451,29 +3450,9 @@ async function resolveFullVideo(code, lang) {
     const data = await siteGet("/api/v/resolve", { code: codes[i], lang: lang || "zh" }, { allowError: true });
     const picked = pickResolveVariant(data);
     if (picked) return picked;
-    // 明确未收录：后续变体通常也没有，避免串行空转
     if (data && data.error === "video_not_found") return null;
-    // 首个变体已有有效响应但仍无完整片：不再拖慢详情
-    if (i === 0 && data && Array.isArray(data.variants)) return null;
   }
   return null;
-}
-
-async function resolveFullVideoWithBudget(code, lang, budgetMs) {
-  if (!code) return { video: null, timedOut: false };
-  if (!budgetMs || budgetMs <= 0) {
-    return { video: await resolveFullVideo(code, lang), timedOut: false };
-  }
-  return Promise.race([
-    resolveFullVideo(code, lang).then(function (video) {
-      return { video: video, timedOut: false };
-    }),
-    new Promise(function (resolve) {
-      setTimeout(function () {
-        resolve({ video: undefined, timedOut: true });
-      }, budgetMs);
-    }),
-  ]);
 }
 
 function extractMovieId(link) {
@@ -3634,13 +3613,9 @@ async function loadDetail(link) {
   const rawCode = safeText(movie.number || "");
   const code = isValidJavCatalogCode(rawCode) ? rawCode : "";
   const siteCoverUrl = resolveDetailBackdropUrl(movie);
-  // DMM 高清只复用列表阶段缓存，详情不再发起探测
+  // DMM 高清只复用列表阶段缓存，详情不再发起探测；片源解析保持完整等待
   const dmmProbe = code ? getCachedDmmProbeCover(code) : null;
-  const fullVideoResult =
-    movie.number && !preferPreview
-      ? await resolveFullVideoWithBudget(movie.number, "zh", RESOLVE_FULL_VIDEO_BUDGET_MS)
-      : { video: null, timedOut: false };
-  const fullVideo = fullVideoResult.timedOut ? null : fullVideoResult.video;
+  const fullVideo = movie.number && !preferPreview ? await resolveFullVideo(movie.number, "zh") : null;
   const coverOptions = { siteFallback: siteCoverUrl };
   const coverBundle = code
     ? buildCatembyDetailCoverBundle(code, movie.id || movieId, dmmProbe, coverOptions)
@@ -3664,14 +3639,10 @@ async function loadDetail(link) {
   const displayTitle = code && titleText.indexOf(code) !== 0 ? code + " " + titleText : titleText;
   const summary = safeText(movie.summary || "");
 
-  const backdropPathsList =
-    dmmBackdropPaths.length > 0
-      ? dmmBackdropPaths
-      : galleryUrls.length
-        ? galleryUrls
-        : coverUrl
-          ? [coverUrl]
-          : [];
+  // 站点剧照优先，DMM 图廊作为补充，避免缓存探测图覆盖导致剧照空白
+  const backdropPathsList = compactUniqueUrls(
+    [].concat(galleryUrls || [], dmmBackdropPaths || [], coverUrl ? [coverUrl] : [])
+  ).filter(Boolean);
 
   return {
     id: code || movie.id || movieId,
@@ -3707,13 +3678,7 @@ async function loadDetail(link) {
         previewVideoUrl: previewUrl || "",
         fullVideoAvailable: !!fullUrl,
       },
-      !fullUrl && movie.number
-        ? {
-            resolveNote: fullVideoResult.timedOut
-              ? "完整片源解析超时，已先展示预告(" + movie.number + ")"
-              : "站点未收录完整片源(" + movie.number + ")",
-          }
-        : {},
+      !fullUrl && movie.number ? { resolveNote: "站点未收录完整片源(" + movie.number + ")" } : {},
       fullVideo
         ? {
             fullVideoUrl: fullVideo.sourceUrl,
