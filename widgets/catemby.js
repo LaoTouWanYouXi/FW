@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.5.6",
+  version: "1.5.7",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -3616,12 +3616,25 @@ async function loadDetail(link) {
   // DMM 高清只复用列表阶段缓存，详情不再发起探测；片源解析保持完整等待
   const dmmProbe = code ? getCachedDmmProbeCover(code) : null;
   const fullVideo = movie.number && !preferPreview ? await resolveFullVideo(movie.number, "zh") : null;
-  const coverOptions = { siteFallback: siteCoverUrl };
+  // 与列表同一套封面拼装，确保顶图继续用已探测到的高清图
   const coverBundle = code
-    ? buildCatembyDetailCoverBundle(code, movie.id || movieId, dmmProbe, coverOptions)
+    ? buildCatembyListCoverBundle(code, movie.id || movieId, dmmProbe, siteCoverUrl)
     : buildCoverBundleFromUrls(siteCoverUrl, siteCoverUrl);
-  const coverUrl = coverBundle.backdropPath || siteCoverUrl;
-  const posterUrl = coverBundle.posterPath || coverBundle.detailPoster || resolveDetailPosterUrl(movie);
+  const probeBackdrop =
+    dmmProbe && dmmProbe.backdropUrl && !isInvalidCoverTarget(dmmProbe.backdropUrl)
+      ? String(dmmProbe.backdropUrl).trim()
+      : "";
+  const probePoster =
+    dmmProbe && dmmProbe.posterUrl && !isInvalidCoverTarget(dmmProbe.posterUrl)
+      ? String(dmmProbe.posterUrl).trim()
+      : "";
+  const coverUrl = probeBackdrop || coverBundle.backdropPath || probePoster || siteCoverUrl || "";
+  const posterUrl =
+    probePoster ||
+    coverBundle.posterPath ||
+    coverBundle.detailPoster ||
+    coverUrl ||
+    resolveDetailPosterUrl(movie);
   const dmmBackdropPaths = code ? buildDetailBackdropPaths(code, dmmProbe) : [];
   const galleryUrls = collectGalleryUrls(movie);
   const meta = parseDetailMeta(movie);
@@ -3639,9 +3652,9 @@ async function loadDetail(link) {
   const displayTitle = code && titleText.indexOf(code) !== 0 ? code + " " + titleText : titleText;
   const summary = safeText(movie.summary || "");
 
-  // 站点剧照优先，DMM 图廊作为补充，避免缓存探测图覆盖导致剧照空白
+  // 顶图/首张必须是高清封面；站点剧照放后面，避免客户端取 backdropPaths[0] 时回落站点图
   const backdropPathsList = compactUniqueUrls(
-    [].concat(galleryUrls || [], dmmBackdropPaths || [], coverUrl ? [coverUrl] : [])
+    [].concat(coverUrl ? [coverUrl] : [], dmmBackdropPaths || [], galleryUrls || [])
   ).filter(Boolean);
 
   return {
@@ -3661,7 +3674,7 @@ async function loadDetail(link) {
     backdropPath: coverUrl,
     posterPath: posterUrl,
     detailPoster: posterUrl,
-    coverUrl: coverBundle.coverUrl || coverUrl,
+    coverUrl: coverUrl || coverBundle.coverUrl || siteCoverUrl,
     backdropPaths: backdropPathsList,
     genreItems: meta.genreItems.length ? meta.genreItems : undefined,
     peoples: meta.peoples.length ? meta.peoples : undefined,
