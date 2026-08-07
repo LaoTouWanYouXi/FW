@@ -1,6 +1,7 @@
 /**
- * JavDB ForwardWidget 模块 v3 — 仅分类（演员/系列/标签/片商）
- * 管道：CategoryPath → PageFetcher → CardScanner/DetailScanner
+ * JavDB ForwardWidget 模块 v4 — 仅分类（演员/系列/标签/片商）
+ * 管道：CategoryPath → jdforrepam API（绕过 CF）→ VideoItem
+ * 登录：POST /api/v1/sessions（账号密码 → JWT）
  */
 
 /* @category-options-begin — 由 build-javdb-categories.js 生成，勿手改 */
@@ -891,29 +892,40 @@ var JAVDB_MAKER_OPTIONS = [
 
 /* @category-options-end */
 
+
 /**
- * JavDB ForwardWidget — 分类浏览（演员 / 系列 / 标签 / 片商）
+ * JavDB ForwardWidget v4 — API 数据源（绕过 CF HTML 验证）
  *
- * 全新管道：CategoryPath → PageFetcher → CardScanner / DetailScanner → VideoItem
- * 已移除：排行榜 / TOP250 / 最新 / 登录OCR / DMM探测批处理 / 搜索顶栏
+ * 管道：CategoryPath → jdforrepam API → VideoItem
+ * 登录：POST /v1/sessions（账号密码 → JWT）
  */
 
 /* ========================= Config ========================= */
 
-var JAVDB_DEFAULT_BASE = "https://javdb.com";
-var JAVDB_BROWSE_PROXY = "https://move.laotou.ccwu.cc";
-var JAVDB_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-var JAVDB_MOBILE_UA =
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
-
+var API_BASE = "https://jdforrepam.com/api";
+var JAVDB_SITE = "https://javdb.com";
+var JD_SIG_SALT = "lpw6vgqzsp";
+var JD_SIG_KEY =
+  "71cf27bb3c0bcdf207b64abecddc970098c7421ee7203b9cdae54478478a199e7d5a6e1a57691123c1a931c057842fb73ba3b3c83bcd69c17ccf174081e3d8aa";
 var SEARCH_PREFIX = "search:";
 var ID_TITLE_SEP = "~";
-var SORT_MAP = { published: "0", score: "1", fav: "2" };
-var COOKIE_PARAM_KEYS = ["cookie", "Cookie", "sessionCookie", "javdbCookie", "javdb_cookie"];
-var GLOBAL_KEYS = ["baseUrl", "locale", "cookie", "userAgent"];
-var HTML_FETCH_CACHE = {};
-var HTML_FETCH_CACHE_TTL_MS = 3 * 60 * 1000;
+var CATEGORY_KIND_CODE = { actors: "a", makers: "m", series: "s", tags: "t", directors: "d" };
+var SORT_API_MAP = {
+  published: { sort_by: "release", order_by: "desc" },
+  score: { sort_by: "score", order_by: "desc" },
+  fav: { sort_by: "fav", order_by: "desc" },
+};
+var SEARCH_SORT_MAP = { published: "release", score: "score", fav: "fav" };
+var GLOBAL_KEYS = ["locale", "email", "password", "apiToken"];
+var DEVICE_DEFAULTS = {
+  device_name: "iPhone",
+  device_model: "iPhone15,2",
+  platform: "ios",
+  system_version: "17.0",
+  app_version: "1.9.8",
+  app_version_number: "198",
+  app_channel: "AppStore",
+};
 
 /* ========================= WidgetMetadata ========================= */
 
@@ -955,20 +967,13 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "3.2.0",
+  version: "4.0.0",
   requiredVersion: "0.0.1",
-  description:
-    "JavDB 分类浏览；优先 WebView 无感直连（同 jable），失败再云端过验证；Cookie 须配对 UA",
+  description: "JavDB 分类浏览（API 直连，绕过 CF）；支持账号密码登录",
   author: "老头",
   site: "https://github.com/InchStudio/ForwardWidgets",
   detailCacheDuration: 3600,
   globalParams: [
-    {
-      name: "baseUrl",
-      title: "站点地址",
-      type: "input",
-      value: JAVDB_DEFAULT_BASE,
-    },
     {
       name: "locale",
       title: "语言",
@@ -981,19 +986,24 @@ WidgetMetadata = {
       value: "zh",
     },
     {
-      name: "cookie",
-      title: "Cookie（可选，须配对 UA）",
+      name: "email",
+      title: "账号（邮箱）",
       type: "input",
-      description:
-        "不要只贴 cf_clearance。须从同一浏览器复制【整段 Cookie】，并填写下方完全相同的 User-Agent。只贴 Cookie 不填 UA 会立刻被废（绑定 IP+UA+TLS）。优先可留空，让 WebView 无感直连",
+      description: "JavDB App 账号，用于 API 登录获取 JWT（可选；浏览列表可不登录）",
       value: "",
     },
     {
-      name: "userAgent",
-      title: "User-Agent（有 Cookie 时必填）",
+      name: "password",
+      title: "密码",
       type: "input",
-      description:
-        "与复制 Cookie 的浏览器 UA 必须逐字相同。iOS Safari 可在「设置→Safari→高级→网站数据」旁用书签脚本，或电脑远程调试复制。缺省时脚本不会用 Cookie 直连，避免废掉 clearance",
+      description: "与账号一并填写后自动登录；Token 会缓存到本地",
+      value: "",
+    },
+    {
+      name: "apiToken",
+      title: "API Token（可选）",
+      type: "input",
+      description: "已有 JWT 可直接粘贴；留空则用账号密码登录",
       value: "",
     },
   ],
@@ -1002,7 +1012,6 @@ WidgetMetadata = {
       id: "actors",
       title: "演员",
       description: "按演员分类浏览影片",
-      requiresWebView: true,
       functionName: "loadPage",
       cacheDuration: 3600,
       params: categoryParams("peopleId", "选择演员", JAVDB_ACTOR_OPTIONS),
@@ -1011,7 +1020,6 @@ WidgetMetadata = {
       id: "series",
       title: "系列",
       description: "按系列分类浏览影片",
-      requiresWebView: true,
       functionName: "loadPage",
       cacheDuration: 3600,
       params: categoryParams("genreId", "选择系列", JAVDB_SERIES_OPTIONS),
@@ -1020,7 +1028,6 @@ WidgetMetadata = {
       id: "tags",
       title: "标签",
       description: "按标签浏览影片",
-      requiresWebView: true,
       functionName: "loadPage",
       cacheDuration: 3600,
       params: categoryParams("genreId", "选择标签", JAVDB_TAG_OPTIONS),
@@ -1029,7 +1036,6 @@ WidgetMetadata = {
       id: "makers",
       title: "片商",
       description: "按片商浏览影片",
-      requiresWebView: true,
       functionName: "loadPage",
       cacheDuration: 3600,
       params: categoryParams("genreId", "选择片商", JAVDB_MAKER_OPTIONS),
@@ -1037,7 +1043,7 @@ WidgetMetadata = {
   ],
 };
 
-/* ========================= Params / Storage ========================= */
+/* ========================= Storage / Params ========================= */
 
 function readStore(key) {
   try {
@@ -1053,138 +1059,22 @@ function writeStore(key, value) {
   } catch (e) {}
 }
 
-function pickRawCookie(params) {
-  params = params || {};
-  for (var i = 0; i < COOKIE_PARAM_KEYS.length; i++) {
-    var v = params[COOKIE_PARAM_KEYS[i]];
-    if (v !== undefined && v !== null && String(v).trim() !== "") return String(v);
-  }
-  try {
-    var nested = params.globalParams || params.global || null;
-    if (nested && typeof nested === "object") {
-      for (var j = 0; j < COOKIE_PARAM_KEYS.length; j++) {
-        var nv = nested[COOKIE_PARAM_KEYS[j]];
-        if (nv !== undefined && nv !== null && String(nv).trim() !== "") return String(nv);
-      }
-    }
-  } catch (eNest) {}
-  var stored = readStore("javdb.global.cookie") || readStore("javdb.global.sessionCookie");
-  return stored ? String(stored) : "";
-}
-
-function looksLikeBareSession(text) {
-  var s = String(text || "").trim();
-  if (!s || s.indexOf("=") >= 0 || s.indexOf(";") >= 0) return false;
-  return s.length >= 40 && /^[A-Za-z0-9_-]+$/.test(s);
-}
-
-function normalizePastedCookie(raw) {
-  var text = String(raw || "").trim();
-  if (!text) return "";
-  if (
-    (text.charAt(0) === '"' && text.charAt(text.length - 1) === '"') ||
-    (text.charAt(0) === "'" && text.charAt(text.length - 1) === "'")
-  ) {
-    text = text.slice(1, -1).trim();
-  }
-  if (looksLikeBareSession(text)) return "_jdb_session=" + text;
-  // 支持浏览器复制成 a=1&b=2
-  if (text.indexOf(";") < 0 && text.indexOf("&") >= 0 && text.indexOf("=") >= 0) {
-    text = text.split("&").join("; ");
-  }
-  var parts = text.split(/;\s*/);
-  var map = {};
-  var order = [];
-  for (var i = 0; i < parts.length; i++) {
-    var p = parts[i].trim();
-    if (!p || p.indexOf("=") < 0) continue;
-    var name = p.slice(0, p.indexOf("=")).trim();
-    var value = p.slice(p.indexOf("=") + 1).trim();
-    if (!name) continue;
-    if (!map[name]) order.push(name);
-    map[name] = value;
-  }
-  return order
-    .map(function (n) {
-      return n + "=" + map[n];
-    })
-    .join("; ");
-}
-
-function getCookieValue(cookie, name) {
-  var re = new RegExp("(?:^|;\\s*)" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "=([^;]*)", "i");
-  var m = String(cookie || "").match(re);
-  return m ? m[1] : "";
-}
-
-function assembleCookie(params, raw) {
-  params = params || {};
-  var cookie = normalizePastedCookie(raw || pickRawCookie(params));
-  var map = {};
-  var order = [];
-  function put(name, value) {
-    if (!name || value === undefined || value === null || String(value) === "") return;
-    if (!map[name]) order.push(name);
-    map[name] = String(value);
-  }
-  String(cookie || "")
-    .split(/;\s*/)
-    .forEach(function (chunk) {
-      if (!chunk || chunk.indexOf("=") < 0) return;
-      put(chunk.slice(0, chunk.indexOf("=")).trim(), chunk.slice(chunk.indexOf("=") + 1).trim());
-    });
-  put("locale", String(params.locale || "zh"));
-  put("over18", "1");
-  put("theme", map.theme || "auto");
-  return order
-    .map(function (n) {
-      return n + "=" + map[n];
-    })
-    .join("; ");
-}
-
-function describeCookie(cookie) {
-  var c = normalizePastedCookie(cookie);
-  if (!c) return "未读到Cookie";
-  return (
-    "长度=" +
-    c.length +
-    ", cf_clearance=" +
-    (getCookieValue(c, "cf_clearance") ? "有" : "无") +
-    ", _jdb_session=" +
-    (getCookieValue(c, "_jdb_session") ? "有" : "无")
-  );
-}
-
 function syncParams(params) {
   params = params || {};
-  if (!params.cookie || String(params.cookie).trim() === "") {
-    var picked = pickRawCookie(params);
-    if (picked) params.cookie = picked;
-  }
   var out = {};
   for (var i = 0; i < GLOBAL_KEYS.length; i++) {
     var key = GLOBAL_KEYS[i];
     var val = params[key];
     if (val !== undefined && val !== null && String(val).trim() !== "") {
-      out[key] = key === "cookie" ? normalizePastedCookie(val) : String(val).trim();
+      out[key] = String(val).trim();
       writeStore("javdb.global." + key, out[key]);
     } else {
       var stored = readStore("javdb.global." + key);
       if (stored) out[key] = String(stored);
     }
   }
-  if (!out.cookie) {
-    var alt = pickRawCookie(params);
-    if (alt) out.cookie = normalizePastedCookie(alt);
-  }
-  if (!out.baseUrl) out.baseUrl = JAVDB_DEFAULT_BASE;
   if (!out.locale) out.locale = "zh";
   return Object.assign({}, params, out);
-}
-
-function siteBase(params) {
-  return String((params && params.baseUrl) || JAVDB_DEFAULT_BASE).replace(/\/+$/, "") || JAVDB_DEFAULT_BASE;
 }
 
 /* ========================= CategoryPath ========================= */
@@ -1227,21 +1117,8 @@ function isLibraryIndex(path) {
   );
 }
 
-function applySort(path, sortBy) {
-  if (!path || path.indexOf(SEARCH_PREFIX) === 0) return path;
-  var raw = String(sortBy || "published");
-  var withDownload = /_download$/.test(raw);
-  var key = withDownload ? raw.replace(/_download$/, "") : raw;
-  var sortType = SORT_MAP[key];
-  if (sortType === undefined) return path;
-  var out = path + (path.indexOf("?") >= 0 ? "&" : "?") + "sort_type=" + sortType;
-  if (withDownload) out += "&f=download";
-  return out;
-}
-
 /**
- * 将模块参数解析为可抓取路径或 search: 关键词。
- * 支持：peopleId / genreId / item / series: / maker: / search: / 绝对路径
+ * 解析模块参数 → { kind, itemId, keyword, magnetOnly, params }
  */
 function resolveCategoryTarget(params) {
   params = syncParams(params || {});
@@ -1264,153 +1141,277 @@ function resolveCategoryTarget(params) {
   if (people.title) params.categoryTitle = people.title;
   if (genre.title) params.categoryTitle = genre.title;
 
+  var sortRaw = String(params.sort_by || "published");
+  var magnetOnly = /_download$/.test(sortRaw);
+  var sortKey = magnetOnly ? sortRaw.replace(/_download$/, "") : sortRaw;
+  params.sort_by = SORT_API_MAP[sortKey] ? sortKey : "published";
+
   var ref = genre.id || people.id || "";
-  if (!ref) return { path: "", keyword: "", params: params };
+  if (!ref) return { kind: "", itemId: "", keyword: "", magnetOnly: magnetOnly, params: params };
 
   if (ref.indexOf(SEARCH_PREFIX) === 0) {
-    return { path: "", keyword: ref.slice(SEARCH_PREFIX.length).trim(), params: params };
+    return {
+      kind: "search",
+      itemId: "",
+      keyword: ref.slice(SEARCH_PREFIX.length).trim(),
+      magnetOnly: magnetOnly,
+      params: params,
+    };
   }
+
   if (ref.indexOf("series:") === 0) {
-    return { path: "/series/" + ref.slice(7), keyword: "", params: params };
+    return { kind: "series", itemId: ref.slice(7), keyword: "", magnetOnly: magnetOnly, params: params };
   }
   if (ref.indexOf("maker:") === 0) {
-    return { path: "/makers/" + ref.slice(6), keyword: "", params: params };
+    return { kind: "makers", itemId: ref.slice(6), keyword: "", magnetOnly: magnetOnly, params: params };
   }
   if (ref.indexOf("/actors/") === 0 || (people.id && !genre.id)) {
     var actorId = String(people.id || ref).replace(/^\/actors\//, "").split(/[/?#]/)[0];
-    return { path: actorId ? "/actors/" + actorId : "", keyword: "", params: params };
+    return { kind: "actors", itemId: actorId, keyword: "", magnetOnly: magnetOnly, params: params };
   }
   if (ref.indexOf("/series/") === 0 || ref.indexOf("series/") === 0) {
-    return { path: normalizePath(ref), keyword: "", params: params };
+    var sid = normalizePath(ref).replace(/^\/series\//, "").split(/[/?#]/)[0];
+    return { kind: "series", itemId: sid, keyword: "", magnetOnly: magnetOnly, params: params };
   }
   if (ref.indexOf("/makers/") === 0 || ref.indexOf("makers/") === 0) {
-    return { path: normalizePath(ref), keyword: "", params: params };
+    var mid = normalizePath(ref).replace(/^\/makers\//, "").split(/[/?#]/)[0];
+    return { kind: "makers", itemId: mid, keyword: "", magnetOnly: magnetOnly, params: params };
   }
   if (ref.indexOf("/tags") === 0 || ref.indexOf("tags?") === 0 || ref.indexOf("tags/") === 0) {
-    return { path: normalizePath(ref.charAt(0) === "/" ? ref : "/" + ref), keyword: "", params: params };
+    var tPath = normalizePath(ref.charAt(0) === "/" ? ref : "/" + ref);
+    var qMatch = tPath.match(/[?&](?:c\d+|q)=([^&]+)/i);
+    var tagId = qMatch ? decodeURIComponent(qMatch[1]) : tPath.replace(/^\/tags\/?/, "");
+    if (!tagId || isLibraryIndex(tPath)) {
+      return { kind: "tags", itemId: "", keyword: "", magnetOnly: magnetOnly, params: params };
+    }
+    return { kind: "tags", itemId: tagId, keyword: "", magnetOnly: magnetOnly, params: params };
   }
-  if (ref.charAt(0) === "/") {
-    return { path: normalizePath(ref), keyword: "", params: params };
+  if (people.id) {
+    return {
+      kind: "actors",
+      itemId: people.id.split(/[/?#]/)[0],
+      keyword: "",
+      magnetOnly: magnetOnly,
+      params: params,
+    };
   }
-  // 裸 ID：按来源模块推断
-  if (people.id) return { path: "/actors/" + people.id.split(/[/?#]/)[0], keyword: "", params: params };
-  return { path: normalizePath("/" + ref), keyword: "", params: params };
+  // 裸路径：按 genre 模块推断（series/makers/tags 共用 genreId）
+  var bare = ref.replace(/^\//, "");
+  if (params.moduleId === "series" || String(params.category_kind || "") === "series") {
+    return { kind: "series", itemId: bare, keyword: "", magnetOnly: magnetOnly, params: params };
+  }
+  if (params.moduleId === "makers" || String(params.category_kind || "") === "makers") {
+    return { kind: "makers", itemId: bare, keyword: "", magnetOnly: magnetOnly, params: params };
+  }
+  if (params.moduleId === "tags" || String(params.category_kind || "") === "tags") {
+    return { kind: "tags", itemId: bare, keyword: "", magnetOnly: magnetOnly, params: params };
+  }
+  return { kind: "tags", itemId: bare, keyword: "", magnetOnly: magnetOnly, params: params };
 }
 
 function categoryIdFromPath(path, title) {
   path = normalizePath(path);
   var bare = path.split("?")[0];
-  var query = path.indexOf("?") >= 0 ? path.slice(path.indexOf("?")) : "";
-  // /tags 目录页无查询才算库首页；/tags?c2=1 是具体标签
-  if (!path || (isLibraryIndex(bare) && !(bare === "/tags" && query))) {
-    return joinIdTitle(SEARCH_PREFIX + (title || bare), "");
-  }
+  if (!path || isLibraryIndex(bare)) return joinIdTitle(SEARCH_PREFIX + (title || bare), "");
   var id = "";
-  if (bare.indexOf("/actors/") === 0) id = bare.split("/").pop();
-  else if (bare.indexOf("/series/") === 0) id = "series:" + bare.split("/").pop();
-  else if (bare.indexOf("/makers/") === 0) id = "maker:" + bare.split("/").filter(Boolean).pop();
+  if (bare.indexOf("/actors/") === 0) id = bare;
+  else if (bare.indexOf("/series/") === 0) id = bare;
+  else if (bare.indexOf("/makers/") === 0) id = bare;
   else if (bare.indexOf("/tags") === 0) id = path.replace(/^\//, "");
+  else if (bare.indexOf("/v/") === 0) id = bare;
   else id = path.replace(/^\//, "");
   return joinIdTitle(id, title);
 }
 
-function buildPageUrl(base, path, params) {
-  params = params || {};
-  path = String(path || "/");
-  if (path.indexOf("http") === 0) {
-    var u = path;
-    if (params.page && Number(params.page) > 1) {
-      u += (u.indexOf("?") >= 0 ? "&" : "?") + "page=" + params.page;
+/* ========================= JD Signature / HTTP ========================= */
+
+function utf8ToBinary(text) {
+  var raw = String(text || "");
+  if (typeof encodeURIComponent === "function") {
+    try {
+      if (typeof unescape === "function") return unescape(encodeURIComponent(raw));
+    } catch (e) {}
+  }
+  var out = "";
+  for (var i = 0; i < raw.length; i++) {
+    var c = raw.charCodeAt(i);
+    if (c < 128) out += String.fromCharCode(c);
+    else if (c < 2048) out += String.fromCharCode(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+    else if (c < 0xd800 || c >= 0xe000) {
+      out += String.fromCharCode(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+    } else {
+      i++;
+      var c2 = raw.charCodeAt(i);
+      var u = 0x10000 + (((c & 0x3ff) << 10) | (c2 & 0x3ff));
+      out += String.fromCharCode(
+        0xf0 | (u >> 18),
+        0x80 | ((u >> 12) & 0x3f),
+        0x80 | ((u >> 6) & 0x3f),
+        0x80 | (u & 0x3f)
+      );
     }
-    return u;
   }
-  var url = base.replace(/\/+$/, "") + (path.charAt(0) === "/" ? path : "/" + path);
-  var page = Number(params.page || 1);
-  if (page > 1) url += (url.indexOf("?") >= 0 ? "&" : "?") + "page=" + page;
-  var locale = String(params.locale || "zh");
-  if (locale && locale !== "zh") url += (url.indexOf("?") >= 0 ? "&" : "?") + "locale=" + encodeURIComponent(locale);
-  return url;
+  return out;
 }
 
-function searchUrl(base, keyword, params) {
-  var q = String(keyword || "").trim();
-  var path = "/search?q=" + encodeURIComponent(q) + "&f=all";
-  return buildPageUrl(base, path, params);
-}
-
-/* ========================= PageFetcher =========================
- * jable「无感」：站点风控弱 + 普通 Widget.http 即可。
- * javdb：Managed Challenge + cf_clearance 绑定 IP+UA+TLS。
- *   - 只贴 Cookie、脚本改用默认 UA → 必废
- *   - App URLSession TLS ≠ Safari → 即便 Cookie+UA 也可能 403
- * 策略：
- *   1) WebView 无感直连（不手动塞 Cookie，靠 requiresWebView 会话）
- *   2) 云端 /browse 真实 Chromium 过验证
- *   3) Cookie + 用户提供的同源 UA 锁定直连（二者缺一不可）
- */
-
-function resolveUserAgent(params, mode) {
-  var custom = String((params && params.userAgent) || "").trim();
-  if (custom) return custom;
-  if (mode === "cookie") return ""; // 有 Cookie 却无 UA：禁止猜 UA
-  return JAVDB_MOBILE_UA; // WebView 无感：贴近手机
-}
-
-function requestHeaders(params, cookie, mode) {
-  var base = siteBase(params);
-  var ua = resolveUserAgent(params, mode);
-  var headers = {
-    "User-Agent": ua || JAVDB_MOBILE_UA,
-    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    Referer: base + "/",
-  };
-  // 仅在「显式 Cookie 模式」写入 Cookie；WebView 模式交给 App 会话，避免覆盖 jar
-  if (mode === "cookie" && cookie) headers.Cookie = String(cookie);
-  return headers;
-}
-
-function isChallengeHtml(html) {
-  var text = String(html || "");
-  if (!text) return true;
-  if (text.length > 20000 && /movie-list|video-title|\/v\/[A-Za-z0-9]+/i.test(text)) return false;
-  if (/just a moment|請稍候|请稍候|cf-browser-verification|challenge-platform/i.test(text) && text.length < 25000) {
-    return true;
-  }
-  if (/banned your access|禁止了你的訪問|禁止了你的访问/i.test(text) && text.length < 5000) return true;
-  return false;
-}
-
-function isUsableListHtml(html) {
-  var text = String(html || "");
-  if (!text || text.length < 800) return false;
-  if (isChallengeHtml(text)) return false;
-  return /movie-list|video-title/i.test(text) || /href=["']\/v\/[A-Za-z0-9]+["']/i.test(text);
-}
-
-function isForbiddenError(err) {
-  var msg = String((err && err.message) || err || "");
-  return /unacceptable:\s*403|\b403\b|banned your access|Access Denied|站点拦截/i.test(msg);
-}
-
-function readHtmlCache(url) {
-  try {
-    var hit = HTML_FETCH_CACHE[url];
-    if (!hit) return "";
-    if (Date.now() - hit.at > HTML_FETCH_CACHE_TTL_MS) {
-      delete HTML_FETCH_CACHE[url];
-      return "";
+function md5BinaryHex(s) {
+  var hc = "0123456789abcdef";
+  function rh(n) {
+    var ss = "";
+    for (var j = 0; j <= 3; j++) {
+      ss += hc.charAt((n >> (j * 8 + 4)) & 0x0f) + hc.charAt((n >> (j * 8)) & 0x0f);
     }
-    return hit.html || "";
-  } catch (e) {
-    return "";
+    return ss;
   }
+  function ad(x, y) {
+    var l = (x & 0xffff) + (y & 0xffff);
+    var m = (x >> 16) + (y >> 16) + (l >> 16);
+    return (m << 16) | (l & 0xffff);
+  }
+  function rl(n, c) {
+    return (n << c) | (n >>> (32 - c));
+  }
+  function cm(q, a, b, x, t, s) {
+    return ad(rl(ad(ad(a, q), ad(x, t)), s), b);
+  }
+  function ff(a, b, c, d, x, s, t) {
+    return cm((b & c) | (~b & d), a, b, x, t, s);
+  }
+  function gg(a, b, c, d, x, s, t) {
+    return cm((b & d) | (c & ~d), a, b, x, t, s);
+  }
+  function hh(a, b, c, d, x, s, t) {
+    return cm(b ^ c ^ d, a, b, x, t, s);
+  }
+  function ii(a, b, c, d, x, s, t) {
+    return cm(c ^ (b | ~d), a, b, x, t, s);
+  }
+  function sb(x, len) {
+    var N = (((len + 8) >> 6) + 1) * 16;
+    var bl = new Array(N);
+    for (var i0 = 0; i0 < N; i0++) bl[i0] = 0;
+    var i;
+    for (i = 0; i < len; i++) bl[i >> 2] |= x.charCodeAt(i) << ((i % 4) * 8);
+    bl[i >> 2] |= 0x80 << ((i % 4) * 8);
+    bl[N - 2] = len * 8;
+    bl[N - 1] = len >>> 29;
+    return bl;
+  }
+  var a = 1732584193;
+  var b = -271733879;
+  var c = -1732584194;
+  var d = 271733878;
+  var x = sb(s, s.length);
+  for (var i = 0; i < x.length; i += 16) {
+    var oa = a,
+      ob = b,
+      oc = c,
+      od = d;
+    a = ff(a, b, c, d, x[i + 0], 7, -680876936);
+    d = ff(d, a, b, c, x[i + 1], 12, -389564586);
+    c = ff(c, d, a, b, x[i + 2], 17, 606105819);
+    b = ff(b, c, d, a, x[i + 3], 22, -1044525330);
+    a = ff(a, b, c, d, x[i + 4], 7, -176418897);
+    d = ff(d, a, b, c, x[i + 5], 12, 1200080426);
+    c = ff(c, d, a, b, x[i + 6], 17, -1473231341);
+    b = ff(b, c, d, a, x[i + 7], 22, -45705983);
+    a = ff(a, b, c, d, x[i + 8], 7, 1770035416);
+    d = ff(d, a, b, c, x[i + 9], 12, -1958414417);
+    c = ff(c, d, a, b, x[i + 10], 17, -42063);
+    b = ff(b, c, d, a, x[i + 11], 22, -1990404162);
+    a = ff(a, b, c, d, x[i + 12], 7, 1804603682);
+    d = ff(d, a, b, c, x[i + 13], 12, -40341101);
+    c = ff(c, d, a, b, x[i + 14], 17, -1502002290);
+    b = ff(b, c, d, a, x[i + 15], 22, 1236535329);
+    a = gg(a, b, c, d, x[i + 1], 5, -165796510);
+    d = gg(d, a, b, c, x[i + 6], 9, -1069501632);
+    c = gg(c, d, a, b, x[i + 11], 14, 643717713);
+    b = gg(b, c, d, a, x[i + 0], 20, -373897302);
+    a = gg(a, b, c, d, x[i + 5], 5, -701558691);
+    d = gg(d, a, b, c, x[i + 10], 9, 38016083);
+    c = gg(c, d, a, b, x[i + 15], 14, -660478335);
+    b = gg(b, c, d, a, x[i + 4], 20, -405537848);
+    a = gg(a, b, c, d, x[i + 9], 5, 568446438);
+    d = gg(d, a, b, c, x[i + 14], 9, -1019803690);
+    c = gg(c, d, a, b, x[i + 3], 14, -187363961);
+    b = gg(b, c, d, a, x[i + 8], 20, 1163531501);
+    a = gg(a, b, c, d, x[i + 13], 5, -1444681467);
+    d = gg(d, a, b, c, x[i + 2], 9, -51403784);
+    c = gg(c, d, a, b, x[i + 7], 14, 1735328473);
+    b = gg(b, c, d, a, x[i + 12], 20, -1926607734);
+    a = hh(a, b, c, d, x[i + 5], 4, -378558);
+    d = hh(d, a, b, c, x[i + 8], 11, -2022574463);
+    c = hh(c, d, a, b, x[i + 11], 16, 1839030562);
+    b = hh(b, c, d, a, x[i + 14], 23, -35309556);
+    a = hh(a, b, c, d, x[i + 1], 4, -1530992060);
+    d = hh(d, a, b, c, x[i + 4], 11, 1272893353);
+    c = hh(c, d, a, b, x[i + 7], 16, -155497632);
+    b = hh(b, c, d, a, x[i + 10], 23, -1094730640);
+    a = hh(a, b, c, d, x[i + 13], 4, 681279174);
+    d = hh(d, a, b, c, x[i + 0], 11, -358537222);
+    c = hh(c, d, a, b, x[i + 3], 16, -722521979);
+    b = hh(b, c, d, a, x[i + 6], 23, 76029189);
+    a = hh(a, b, c, d, x[i + 9], 4, -640364487);
+    d = hh(d, a, b, c, x[i + 12], 11, -421815835);
+    c = hh(c, d, a, b, x[i + 15], 16, 530742520);
+    b = hh(b, c, d, a, x[i + 2], 23, -995338651);
+    a = ii(a, b, c, d, x[i + 0], 6, -198630844);
+    d = ii(d, a, b, c, x[i + 7], 10, 1126891415);
+    c = ii(c, d, a, b, x[i + 14], 15, -1416354905);
+    b = ii(b, c, d, a, x[i + 5], 21, -57434055);
+    a = ii(a, b, c, d, x[i + 12], 6, 1700485571);
+    d = ii(d, a, b, c, x[i + 3], 10, -1894986606);
+    c = ii(c, d, a, b, x[i + 10], 15, -1051523);
+    b = ii(b, c, d, a, x[i + 1], 21, -2054922799);
+    a = ii(a, b, c, d, x[i + 8], 6, 1873313359);
+    d = ii(d, a, b, c, x[i + 15], 10, -30611744);
+    c = ii(c, d, a, b, x[i + 6], 15, -1560198380);
+    b = ii(b, c, d, a, x[i + 13], 21, 1309151649);
+    a = ii(a, b, c, d, x[i + 4], 6, -145523070);
+    d = ii(d, a, b, c, x[i + 11], 10, -1120210379);
+    c = ii(c, d, a, b, x[i + 2], 15, 718787259);
+    b = ii(b, c, d, a, x[i + 9], 21, -343485551);
+    a = ad(a, oa);
+    b = ad(b, ob);
+    c = ad(c, oc);
+    d = ad(d, od);
+  }
+  return rh(a) + rh(b) + rh(c) + rh(d);
 }
 
-function writeHtmlCache(url, html) {
-  try {
-    HTML_FETCH_CACHE[url] = { at: Date.now(), html: html };
-  } catch (e) {}
+function md5Hex(input, asciiOnly) {
+  var text = String(input || "");
+  return md5BinaryHex(asciiOnly ? text : utf8ToBinary(text));
+}
+
+function buildJdSignature() {
+  var ts = Math.floor(Date.now() / 1000).toString();
+  return ts + "." + JD_SIG_SALT + "." + md5Hex(ts + JD_SIG_KEY, true);
+}
+
+function sanitizeQuery(query) {
+  if (!query) return {};
+  var out = {};
+  Object.keys(query).forEach(function (key) {
+    var val = query[key];
+    if (val === undefined || val === null || val === "") return;
+    if (typeof val === "object") return;
+    out[key] = val;
+  });
+  return out;
+}
+
+function buildQueryUrl(base, query) {
+  if (!query) return base;
+  var parts = [];
+  Object.keys(query).forEach(function (key) {
+    var val = query[key];
+    if (val !== undefined && val !== null && val !== "") {
+      parts.push(encodeURIComponent(key) + "=" + encodeURIComponent(String(val)));
+    }
+  });
+  if (!parts.length) return base;
+  return base + (base.indexOf("?") >= 0 ? "&" : "?") + parts.join("&");
 }
 
 function getHeaderCI(res, name) {
@@ -1432,478 +1433,399 @@ function getHeaderCI(res, name) {
   return "";
 }
 
-function browseProxyBase(params) {
-  var custom = String((params && params.htmlProxyWorker) || readStore("javdb.global.htmlProxyWorker") || "").trim();
-  return (custom || JAVDB_BROWSE_PROXY).replace(/\/+$/, "");
+function apiHeaders(params, extra) {
+  params = params || {};
+  var headers = {
+    accept: "application/json",
+    "user-agent": "Mozilla/5.0",
+    jdsignature: buildJdSignature(),
+  };
+  var token = String(params.apiToken || readStore("javdb.global.apiToken") || "").trim();
+  if (token) {
+    if (/^bearer\s+/i.test(token)) headers.Authorization = token;
+    else headers.Authorization = "Bearer " + token;
+  }
+  return Object.assign(headers, extra || {});
 }
 
-function cookieHintMessage(params, detail) {
-  var diag = "";
+async function widgetHttp(method, url, options) {
+  options = options || {};
+  var retry = options.retry || 0;
+  var headerFactory = options.headerFactory;
   try {
-    diag = describeCookie(assembleCookie(params, pickRawCookie(params)));
-  } catch (e) {
-    diag = "Cookie诊断失败";
+    var req = { headers: headerFactory(), allow_redirects: true, timeout: options.timeout || 30000 };
+    if (options.body !== undefined) {
+      req.body = typeof options.body === "string" ? options.body : JSON.stringify(options.body);
+    }
+    var resp;
+    if (method === "POST") {
+      if (typeof Widget.http.post === "function") {
+        resp = await Widget.http.post(url, req);
+      } else if (typeof Widget.http.request === "function") {
+        resp = await Widget.http.request(url, Object.assign({ method: "POST" }, req));
+      } else {
+        resp = await Widget.http.get(url, Object.assign({}, req, { method: "POST" }));
+      }
+    } else {
+      resp = await Widget.http.get(url, req);
+    }
+    var status = resp && (resp.status || resp.statusCode);
+    if (status && Number(status) >= 400) {
+      var action = "";
+      try {
+        var body = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
+        action = (body && (body.action || body.message)) || "";
+      } catch (e) {}
+      if (retry < 2 && (Number(status) === 400 || /signature|expired|签名/i.test(String(action)))) {
+        return widgetHttp(method, url, Object.assign({}, options, { retry: retry + 1 }));
+      }
+      throw new Error("HTTP " + status + (action ? " (" + action + ")" : "") + ": " + url);
+    }
+    return resp;
+  } catch (error) {
+    var msg = String((error && error.message) || error || "");
+    if (retry < 2 && /400|403|unacceptable|signature|expired|签名/i.test(msg)) {
+      return widgetHttp(method, url, Object.assign({}, options, { retry: retry + 1 }));
+    }
+    throw error;
   }
-  var ua = String((params && params.userAgent) || "").trim();
-  return (
-    "JavDB 无法像 jable 那样纯 HTTP 无感过验证（CF 校验 TLS 指纹）。" +
-    "当前：" +
-    diag +
-    ", UA=" +
-    (ua ? "已填" : "未填") +
-    (detail ? "；" + detail : "") +
-    "。建议：①留空 Cookie，依赖 WebView/云端过验证；②若手贴 Cookie，必须同时粘贴同源 User-Agent（只贴 cf_clearance 无效）。"
-  );
 }
 
-function acceptHtmlBody(body) {
-  if (isUsableListHtml(body)) return true;
-  if (!isChallengeHtml(body) && body && body.length > 2000) return true;
-  return false;
-}
-
-/**
- * 1) WebView 无感：不塞 Cookie，贴近 jable 的裸请求。
- */
-async function fetchViaWebViewNative(url, params) {
-  var res = await Widget.http.get(url, {
-    headers: requestHeaders(params, "", "webview"),
-    allow_redirects: true,
-    timeout: 35000,
-  });
-  if (!res || res.data == null) throw new Error("空响应");
-  var status = Number(res.status || res.statusCode || 0);
-  var body = typeof res.data === "string" ? res.data : String(res.data);
-  if (status === 403) throw new Error("HTTP 403");
-  if (status >= 400 && !body) throw new Error("HTTP " + status);
-  if (acceptHtmlBody(body)) return body;
-  throw new Error(isChallengeHtml(body) ? "WebView仍遇CF" : "正文不可用");
-}
-
-/**
- * 2) 云端 Chromium 过 CF。
- */
-async function fetchViaBrowse(url, params, cookie) {
-  var base = browseProxyBase(params);
-  var proxyUrl =
-    base +
-    "/browse?url=" +
-    encodeURIComponent(String(url || "")) +
-    (cookie ? "&cookie=" + encodeURIComponent(String(cookie)) : "");
-  var res = await Widget.http.get(proxyUrl, {
-    headers: { Accept: "text/html,application/json" },
-    allow_redirects: true,
-    timeout: 100000,
-  });
-  if (!res || res.data == null) throw new Error("browse 空响应");
-  var status = Number(res.status || res.statusCode || 0);
-  var body = typeof res.data === "string" ? res.data : String(res.data);
-  if (/^\s*\{/.test(body) && /"error"\s*:/.test(body)) {
-    var msg = body;
-    try {
-      var j = JSON.parse(body);
-      msg = (j && (j.message || j.error)) || msg;
-    } catch (e) {}
-    throw new Error(String(msg).slice(0, 160));
+function parseApiPayload(resp) {
+  if (!resp || resp.data === undefined || resp.data === null) return null;
+  if (typeof resp.data === "string") {
+    var text = resp.data.trim();
+    if (!text) return null;
+    return JSON.parse(text);
   }
-  if (status >= 400) throw new Error("browse HTTP " + status);
-  if (isChallengeHtml(body) && !isUsableListHtml(body)) throw new Error("browse 仍遇 CF");
-  var jar = getHeaderCI(res, "X-Proxy-Cookie") || getHeaderCI(res, "x-proxy-cookie");
-  if (jar && getCookieValue(jar, "cf_clearance")) {
-    var merged = assembleCookie(params, jar);
-    params.cookie = merged;
-    writeStore("javdb.global.cookie", merged);
-    // browse 出口 UA 固定为桌面 Chrome；仅当用户未手填 UA 时写入供后续直连
-    if (!String(params.userAgent || "").trim()) {
-      params.userAgent = JAVDB_UA;
-      writeStore("javdb.global.userAgent", JAVDB_UA);
+  return resp.data;
+}
+
+async function apiGet(pathname, query, params) {
+  var url = buildQueryUrl(API_BASE + pathname, sanitizeQuery(query));
+  var resp = await widgetHttp("GET", url, {
+    headerFactory: function () {
+      return apiHeaders(params);
+    },
+  });
+  var data = parseApiPayload(resp);
+  if (!data || data.success !== 1) {
+    throw new Error((data && data.message) || "API 请求失败: " + pathname);
+  }
+  return data.data;
+}
+
+async function apiPost(pathname, body, params) {
+  var url = API_BASE + pathname;
+  var resp = await widgetHttp("POST", url, {
+    headerFactory: function () {
+      return apiHeaders(params, { "content-type": "application/json" });
+    },
+    body: body || {},
+  });
+  return { payload: parseApiPayload(resp), resp: resp };
+}
+
+/* ========================= Login (API) ========================= */
+
+function ensureDeviceUuid() {
+  var id = String(readStore("javdb.global.deviceUuid") || "").trim();
+  if (id) return id;
+  id =
+    "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (ch) {
+      var r = (Math.random() * 16) | 0;
+      var v = ch === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  writeStore("javdb.global.deviceUuid", id);
+  return id;
+}
+
+function extractToken(data) {
+  if (!data) return "";
+  if (typeof data === "string") {
+    var s = data.trim();
+    if (s && s.length > 20 && s.indexOf(" ") < 0) return s;
+    return "";
+  }
+  var keys = ["token", "auth_token", "access_token", "jwt", "authorization", "api_token"];
+  for (var i = 0; i < keys.length; i++) {
+    var v = data[keys[i]];
+    if (typeof v === "string" && v.trim()) {
+      return v.replace(/^Bearer\s+/i, "").trim();
     }
   }
-  return body;
-}
-
-/**
- * 3) Cookie 直连：必须用户提供同源 UA，绝不擅自换 UA。
- */
-async function fetchViaCookieLocked(url, params, cookie) {
-  var ua = String(params.userAgent || "").trim();
-  if (!getCookieValue(cookie, "cf_clearance")) throw new Error("无cf_clearance");
-  if (!ua) throw new Error("有Cookie但未填同源UA（会废掉clearance）");
-  var res = await Widget.http.get(url, {
-    headers: requestHeaders(params, cookie, "cookie"),
-    allow_redirects: true,
-    timeout: 30000,
-  });
-  if (!res || res.data == null) throw new Error("空响应");
-  var status = Number(res.status || res.statusCode || 0);
-  var body = typeof res.data === "string" ? res.data : String(res.data);
-  if (status === 403 || (status >= 400 && !body)) throw new Error("HTTP " + (status || 403));
-  if (acceptHtmlBody(body)) return body;
-  throw new Error(isChallengeHtml(body) ? "仍遇CF挑战" : "正文不可用");
-}
-
-/**
- * 拉取策略（v3.2）：WebView 无感 → 云端 browse → Cookie+UA
- */
-async function fetchPageHtml(url, params) {
-  params = syncParams(params || {});
-  var cached = readHtmlCache(url);
-  if (cached && isUsableListHtml(cached)) return cached;
-
-  var cookie = assembleCookie(params, params.cookie);
-  params.cookie = cookie;
-  if (cookie) writeStore("javdb.global.cookie", cookie);
-  if (params.userAgent) writeStore("javdb.global.userAgent", params.userAgent);
-
-  var errors = [];
-
-  // 1) WebView 无感（不手动塞 Cookie）
-  try {
-    var nativeHtml = await fetchViaWebViewNative(url, params);
-    if (isUsableListHtml(nativeHtml)) writeHtmlCache(url, nativeHtml);
-    return nativeHtml;
-  } catch (nativeErr) {
-    errors.push("webview:" + String((nativeErr && nativeErr.message) || nativeErr).slice(0, 70));
+  if (data.user) {
+    var fromUser = extractToken(data.user);
+    if (fromUser) return fromUser;
   }
-
-  // 2) 云端过验证
-  try {
-    var browsed = await fetchViaBrowse(url, params, cookie);
-    if (acceptHtmlBody(browsed)) {
-      if (isUsableListHtml(browsed)) writeHtmlCache(url, browsed);
-      return browsed;
-    }
-    errors.push("browse:正文不可用");
-  } catch (browseErr) {
-    errors.push("browse:" + String((browseErr && browseErr.message) || browseErr).slice(0, 80));
+  if (data.session) {
+    var fromSession = extractToken(data.session);
+    if (fromSession) return fromSession;
   }
-
-  // 3) Cookie + 同源 UA
-  cookie = assembleCookie(params, params.cookie);
-  try {
-    var direct = await fetchViaCookieLocked(url, params, cookie);
-    if (isUsableListHtml(direct)) writeHtmlCache(url, direct);
-    return direct;
-  } catch (directErr) {
-    errors.push("cookie:" + String((directErr && directErr.message) || directErr).slice(0, 80));
-  }
-
-  throw new Error(cookieHintMessage(params, errors.join(" | ")));
-}
-
-/* ========================= CardScanner（列表） ========================= */
-
-function decodeHtmlEntities(text) {
-  return String(text || "")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ");
-}
-
-function stripTags(html) {
-  return decodeHtmlEntities(String(html || "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
-}
-
-function extractCode(text) {
-  var m = String(text || "").match(/\b([A-Z0-9]{2,10}(?:-[A-Z0-9]+)?-\d{2,5}(?:-\d+)?)\b/i);
-  return m ? m[1].toUpperCase() : "";
-}
-
-function parseRating(text) {
-  var m = String(text || "").match(/(\d+(?:\.\d+)?)\s*分/);
-  return m ? Number(m[1]) : 0;
-}
-
-function upgradeCoverUrl(url) {
-  var value = String(url || "").trim();
-  if (!value) return "";
-  value = value.replace(/\/thumbs\//gi, "/covers/");
-  if (/_s\.(jpe?g|webp|png)(\?|$)/i.test(value)) {
-    value = value.replace(/_s(\.(?:jpe?g|webp|png))(\?.*)?$/i, "_b$1$2");
-  }
-  if (/_s_/i.test(value) && /\/samples\//i.test(value)) {
-    value = value.replace(/_s_/gi, "_l_");
-  }
-  return value;
-}
-
-function isPortraitUrl(url) {
-  var u = String(url || "").toLowerCase();
-  if (!u) return true;
-  if (/\/thumbs\//.test(u)) return true;
-  if (/ps\.jpe?g(\?|$)/.test(u)) return true;
-  if (/cover-t[.?]/.test(u)) return true;
-  return false;
-}
-
-function pickListBackdrop(urls) {
-  for (var i = 0; i < (urls || []).length; i++) {
-    var u = upgradeCoverUrl(urls[i]);
-    if (u && !isPortraitUrl(u) && u.indexOf("now_printing") < 0) return u;
-  }
-  for (var j = 0; j < (urls || []).length; j++) {
-    var u2 = upgradeCoverUrl(urls[j]);
-    if (u2 && u2.indexOf("now_printing") < 0) return u2;
+  if (data.data) {
+    var nested = extractToken(data.data);
+    if (nested) return nested;
   }
   return "";
 }
 
-function dmmBackdropFromCode(code) {
-  code = String(code || "").toUpperCase();
-  var m = code.match(/^([A-Z0-9]+)-(\d+)$/);
+async function loginWithPassword(params) {
+  params = syncParams(params || {});
+  var username = String(params.email || "").trim();
+  var password = String(params.password || "").trim();
+  if (!username || !password) throw new Error("请填写账号和密码");
+
+  var body = Object.assign({}, DEVICE_DEFAULTS, {
+    device_uuid: ensureDeviceUuid(),
+    username: username,
+    password: password,
+  });
+
+  var result = await apiPost("/v1/sessions", body, params);
+  var payload = result.payload;
+  if (!payload || payload.success !== 1) {
+    throw new Error((payload && payload.message) || "登录失败");
+  }
+
+  var token =
+    extractToken(payload.data) ||
+    extractToken(payload) ||
+    String(getHeaderCI(result.resp, "Authorization") || "")
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+
+  if (!token) throw new Error("登录成功但未返回 Token，请检查账号状态");
+
+  params.apiToken = token;
+  writeStore("javdb.global.apiToken", token);
+  writeStore("javdb.global.email", username);
+  return { token: token, data: payload.data };
+}
+
+async function ensureApiSession(params, options) {
+  options = options || {};
+  params = syncParams(params || {});
+  if (params.apiToken) return params;
+
+  var email = String(params.email || "").trim();
+  var password = String(params.password || "").trim();
+  if (!email || !password) {
+    if (options.requireAuth) throw new Error("需要登录：请填写账号密码或 API Token");
+    return params;
+  }
+
+  try {
+    await loginWithPassword(params);
+  } catch (err) {
+    if (options.requireAuth) throw err;
+    console.error("[javdb] 登录失败（继续匿名）:", (err && err.message) || err);
+  }
+  return syncParams(params);
+}
+
+/* ========================= API → Items ========================= */
+
+function safeText(value) {
+  return String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+}
+
+function movieLink(id) {
+  return "/v/" + String(id || "").replace(/^\//, "");
+}
+
+function pickCover(movie) {
+  var cover = safeText(movie && (movie.cover_url || movie.thumb_url));
+  if (cover) return cover;
+  var code = safeText(movie && movie.number);
+  if (!code) return "";
+  var m = code.toUpperCase().match(/^([A-Z0-9]+)-(\d+)$/);
   if (!m) return "";
-  var prefix = m[1].toLowerCase();
-  var num = m[2];
-  var id = prefix + ("00000" + num).slice(-5);
+  var id = m[1].toLowerCase() + ("00000" + m[2]).slice(-5);
   return "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id + "/" + id + "pl.jpg";
 }
 
-/**
- * 新列表扫描：按 movie-list 卡片窗口切块，不依赖复杂 DOM 选择器链。
- */
-function scanMovieCards(html) {
-  var text = String(html || "");
-  var cards = [];
-  var seen = {};
-  var re = /<a\b[^>]*href=["'](\/v\/[A-Za-z0-9]+)["'][^>]*class=["'][^"']*\bbox\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
-  var match;
-  while ((match = re.exec(text))) {
-    var path = match[1];
-    if (seen[path]) continue;
-    seen[path] = true;
-    var chunk = match[0];
-    var titleAttr = (chunk.match(/\btitle=["']([^"']+)["']/i) || [])[1] || "";
-    var strong = (chunk.match(/<strong>([^<]+)<\/strong>/i) || [])[1] || "";
-    var videoTitle = stripTags((chunk.match(/class=["']video-title["'][^>]*>([\s\S]*?)<\/div>/i) || [])[1] || "");
-    var meta = stripTags((chunk.match(/class=["']meta["'][^>]*>([\s\S]*?)<\/div>/i) || [])[1] || "");
-    var score = stripTags((chunk.match(/class=["']score["'][^>]*>([\s\S]*?)<\/div>/i) || [])[1] || "");
-    var imgs = [];
-    var imgRe = /(?:src|data-src)=["']([^"']+)["']/gi;
-    var im;
-    while ((im = imgRe.exec(chunk))) imgs.push(im[1]);
-    var code = extractCode(strong) || extractCode(videoTitle) || extractCode(titleAttr);
-    var displayTitle = videoTitle || decodeHtmlEntities(titleAttr) || code || path;
-    if (code && displayTitle.indexOf(code) !== 0) displayTitle = code + " " + displayTitle;
-    var videoId = path.split("/").pop();
-    var backdrop = pickListBackdrop(imgs) || dmmBackdropFromCode(code);
-    cards.push({
-      path: path,
-      videoId: videoId,
-      code: code,
-      title: displayTitle.replace(/\s+/g, " ").trim(),
-      releaseDate: meta,
-      rating: parseRating(score),
-      backdropPath: backdrop,
-    });
+function buildListDescription(movie) {
+  var parts = [];
+  if (movie.number) parts.push("番号: " + movie.number);
+  if (movie.has_cnsub) parts.push("中字");
+  if ((movie.magnets_count || 0) > 0) parts.push("磁链×" + movie.magnets_count);
+  if (movie.has_preview_video) parts.push("预告");
+  return parts.join(" | ");
+}
+
+function mapListMovie(movie) {
+  var code = safeText(movie.number || "");
+  var title = safeText(movie.title || code || movie.id);
+  if (code && title.indexOf(code) !== 0) title = code + " " + title;
+  var cover = pickCover(movie);
+  return {
+    id: code || movie.id,
+    type: "url",
+    mediaType: "movie",
+    title: title,
+    link: movieLink(movie.id),
+    releaseDate: movie.release_date || "",
+    rating: Number(movie.score || 0) || 0,
+    description: buildListDescription(movie),
+    backdropPath: cover || undefined,
+    videoId: movie.id,
+  };
+}
+
+function buildCategoryFilter(kind, itemId, magnetOnly) {
+  var id = String(itemId || "").trim();
+  var typePart = "0";
+  var extra = magnetOnly ? "m" : "";
+  if (kind === "tags") {
+    if (/^[pmcsiv]$/i.test(id)) return typePart + ":0:x:" + id.toLowerCase();
+    return typePart + ":t::" + id + (extra ? ":" + extra : "");
   }
-
-  // 回退：无 class=box 的宽松匹配
-  if (!cards.length) {
-    var loose = /href=["'](\/v\/[A-Za-z0-9]+)["']/gi;
-    var lm;
-    while ((lm = loose.exec(text))) {
-      var p = lm[1];
-      if (seen[p]) continue;
-      seen[p] = true;
-      var window = text.slice(Math.max(0, lm.index - 100), lm.index + 900);
-      var st = (window.match(/<strong>([^<]+)<\/strong>/i) || [])[1] || "";
-      var code2 = extractCode(st) || extractCode(window);
-      cards.push({
-        path: p,
-        videoId: p.split("/").pop(),
-        code: code2,
-        title: (code2 ? code2 + " " : "") + stripTags(st || p),
-        releaseDate: "",
-        rating: 0,
-        backdropPath: pickListBackdrop([(window.match(/(?:src|data-src)=["']([^"']+)["']/i) || [])[1]]) || dmmBackdropFromCode(code2),
-      });
-    }
-  }
-  return cards;
+  var kindCode = CATEGORY_KIND_CODE[kind] || "a";
+  return typePart + ":" + kindCode + ":" + id + ":" + extra;
 }
 
-function cardsToVideoItems(cards) {
-  var items = [];
-  for (var i = 0; i < cards.length; i++) {
-    var c = cards[i];
-    var item = {
-      id: c.code || c.videoId,
-      type: "url",
-      mediaType: "movie",
-      title: c.title,
-      link: c.path,
-      releaseDate: c.releaseDate || "",
-      rating: c.rating || 0,
-      description: c.code ? "番号: " + c.code : "",
-    };
-    // 列表只写横图位，避免竖版三列
-    if (c.backdropPath) item.backdropPath = c.backdropPath;
-    items.push(item);
-  }
-  return items;
+function resolveSortQuery(sortBy) {
+  return SORT_API_MAP[sortBy] || SORT_API_MAP.published;
 }
 
-/* ========================= DetailScanner ========================= */
-
-function absUrl(url, base) {
-  url = String(url || "").trim();
-  if (!url) return "";
-  if (/^https?:\/\//i.test(url)) return url;
-  if (url.charAt(0) === "/") return base.replace(/\/+$/, "") + url;
-  return base.replace(/\/+$/, "") + "/" + url;
+async function fetchCategoryMovies(filterBy, params) {
+  var page = Number(params.page || params.from || 1);
+  var sort = resolveSortQuery(params.sort_by || "published");
+  var data = await apiGet(
+    "/v1/movies/tags",
+    {
+      filter_by: filterBy,
+      page: page,
+      sort_by: sort.sort_by,
+      order_by: sort.order_by,
+      limit: 24,
+    },
+    params
+  );
+  return (data && data.movies) || [];
 }
 
-function matchPanelKind(label) {
-  var t = String(label || "").replace(/[:：]/g, "").trim().toLowerCase();
-  if (!t) return "";
-  if (/类别|類別|tags?|genre|标籤|標籤/.test(t)) return "tag";
-  if (/系列|series/.test(t)) return "series";
-  if (/片商|maker|publisher|发行|發行|studio|制作|製作/.test(t)) return "maker";
-  if (/演员|演員|actor|cast|stars|演出/.test(t)) return "actor";
-  if (/导演|導演|director/.test(t)) return "director";
-  if (/日期|released/.test(t)) return "date";
-  if (/时长|時長|duration/.test(t)) return "duration";
-  return "";
+async function fetchSearchMovies(keyword, params, magnetOnly) {
+  var page = Number(params.page || params.from || 1);
+  var query = {
+    q: keyword,
+    page: page,
+    type: "movie",
+    movie_filter_by: magnetOnly ? "magnet" : "all",
+    movie_sort_by: SEARCH_SORT_MAP[params.sort_by || "published"] || "release",
+  };
+  var data = await apiGet("/v2/search", query, params);
+  return (data && data.movies) || [];
 }
 
-function scanDetail(html, link, params) {
-  params = syncParams(params || {});
-  var base = siteBase(params);
-  var path = normalizePath(link);
-  if (!path || path.indexOf("/v/") !== 0) path = normalizePath(String(link || "").replace(/^https?:\/\/[^/]+/i, ""));
-  var text = String(html || "");
-
-  var code =
-    (text.match(/data-clipboard-text=["']([^"']+)["']/i) || [])[1] ||
-    extractCode((text.match(/<h2[^>]*>[\s\S]*?<strong[^>]*>([^<]+)/i) || [])[1] || "");
-  var titleStrong = stripTags((text.match(/<h2[^>]*class=["'][^"']*title[^"']*["'][^>]*>([\s\S]*?)<\/h2>/i) || [])[1] || "");
-  if (!titleStrong) titleStrong = stripTags((text.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i) || [])[1] || "");
-  var title = titleStrong || code || path;
-  if (code && title.indexOf(code) !== 0) title = code + " " + title.replace(code, "").trim();
-
-  var releaseDate = "";
-  var durationText = "";
+function parseDetailMeta(movie) {
   var genreItems = [];
   var peoples = [];
   var genreSeen = {};
   var peopleSeen = {};
 
-  var blockRe = /<div[^>]*class=["'][^"']*panel-block[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
-  var bm;
-  while ((bm = blockRe.exec(text))) {
-    var block = bm[1];
-    var label = stripTags((block.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i) || [])[1] || "");
-    var kind = matchPanelKind(label);
-    if (!kind) continue;
-    if (kind === "date") {
-      releaseDate = stripTags((block.match(/class=["']value["'][^>]*>([\s\S]*?)<\/span>/i) || [])[1] || "");
-      continue;
-    }
-    if (kind === "duration") {
-      durationText = stripTags((block.match(/class=["']value["'][^>]*>([\s\S]*?)<\/span>/i) || [])[1] || "");
-      continue;
-    }
-    var linkRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-    var lm;
-    while ((lm = linkRe.exec(block))) {
-      var href = normalizePath(lm[1]);
-      var name = stripTags(lm[2]);
-      if (!name) continue;
-      if (kind === "actor" || kind === "director") {
-        if (href.indexOf("/actors/") !== 0 && href.indexOf("/directors/") !== 0) continue;
-        var pid = categoryIdFromPath(href, name);
-        if (!pid || peopleSeen[pid]) continue;
-        peopleSeen[pid] = true;
-        peoples.push({
-          id: pid,
-          title: name,
-          avatar: "",
-          role: kind === "director" ? "导演" : "演员",
-        });
-      } else {
-        if (kind === "tag" && href.indexOf("/tags") !== 0 && href.indexOf("tags") < 0) continue;
-        if (kind === "series" && href.indexOf("/series/") !== 0) continue;
-        if (kind === "maker" && href.indexOf("/makers/") !== 0) continue;
-        var gid = categoryIdFromPath(href, name);
-        if (!gid || genreSeen[gid]) continue;
-        genreSeen[gid] = true;
-        genreItems.push({ id: gid, title: name });
-      }
-    }
+  (movie.tags || []).forEach(function (tag) {
+    var name = typeof tag === "string" ? tag : tag && tag.name;
+    var tagId = typeof tag === "object" && tag ? String(tag.id || "").trim() : "";
+    if (!name || genreSeen[name]) return;
+    genreSeen[name] = true;
+    var path = tagId ? "/tags?c2=" + encodeURIComponent(tagId) : SEARCH_PREFIX + name;
+    genreItems.push({ id: categoryIdFromPath(path, name), title: name });
+  });
+
+  (movie.actors || []).forEach(function (actor) {
+    if (!actor || !actor.name) return;
+    var key = actor.id || actor.name;
+    if (peopleSeen[key]) return;
+    peopleSeen[key] = true;
+    peoples.push({
+      id: categoryIdFromPath("/actors/" + (actor.id || actor.name), actor.name),
+      title: actor.name,
+      avatar: actor.avatar_url || "",
+      role: "演员",
+    });
+  });
+
+  if (movie.director_name) {
+    peoples.push({
+      id: categoryIdFromPath("/actors/" + (movie.director_id || movie.director_name), movie.director_name),
+      title: movie.director_name,
+      avatar: "",
+      role: "导演",
+    });
+  }
+  if (movie.maker_name) {
+    genreItems.push({
+      id: categoryIdFromPath("/makers/" + (movie.maker_id || movie.maker_name), movie.maker_name),
+      title: movie.maker_name,
+    });
+  }
+  if (movie.series_name) {
+    genreItems.push({
+      id: categoryIdFromPath("/series/" + (movie.series_id || movie.series_name), movie.series_name),
+      title: movie.series_name,
+    });
   }
 
-  var coverCandidates = [];
-  var coverRe = /https?:\/\/[^"'\\\s]+(?:covers|thumbs|samples)[^"'\\\s]*/gi;
-  var cm;
-  while ((cm = coverRe.exec(text))) coverCandidates.push(cm[0]);
-  var backdropPath = pickListBackdrop(coverCandidates) || dmmBackdropFromCode(code);
-  var posterPath = "";
-  for (var i = 0; i < coverCandidates.length; i++) {
-    var cu = upgradeCoverUrl(coverCandidates[i]);
-    if (cu && /\/covers\//i.test(cu)) {
-      posterPath = cu;
-      break;
-    }
+  return { genreItems: genreItems, peoples: peoples };
+}
+
+function formatMagnetSize(mb) {
+  var n = Number(mb || 0);
+  if (!n) return "";
+  if (n >= 1024) return (n / 1024).toFixed(2) + " GB";
+  return n + " MB";
+}
+
+function mapMagnets(magnets) {
+  var lines = [];
+  var list = magnets || [];
+  for (var i = 0; i < list.length && i < 12; i++) {
+    var m = list[i];
+    var flags = [];
+    if (m.cnsub) flags.push("中字");
+    if (m.hd) flags.push("HD");
+    var size = formatMagnetSize(m.size);
+    lines.push(
+      (m.name || m.hash || "magnet") +
+        (size ? " · " + size : "") +
+        (flags.length ? " · " + flags.join("/") : "") +
+        (m.hash ? "\nmagnet:?xt=urn:btih:" + m.hash : "")
+    );
   }
-  if (!posterPath) posterPath = backdropPath;
-
-  var backdropPaths = [];
-  var sampleSeen = {};
-  for (var s = 0; s < coverCandidates.length; s++) {
-    var su = upgradeCoverUrl(coverCandidates[s]);
-    if (!su || !/\/samples\//i.test(su)) continue;
-    if (/_s_/i.test(coverCandidates[s]) && !/_l_/i.test(su)) continue;
-    if (sampleSeen[su]) continue;
-    sampleSeen[su] = true;
-    backdropPaths.push(su);
-  }
-
-  var rating = parseRating((text.match(/class=["']score-stars["'][\s\S]{0,200}/i) || [])[0] || "");
-
-  return {
-    id: code || path.split("/").pop() || path,
-    type: "url",
-    mediaType: "movie",
-    title: title.replace(/\s+/g, " ").trim(),
-    link: path,
-    backdropPath: backdropPath,
-    posterPath: posterPath,
-    detailPoster: posterPath,
-    backdropPaths: backdropPaths,
-    releaseDate: releaseDate,
-    durationText: durationText,
-    rating: rating,
-    genreItems: genreItems,
-    peoples: peoples,
-    description: code ? "番号: " + code + (releaseDate ? "\n日期: " + releaseDate : "") : "",
-  };
+  return lines.join("\n\n");
 }
 
 /* ========================= Handlers ========================= */
 
 async function loadCategoryList(params) {
   var target = resolveCategoryTarget(params);
-  params = target.params;
-  var base = siteBase(params);
-  var sortBy = String(params.sort_by || "published");
-  var url = "";
+  params = await ensureApiSession(target.params);
 
-  if (target.keyword) {
-    url = searchUrl(base, target.keyword, params);
-  } else {
-    var path = applySort(target.path, sortBy);
-    if (!path) throw new Error("请先选择分类项（演员/系列/标签/片商）");
-    if (isLibraryIndex(path)) throw new Error("请选择具体分类项，而不是库目录");
-    url = buildPageUrl(base, path, params);
+  if (target.keyword || target.kind === "search") {
+    var kw = target.keyword || params.categoryTitle;
+    if (!kw) throw new Error("请选择标签或输入关键词");
+    var searched = await fetchSearchMovies(kw, params, target.magnetOnly);
+    if (!searched.length) throw new Error("未找到相关影片");
+    return searched.map(mapListMovie);
   }
 
-  var html = await fetchPageHtml(url, params);
-  var items = cardsToVideoItems(scanMovieCards(html));
-  if (!items.length) throw new Error("未解析到影片列表");
-  return items;
+  if (!target.itemId || !target.kind) {
+    throw new Error("请先选择分类项（演员/系列/标签/片商）");
+  }
+
+  var filterBy = buildCategoryFilter(target.kind, target.itemId, target.magnetOnly);
+  var movies = await fetchCategoryMovies(filterBy, params);
+
+  // 片商/标签无结果时回退关键词搜索
+  if (!movies.length && (target.kind === "makers" || target.kind === "tags")) {
+    var fallbackKw = safeText(params.categoryTitle) || target.itemId;
+    movies = await fetchSearchMovies(fallbackKw, params, target.magnetOnly);
+  }
+
+  if (!movies.length) throw new Error("未解析到影片列表");
+  return movies.map(mapListMovie);
 }
 
 async function loadPage(params) {
@@ -1917,58 +1839,124 @@ async function loadPage(params) {
 
 async function loadDetail(link) {
   try {
-    var params = syncParams({});
+    var params = await ensureApiSession({});
     var path = normalizePath(String(link || ""));
     if (!path) return null;
 
-    // 分类页详情（少见）：返回头像摘要
+    // 分类摘要（少见）
     if (path.indexOf("/v/") !== 0) {
       if (/^\/(actors|series|makers)\//.test(path.split("?")[0]) || path.indexOf("/tags") === 0) {
-        var catHtml = await fetchPageHtml(buildPageUrl(siteBase(params), path, params), params);
-        var catTitle =
-          stripTags((catHtml.match(/<h2[^>]*>[\s\S]*?<strong[^>]*>([^<]+)/i) || [])[1] || "") ||
-          path.split("/").pop();
-        var avatar = upgradeCoverUrl((catHtml.match(/<img[^>]*class=["'][^"']*avatar[^"']*["'][^>]*src=["']([^"']+)["']/i) || [])[1] || "");
-        var count = scanMovieCards(catHtml).length;
+        var target = resolveCategoryTarget({
+          genreId: path.indexOf("/actors/") === 0 ? "" : path,
+          peopleId: path.indexOf("/actors/") === 0 ? path : "",
+        });
+        if (!target.itemId && !target.keyword) return null;
+        var list = await loadCategoryList(
+          Object.assign({}, target.params, {
+            peopleId: target.kind === "actors" ? "/actors/" + target.itemId : "",
+            genreId:
+              target.kind === "actors"
+                ? ""
+                : target.kind === "search"
+                  ? SEARCH_PREFIX + target.keyword
+                  : "/" + (target.kind === "makers" ? "makers" : target.kind === "series" ? "series" : "tags") +
+                    (target.kind === "tags" ? "?c2=" + target.itemId : "/" + target.itemId),
+            page: 1,
+          })
+        );
         return {
-          id: path.split("/").pop() || path,
+          id: target.itemId || target.keyword || path,
           type: "url",
-          title: catTitle,
-          posterPath: avatar,
-          detailPoster: avatar,
-          description: "共收录 " + count + " 部影片（当前页）",
+          title: params.categoryTitle || target.itemId || target.keyword || path,
+          description: "共收录 " + list.length + " 部影片（当前页）",
           link: path,
+          backdropPath: (list[0] && list[0].backdropPath) || "",
         };
       }
       return null;
     }
 
-    var pageUrl = buildPageUrl(siteBase(params), path, params);
-    var html = await fetchPageHtml(pageUrl, params);
-    var detail = scanDetail(html, path, params);
-    if (!detail || !detail.title) return null;
-    return detail;
+    var movieId = path.replace(/^\/v\//, "").split(/[/?#]/)[0];
+    if (!movieId) return null;
+
+    var detail = await apiGet("/v4/movies/" + movieId, null, params);
+    var movie = (detail && detail.movie) || {};
+    var code = safeText(movie.number || "");
+    var title = safeText(movie.title || code || movieId);
+    if (code && title.indexOf(code) !== 0) title = code + " " + title;
+
+    var cover = pickCover(movie);
+    var meta = parseDetailMeta(movie);
+    var backdropPaths = [];
+    (movie.preview_images || []).forEach(function (img) {
+      var u = safeText((img && (img.large_url || img.thumb_url)) || "");
+      if (u) backdropPaths.push(u);
+    });
+
+    var magnetText = "";
+    try {
+      var magnetData = await apiGet("/v1/movies/" + movieId + "/magnets", null, params);
+      magnetText = mapMagnets(magnetData && magnetData.magnets);
+    } catch (eMag) {}
+
+    var descParts = [];
+    if (code) descParts.push("番号: " + code);
+    if (movie.release_date) descParts.push("日期: " + movie.release_date);
+    if (movie.duration) descParts.push("时长: " + movie.duration + " 分钟");
+    if (movie.summary) descParts.push(safeText(movie.summary));
+    if (magnetText) descParts.push("磁力:\n" + magnetText);
+
+    return {
+      id: code || movie.id || movieId,
+      type: "url",
+      mediaType: "movie",
+      title: title,
+      link: movieLink(movie.id || movieId),
+      backdropPath: cover,
+      posterPath: cover,
+      detailPoster: cover,
+      backdropPaths: backdropPaths,
+      releaseDate: movie.release_date || "",
+      durationText: movie.duration ? movie.duration + " 分钟" : "",
+      rating: Number(movie.score || 0) || 0,
+      genreItems: meta.genreItems,
+      peoples: meta.peoples,
+      description: descParts.join("\n"),
+      videoUrl: movie.preview_video_url || undefined,
+      playerType: movie.preview_video_url && /\.m3u8/i.test(movie.preview_video_url) ? "ijk" : undefined,
+      videoId: movie.id || movieId,
+    };
   } catch (error) {
     console.error("[javdb] 详情加载失败:", error.message || error);
     throw error;
   }
 }
 
+/** 供设置页手动触发登录检测 */
+async function loginAccount(params) {
+  params = syncParams(params || {});
+  var result = await loginWithPassword(params);
+  return [
+    {
+      id: "login_ok",
+      type: "text",
+      title: "登录成功",
+      subTitle: "Token 已缓存（" + String(result.token).slice(0, 12) + "…）",
+    },
+  ];
+}
+
 /* 导出给 Node 测试（Forward 运行时忽略） */
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     resolveCategoryTarget: resolveCategoryTarget,
-    applySort: applySort,
-    scanMovieCards: scanMovieCards,
-    cardsToVideoItems: cardsToVideoItems,
-    scanDetail: scanDetail,
-    isUsableListHtml: isUsableListHtml,
-    buildPageUrl: buildPageUrl,
-    searchUrl: searchUrl,
+    buildCategoryFilter: buildCategoryFilter,
+    mapListMovie: mapListMovie,
     categoryIdFromPath: categoryIdFromPath,
+    buildJdSignature: buildJdSignature,
+    extractToken: extractToken,
     loadPage: loadPage,
     loadDetail: loadDetail,
-    fetchPageHtml: fetchPageHtml,
+    loginAccount: loginAccount,
   };
 }
-
