@@ -982,7 +982,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.1.0",
+  version: "4.1.1",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 演员/系列/标签/片商；支持账号密码登录",
   author: "老头",
@@ -1502,30 +1502,43 @@ async function widgetHttp(method, url, options) {
   var retry = options.retry || 0;
   var headerFactory = options.headerFactory;
   try {
-    var req = { headers: headerFactory(), allow_redirects: true, timeout: options.timeout || 30000 };
-    if (options.body !== undefined) {
-      req.body = typeof options.body === "string" ? options.body : JSON.stringify(options.body);
-    }
+    // ForwardWidgets: get(url, options) / post(url, body, options)
+    var httpOpts = {
+      headers: headerFactory(),
+      allow_redirects: true,
+      timeout: options.timeout || 30000,
+    };
     var resp;
     if (method === "POST") {
+      var postBody = options.body !== undefined ? options.body : {};
       if (typeof Widget.http.post === "function") {
-        resp = await Widget.http.post(url, req);
+        resp = await Widget.http.post(url, postBody, httpOpts);
       } else if (typeof Widget.http.request === "function") {
-        resp = await Widget.http.request(url, Object.assign({ method: "POST" }, req));
+        resp = await Widget.http.request(
+          url,
+          Object.assign({ method: "POST", body: postBody }, httpOpts)
+        );
       } else {
-        resp = await Widget.http.get(url, Object.assign({}, req, { method: "POST" }));
+        resp = await Widget.http.get(
+          url,
+          Object.assign({}, httpOpts, {
+            method: "POST",
+            body: typeof postBody === "string" ? postBody : JSON.stringify(postBody),
+          })
+        );
       }
     } else {
-      resp = await Widget.http.get(url, req);
+      resp = await Widget.http.get(url, httpOpts);
     }
     var status = resp && (resp.status || resp.statusCode);
     if (status && Number(status) >= 400) {
       var action = "";
       try {
-        var body = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
-        action = (body && (body.action || body.message)) || "";
+        var errBody = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
+        action = (errBody && (errBody.action || errBody.message)) || "";
       } catch (e) {}
-      if (retry < 2 && (Number(status) === 400 || /signature|expired|签名/i.test(String(action)))) {
+      // 仅签名相关错误刷新 jdsignature 重试，避免业务 400（未激活/密码错误等）空转
+      if (retry < 2 && /signature|expired|签名|jdsignature|ParameterInvalid/i.test(String(action))) {
         return widgetHttp(method, url, Object.assign({}, options, { retry: retry + 1 }));
       }
       throw new Error("HTTP " + status + (action ? " (" + action + ")" : "") + ": " + url);
@@ -1533,7 +1546,7 @@ async function widgetHttp(method, url, options) {
     return resp;
   } catch (error) {
     var msg = String((error && error.message) || error || "");
-    if (retry < 2 && /400|403|unacceptable|signature|expired|签名/i.test(msg)) {
+    if (retry < 2 && /unacceptable|signature|expired|签名|jdsignature|ParameterInvalid/i.test(msg)) {
       return widgetHttp(method, url, Object.assign({}, options, { retry: retry + 1 }));
     }
     throw error;
