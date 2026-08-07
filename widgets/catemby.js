@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.5.3",
+  version: "1.5.5",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -2127,7 +2127,7 @@ const DMM_PROBE_WORKER_CACHE = {};
 const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
 const DMM_PROBE_BATCH_SIZE = 20;
 const DMM_PROBE_BATCH_TIMEOUT_MS = 60000;
-const DMM_PROBE_DETAIL_BUDGET_MS = 2500;
+const RESOLVE_FULL_VIDEO_BUDGET_MS = 2500;
 const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
 const DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
 const DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
@@ -2315,30 +2315,18 @@ async function fetchDmmProbeCover(code, params) {
   }
 }
 
-async function fetchDmmProbeCoverWithBudget(code, params, budgetMs) {
+function getCachedDmmProbeCover(code) {
   code = String(code || "").trim().toUpperCase();
-  if (!code || !isValidJavCatalogCode(code)) return { probe: null, timedOut: false };
+  if (!code || !isValidJavCatalogCode(code)) return null;
   if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) {
-    return { probe: DMM_PROBE_WORKER_CACHE[code], timedOut: false };
+    return DMM_PROBE_WORKER_CACHE[code];
   }
   const stored = loadDmmProbeFromStorage(code);
   if (stored !== undefined) {
     DMM_PROBE_WORKER_CACHE[code] = stored;
-    return { probe: stored, timedOut: false };
+    return stored;
   }
-  if (!budgetMs || budgetMs <= 0) {
-    return { probe: await fetchDmmProbeCover(code, params), timedOut: false };
-  }
-  return Promise.race([
-    fetchDmmProbeCover(code, params).then(function (probe) {
-      return { probe: probe, timedOut: false };
-    }),
-    new Promise(function (resolve) {
-      setTimeout(function () {
-        resolve({ probe: undefined, timedOut: true });
-      }, budgetMs);
-    }),
-  ]);
+  return null;
 }
 
 async function prefetchDmmProbeCovers(codes, params) {
@@ -2446,9 +2434,7 @@ async function fetchDmmProbeCoverBatch(codes, params) {
 }
 
 function lookupDmmProbeCover(code) {
-  code = String(code || "").trim().toUpperCase();
-  if (!code || !Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) return null;
-  return DMM_PROBE_WORKER_CACHE[code];
+  return getCachedDmmProbeCover(code);
 }
 
 function normalizeDmmPrefix(prefix) {
@@ -3465,9 +3451,29 @@ async function resolveFullVideo(code, lang) {
     const data = await siteGet("/api/v/resolve", { code: codes[i], lang: lang || "zh" }, { allowError: true });
     const picked = pickResolveVariant(data);
     if (picked) return picked;
+    // 明确未收录：后续变体通常也没有，避免串行空转
     if (data && data.error === "video_not_found") return null;
+    // 首个变体已有有效响应但仍无完整片：不再拖慢详情
+    if (i === 0 && data && Array.isArray(data.variants)) return null;
   }
   return null;
+}
+
+async function resolveFullVideoWithBudget(code, lang, budgetMs) {
+  if (!code) return { video: null, timedOut: false };
+  if (!budgetMs || budgetMs <= 0) {
+    return { video: await resolveFullVideo(code, lang), timedOut: false };
+  }
+  return Promise.race([
+    resolveFullVideo(code, lang).then(function (video) {
+      return { video: video, timedOut: false };
+    }),
+    new Promise(function (resolve) {
+      setTimeout(function () {
+        resolve({ video: undefined, timedOut: true });
+      }, budgetMs);
+    }),
+  ]);
 }
 
 function extractMovieId(link) {
@@ -3628,13 +3634,13 @@ async function loadDetail(link) {
   const rawCode = safeText(movie.number || "");
   const code = isValidJavCatalogCode(rawCode) ? rawCode : "";
   const siteCoverUrl = resolveDetailBackdropUrl(movie);
-  const hasSiteCover = !!siteCoverUrl;
-  const fullVideoPromise = movie.number && !preferPreview ? resolveFullVideo(movie.number, "zh") : Promise.resolve(null);
-  const probePromise = code
-    ? fetchDmmProbeCoverWithBudget(code, {}, hasSiteCover ? DMM_PROBE_DETAIL_BUDGET_MS : 0)
-    : Promise.resolve({ probe: null, timedOut: false });
-  const [probeResult, fullVideo] = await Promise.all([probePromise, fullVideoPromise]);
-  const dmmProbe = probeResult.probe;
+  // DMM 高清只复用列表阶段缓存，详情不再发起探测
+  const dmmProbe = code ? getCachedDmmProbeCover(code) : null;
+  const fullVideoResult =
+    movie.number && !preferPreview
+      ? await resolveFullVideoWithBudget(movie.number, "zh", RESOLVE_FULL_VIDEO_BUDGET_MS)
+      : { video: null, timedOut: false };
+  const fullVideo = fullVideoResult.timedOut ? null : fullVideoResult.video;
   const coverOptions = { siteFallback: siteCoverUrl };
   const coverBundle = code
     ? buildCatembyDetailCoverBundle(code, movie.id || movieId, dmmProbe, coverOptions)
@@ -3701,7 +3707,13 @@ async function loadDetail(link) {
         previewVideoUrl: previewUrl || "",
         fullVideoAvailable: !!fullUrl,
       },
-      !fullUrl && movie.number ? { resolveNote: "站点未收录完整片源(" + movie.number + ")" } : {},
+      !fullUrl && movie.number
+        ? {
+            resolveNote: fullVideoResult.timedOut
+              ? "完整片源解析超时，已先展示预告(" + movie.number + ")"
+              : "站点未收录完整片源(" + movie.number + ")",
+          }
+        : {},
       fullVideo
         ? {
             fullVideoUrl: fullVideo.sourceUrl,
