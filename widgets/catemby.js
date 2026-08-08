@@ -1548,10 +1548,10 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "catemby_legacy",
   title: "Catemby遗产",
-  description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
+  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.5.7",
+  version: "1.6.0",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1777,6 +1777,15 @@ WidgetMetadata = {
       functionName: "loadResource",
       type: "stream",
       cacheDuration: 600,
+      params: [],
+    },
+    {
+      id: "loadSubtitle",
+      title: "Catemby 字幕",
+      description: "按番号匹配外挂字幕（srt/ass）",
+      functionName: "loadSubtitle",
+      type: "subtitle",
+      cacheDuration: 3600,
       params: [],
     },
   ],
@@ -3810,5 +3819,172 @@ async function loadResource(params) {
     ];
   } catch (e) {
     return [];
+  }
+}
+
+/* ========================= 外挂字幕（Forward type: subtitle） ========================= */
+
+function subtitleLangCode(item) {
+  const name = String((item && item.name) || "").toLowerCase();
+  const langs = Array.isArray(item && item.languages) ? item.languages.join(",").toLowerCase() : "";
+  if (name.includes("zh-cn") || langs.includes("zh-cn") || name.includes("简") || name.includes("chs")) return "zh-CN";
+  if (name.includes("zh-tw") || langs.includes("zh-tw") || name.includes("繁") || name.includes("cht")) return "zh-TW";
+  if (name.includes("-en") || langs.includes("en") || name.includes("eng")) return "en";
+  if (name.includes("-ja") || langs.includes("ja") || name.includes("jpn")) return "ja";
+  return "zh";
+}
+
+function subtitleLangLabel(lang) {
+  if (lang === "zh-CN") return "简中";
+  if (lang === "zh-TW") return "繁中";
+  if (lang === "en") return "English";
+  if (lang === "ja") return "日本語";
+  return "中文";
+}
+
+function subtitleLangRank(lang) {
+  if (lang === "zh-CN") return 0;
+  if (lang === "zh") return 1;
+  if (lang === "zh-TW") return 2;
+  if (lang === "ja") return 3;
+  if (lang === "en") return 4;
+  return 5;
+}
+
+function buildSubtitleTitle(item, lang) {
+  const label = subtitleLangLabel(lang);
+  const rawName = String((item && item.name) || "").replace(/\.[^.]+$/, "").trim();
+  const isHashName = /^[0-9a-f]{32,}$/i.test(rawName);
+  const extra = item && item.extra_name ? " " + item.extra_name : "";
+  if (isHashName || !rawName) return label + extra;
+  const shortName = rawName.length > 40 ? rawName.slice(0, 37) + "…" : rawName;
+  return label + " - " + shortName + extra;
+}
+
+function dedupeSubtitleItems(list, code) {
+  const codeKey = String(code || "")
+    .toLowerCase()
+    .replace(/-/g, "");
+  const map = new Map();
+  for (let i = 0; i < (list || []).length; i++) {
+    const item = list[i];
+    if (!item || !item.cid || !item.url) continue;
+    const prev = map.get(item.cid);
+    if (!prev) {
+      map.set(item.cid, item);
+      continue;
+    }
+    const prevHit = String(prev.name || "")
+      .toLowerCase()
+      .replace(/-/g, "")
+      .includes(codeKey);
+    const curHit = String(item.name || "")
+      .toLowerCase()
+      .replace(/-/g, "")
+      .includes(codeKey);
+    if (curHit && !prevHit) map.set(item.cid, item);
+  }
+  return Array.from(map.values());
+}
+
+function sortSubtitleItems(list, code) {
+  const codeKey = String(code || "")
+    .toLowerCase()
+    .replace(/-/g, "");
+  return (list || []).slice().sort((a, b) => {
+    const aHit = String(a.name || "")
+      .toLowerCase()
+      .replace(/-/g, "")
+      .includes(codeKey)
+      ? 0
+      : 1;
+    const bHit = String(b.name || "")
+      .toLowerCase()
+      .replace(/-/g, "")
+      .includes(codeKey)
+      ? 0
+      : 1;
+    if (aHit !== bHit) return aHit - bHit;
+    const aLang = subtitleLangRank(subtitleLangCode(a));
+    const bLang = subtitleLangRank(subtitleLangCode(b));
+    if (aLang !== bLang) return aLang - bLang;
+    return Number(b.duration || 0) - Number(a.duration || 0);
+  });
+}
+
+function uniquifySubtitleTitles(items) {
+  const counts = {};
+  for (let i = 0; i < items.length; i++) {
+    const title = items[i].title;
+    counts[title] = (counts[title] || 0) + 1;
+  }
+  const seen = {};
+  for (let i = 0; i < items.length; i++) {
+    const title = items[i].title;
+    if ((counts[title] || 1) <= 1) continue;
+    seen[title] = (seen[title] || 0) + 1;
+    items[i].title = title + " #" + seen[title];
+  }
+  return items;
+}
+
+function buildSubtitleFileUrl(originalUrl) {
+  const raw = String(originalUrl || "").trim();
+  if (!raw) return "";
+  // 走站点代理，与网页端一致，避免部分 CDN 直链鉴权/防盗链问题
+  return siteUrl("/api/subtitle/file?url=" + encodeURIComponent(raw));
+}
+
+async function fetchSubtitleCandidates(code) {
+  const name = String(code || "").trim();
+  if (!name) return [];
+  const data = await siteGet("/api/subtitle", { name: name }, { allowError: true });
+  if (!data || Number(data.code) !== 0 || !Array.isArray(data.data) || !data.data.length) return [];
+  return sortSubtitleItems(dedupeSubtitleItems(data.data, name), name);
+}
+
+async function loadSubtitle(params) {
+  try {
+    const code = extractCodeFromParams(params || {});
+    if (!code) return [];
+
+    const candidates = await fetchSubtitleCandidates(code);
+    if (!candidates.length) return [];
+
+    const items = candidates.slice(0, 40).map((item) => {
+      const lang = subtitleLangCode(item);
+      const ext = String(item.ext || "srt").toLowerCase();
+      const durationMs = Number(item.duration || 0);
+      return {
+        id: String(item.cid || item.gcid || item.url),
+        title: buildSubtitleTitle(item, lang),
+        lang: lang,
+        url: buildSubtitleFileUrl(item.url),
+        count: durationMs > 0 ? Math.round(durationMs / 1000) : undefined,
+        format: ext,
+        description: [code, ext.toUpperCase(), item.extra_name || ""].filter(Boolean).join(" · "),
+      };
+    });
+
+    return uniquifySubtitleTitles(items);
+  } catch (e) {
+    console.error("[catemby] loadSubtitle 失败:", e && e.message ? e.message : e);
+    return [];
+  }
+}
+
+/** zip 字幕包时由客户端回调；站点当前多为 srt/ass 直链，保留兼容 */
+async function resolveSubtitleArchive(params) {
+  try {
+    const subtitleFiles = JSON.parse((params && params.subtitleFiles) || "[]");
+    if (!Array.isArray(subtitleFiles) || !subtitleFiles.length) return null;
+    const prefer =
+      subtitleFiles.find((file) => /简|chs|zh-?cn/i.test(String((file && file.name) || ""))) ||
+      subtitleFiles.find((file) => /繁|cht|zh-?tw/i.test(String((file && file.name) || ""))) ||
+      subtitleFiles.find((file) => /\.(srt|ass|ssa|vtt)$/i.test(String((file && file.name) || ""))) ||
+      subtitleFiles[0];
+    return prefer && prefer.path ? prefer.path : null;
+  } catch (e) {
+    return null;
   }
 }
