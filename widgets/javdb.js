@@ -1033,9 +1033,9 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.3.1",
+  version: "4.3.2",
   requiredVersion: "0.0.1",
-  description: "JavDB API：最近更新 / TOP250 / 分类；列表仅用验证过的 DMM 竖版，否则站点封面；详情复用 + 预告片",
+  description: "JavDB API：最近更新 / TOP250 / 分类；列表横图 backdrop + 竖图 poster（仅验证过的 DMM）；详情复用 + 预告片",
   author: "老头",
   site: API_SITE,
   detailCacheDuration: 3600,
@@ -1076,7 +1076,7 @@ WidgetMetadata = {
       name: "dmmProbeWorker",
       title: "DMM Probe Worker（可选）",
       type: "input",
-      description: "默认 https://dmm.laotou.ccwu.cc；列表页竖版海报探测",
+      description: "默认 https://dmm.laotou.ccwu.cc；列表横/竖封面探测",
       value: "",
     },
     {
@@ -1795,13 +1795,41 @@ function resolveListPosterUrl(code, siteFallback, dmmProbe) {
   return fallback;
 }
 
+function resolveListBackdropUrl(code, siteFallback, dmmProbe) {
+  var fallback = String(siteFallback || "").trim();
+  if (!code) return fallback;
+  var probe = dmmProbe !== undefined ? dmmProbe : getCachedDmmProbeCover(code);
+  // 仅采用 Worker 验证过的横版封面；不再猜 awsimgsrc 链接
+  if (probe && probe.backdropUrl) {
+    var backdrop = String(probe.backdropUrl).trim();
+    if (backdrop && !isInvalidCoverTarget(backdrop)) {
+      return backdrop;
+    }
+  }
+  return fallback;
+}
+
+function buildListCoverBundle(code, siteFallback, dmmProbe) {
+  var fallback = String(siteFallback || "").trim();
+  var probe = dmmProbe !== undefined ? dmmProbe : code ? lookupDmmProbeCover(code) : null;
+  var hdPoster = resolveListPosterUrl(code, fallback, probe) || fallback || "";
+  var hdBackdrop = resolveListBackdropUrl(code, fallback, probe) || fallback || "";
+  return {
+    backdropPath: hdBackdrop,
+    posterPath: hdPoster,
+    detailPoster: hdPoster,
+    coverUrl: hdBackdrop,
+    image: hdBackdrop,
+  };
+}
+
 function mapListMovie(movie) {
   var code = safeText(movie.number || "");
   var title = safeText(movie.title || code || movie.id);
   if (code && title.indexOf(code) !== 0) title = code + " " + title;
   var siteCover = pickCover(movie);
-  // 方格列表：竖版海报走 posterPath（DMM ps / probe）
-  var posterUrl = resolveListPosterUrl(code, siteCover, code ? lookupDmmProbeCover(code) : null);
+  // 对齐 catemby：横卡用 backdropPath/coverUrl，方格用 posterPath
+  var covers = buildListCoverBundle(code, siteCover, code ? lookupDmmProbeCover(code) : null);
   return {
     id: code || movie.id,
     type: "url",
@@ -1811,8 +1839,11 @@ function mapListMovie(movie) {
     releaseDate: movie.release_date || "",
     rating: Number(movie.score || 0) || 0,
     description: buildListDescription(movie),
-    posterPath: posterUrl || undefined,
-    detailPoster: posterUrl || undefined,
+    backdropPath: covers.backdropPath || siteCover || undefined,
+    posterPath: covers.posterPath || undefined,
+    detailPoster: covers.detailPoster || undefined,
+    coverUrl: covers.coverUrl || covers.backdropPath || siteCover || undefined,
+    image: covers.image || covers.backdropPath || siteCover || undefined,
     videoId: movie.id,
   };
 }
@@ -2542,8 +2573,10 @@ async function loadDetail(link) {
           title: params.categoryTitle || target.itemId || target.keyword || path,
           description: "共收录 " + list.length + " 部影片（当前页）",
           link: path,
+          backdropPath: (list[0] && (list[0].backdropPath || list[0].coverUrl)) || "",
           posterPath: (list[0] && list[0].posterPath) || "",
           detailPoster: (list[0] && (list[0].detailPoster || list[0].posterPath)) || "",
+          coverUrl: (list[0] && (list[0].coverUrl || list[0].backdropPath)) || "",
         };
       }
       return null;
@@ -2558,10 +2591,13 @@ async function loadDetail(link) {
     var title = safeText(movie.title || code || movieId);
     if (code && title.indexOf(code) !== 0) title = code + " " + title;
 
-    // 顶图直接复用列表阶段竖版海报（仅读缓存，不再发起 DMM 探测）
+    // 顶图复用列表阶段探测缓存（仅读缓存，不再发起 DMM 探测）；横/竖分流对齐 catemby
     var siteCover = pickCover(movie);
-    var posterUrl = resolveListPosterUrl(code, siteCover, code ? getCachedDmmProbeCover(code) : null);
-    var coverUrl = posterUrl || siteCover || "";
+    var dmmProbe = code ? getCachedDmmProbeCover(code) : null;
+    var covers = buildListCoverBundle(code, siteCover, dmmProbe);
+    var posterUrl = covers.posterPath || siteCover || "";
+    var coverUrl = covers.backdropPath || covers.coverUrl || siteCover || "";
+    if (!posterUrl) posterUrl = coverUrl;
 
     var galleryUrls = [];
     (movie.preview_images || []).forEach(function (img) {
