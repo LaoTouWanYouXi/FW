@@ -1548,10 +1548,10 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "catemby_legacy",
   title: "Catemby遗产",
-  description: "catemby遗产站点.搜索.分类.预告.完整片.聚合",
+  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.5.3",
+  version: "1.6.0",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -1777,6 +1777,15 @@ WidgetMetadata = {
       functionName: "loadResource",
       type: "stream",
       cacheDuration: 600,
+      params: [],
+    },
+    {
+      id: "loadSubtitle",
+      title: "Catemby 字幕",
+      description: "按番号匹配外挂字幕（srt/ass）",
+      functionName: "loadSubtitle",
+      type: "subtitle",
+      cacheDuration: 3600,
       params: [],
     },
   ],
@@ -2127,7 +2136,6 @@ const DMM_PROBE_WORKER_CACHE = {};
 const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
 const DMM_PROBE_BATCH_SIZE = 20;
 const DMM_PROBE_BATCH_TIMEOUT_MS = 60000;
-const DMM_PROBE_DETAIL_BUDGET_MS = 2500;
 const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
 const DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
 const DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
@@ -2315,30 +2323,18 @@ async function fetchDmmProbeCover(code, params) {
   }
 }
 
-async function fetchDmmProbeCoverWithBudget(code, params, budgetMs) {
+function getCachedDmmProbeCover(code) {
   code = String(code || "").trim().toUpperCase();
-  if (!code || !isValidJavCatalogCode(code)) return { probe: null, timedOut: false };
+  if (!code || !isValidJavCatalogCode(code)) return null;
   if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) {
-    return { probe: DMM_PROBE_WORKER_CACHE[code], timedOut: false };
+    return DMM_PROBE_WORKER_CACHE[code];
   }
   const stored = loadDmmProbeFromStorage(code);
   if (stored !== undefined) {
     DMM_PROBE_WORKER_CACHE[code] = stored;
-    return { probe: stored, timedOut: false };
+    return stored;
   }
-  if (!budgetMs || budgetMs <= 0) {
-    return { probe: await fetchDmmProbeCover(code, params), timedOut: false };
-  }
-  return Promise.race([
-    fetchDmmProbeCover(code, params).then(function (probe) {
-      return { probe: probe, timedOut: false };
-    }),
-    new Promise(function (resolve) {
-      setTimeout(function () {
-        resolve({ probe: undefined, timedOut: true });
-      }, budgetMs);
-    }),
-  ]);
+  return null;
 }
 
 async function prefetchDmmProbeCovers(codes, params) {
@@ -2446,9 +2442,7 @@ async function fetchDmmProbeCoverBatch(codes, params) {
 }
 
 function lookupDmmProbeCover(code) {
-  code = String(code || "").trim().toUpperCase();
-  if (!code || !Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) return null;
-  return DMM_PROBE_WORKER_CACHE[code];
+  return getCachedDmmProbeCover(code);
 }
 
 function normalizeDmmPrefix(prefix) {
@@ -3628,19 +3622,28 @@ async function loadDetail(link) {
   const rawCode = safeText(movie.number || "");
   const code = isValidJavCatalogCode(rawCode) ? rawCode : "";
   const siteCoverUrl = resolveDetailBackdropUrl(movie);
-  const hasSiteCover = !!siteCoverUrl;
-  const fullVideoPromise = movie.number && !preferPreview ? resolveFullVideo(movie.number, "zh") : Promise.resolve(null);
-  const probePromise = code
-    ? fetchDmmProbeCoverWithBudget(code, {}, hasSiteCover ? DMM_PROBE_DETAIL_BUDGET_MS : 0)
-    : Promise.resolve({ probe: null, timedOut: false });
-  const [probeResult, fullVideo] = await Promise.all([probePromise, fullVideoPromise]);
-  const dmmProbe = probeResult.probe;
-  const coverOptions = { siteFallback: siteCoverUrl };
+  // DMM 高清只复用列表阶段缓存，详情不再发起探测；片源解析保持完整等待
+  const dmmProbe = code ? getCachedDmmProbeCover(code) : null;
+  const fullVideo = movie.number && !preferPreview ? await resolveFullVideo(movie.number, "zh") : null;
+  // 与列表同一套封面拼装，确保顶图继续用已探测到的高清图
   const coverBundle = code
-    ? buildCatembyDetailCoverBundle(code, movie.id || movieId, dmmProbe, coverOptions)
+    ? buildCatembyListCoverBundle(code, movie.id || movieId, dmmProbe, siteCoverUrl)
     : buildCoverBundleFromUrls(siteCoverUrl, siteCoverUrl);
-  const coverUrl = coverBundle.backdropPath || siteCoverUrl;
-  const posterUrl = coverBundle.posterPath || coverBundle.detailPoster || resolveDetailPosterUrl(movie);
+  const probeBackdrop =
+    dmmProbe && dmmProbe.backdropUrl && !isInvalidCoverTarget(dmmProbe.backdropUrl)
+      ? String(dmmProbe.backdropUrl).trim()
+      : "";
+  const probePoster =
+    dmmProbe && dmmProbe.posterUrl && !isInvalidCoverTarget(dmmProbe.posterUrl)
+      ? String(dmmProbe.posterUrl).trim()
+      : "";
+  const coverUrl = probeBackdrop || coverBundle.backdropPath || probePoster || siteCoverUrl || "";
+  const posterUrl =
+    probePoster ||
+    coverBundle.posterPath ||
+    coverBundle.detailPoster ||
+    coverUrl ||
+    resolveDetailPosterUrl(movie);
   const dmmBackdropPaths = code ? buildDetailBackdropPaths(code, dmmProbe) : [];
   const galleryUrls = collectGalleryUrls(movie);
   const meta = parseDetailMeta(movie);
@@ -3658,14 +3661,10 @@ async function loadDetail(link) {
   const displayTitle = code && titleText.indexOf(code) !== 0 ? code + " " + titleText : titleText;
   const summary = safeText(movie.summary || "");
 
-  const backdropPathsList =
-    dmmBackdropPaths.length > 0
-      ? dmmBackdropPaths
-      : galleryUrls.length
-        ? galleryUrls
-        : coverUrl
-          ? [coverUrl]
-          : [];
+  // 顶图/首张必须是高清封面；站点剧照放后面，避免客户端取 backdropPaths[0] 时回落站点图
+  const backdropPathsList = compactUniqueUrls(
+    [].concat(coverUrl ? [coverUrl] : [], dmmBackdropPaths || [], galleryUrls || [])
+  ).filter(Boolean);
 
   return {
     id: code || movie.id || movieId,
@@ -3684,7 +3683,7 @@ async function loadDetail(link) {
     backdropPath: coverUrl,
     posterPath: posterUrl,
     detailPoster: posterUrl,
-    coverUrl: coverBundle.coverUrl || coverUrl,
+    coverUrl: coverUrl || coverBundle.coverUrl || siteCoverUrl,
     backdropPaths: backdropPathsList,
     genreItems: meta.genreItems.length ? meta.genreItems : undefined,
     peoples: meta.peoples.length ? meta.peoples : undefined,
@@ -3820,5 +3819,172 @@ async function loadResource(params) {
     ];
   } catch (e) {
     return [];
+  }
+}
+
+/* ========================= 外挂字幕（Forward type: subtitle） ========================= */
+
+function subtitleLangCode(item) {
+  const name = String((item && item.name) || "").toLowerCase();
+  const langs = Array.isArray(item && item.languages) ? item.languages.join(",").toLowerCase() : "";
+  if (name.includes("zh-cn") || langs.includes("zh-cn") || name.includes("简") || name.includes("chs")) return "zh-CN";
+  if (name.includes("zh-tw") || langs.includes("zh-tw") || name.includes("繁") || name.includes("cht")) return "zh-TW";
+  if (name.includes("-en") || langs.includes("en") || name.includes("eng")) return "en";
+  if (name.includes("-ja") || langs.includes("ja") || name.includes("jpn")) return "ja";
+  return "zh";
+}
+
+function subtitleLangLabel(lang) {
+  if (lang === "zh-CN") return "简中";
+  if (lang === "zh-TW") return "繁中";
+  if (lang === "en") return "English";
+  if (lang === "ja") return "日本語";
+  return "中文";
+}
+
+function subtitleLangRank(lang) {
+  if (lang === "zh-CN") return 0;
+  if (lang === "zh") return 1;
+  if (lang === "zh-TW") return 2;
+  if (lang === "ja") return 3;
+  if (lang === "en") return 4;
+  return 5;
+}
+
+function buildSubtitleTitle(item, lang) {
+  const label = subtitleLangLabel(lang);
+  const rawName = String((item && item.name) || "").replace(/\.[^.]+$/, "").trim();
+  const isHashName = /^[0-9a-f]{32,}$/i.test(rawName);
+  const extra = item && item.extra_name ? " " + item.extra_name : "";
+  if (isHashName || !rawName) return label + extra;
+  const shortName = rawName.length > 40 ? rawName.slice(0, 37) + "…" : rawName;
+  return label + " - " + shortName + extra;
+}
+
+function dedupeSubtitleItems(list, code) {
+  const codeKey = String(code || "")
+    .toLowerCase()
+    .replace(/-/g, "");
+  const map = new Map();
+  for (let i = 0; i < (list || []).length; i++) {
+    const item = list[i];
+    if (!item || !item.cid || !item.url) continue;
+    const prev = map.get(item.cid);
+    if (!prev) {
+      map.set(item.cid, item);
+      continue;
+    }
+    const prevHit = String(prev.name || "")
+      .toLowerCase()
+      .replace(/-/g, "")
+      .includes(codeKey);
+    const curHit = String(item.name || "")
+      .toLowerCase()
+      .replace(/-/g, "")
+      .includes(codeKey);
+    if (curHit && !prevHit) map.set(item.cid, item);
+  }
+  return Array.from(map.values());
+}
+
+function sortSubtitleItems(list, code) {
+  const codeKey = String(code || "")
+    .toLowerCase()
+    .replace(/-/g, "");
+  return (list || []).slice().sort((a, b) => {
+    const aHit = String(a.name || "")
+      .toLowerCase()
+      .replace(/-/g, "")
+      .includes(codeKey)
+      ? 0
+      : 1;
+    const bHit = String(b.name || "")
+      .toLowerCase()
+      .replace(/-/g, "")
+      .includes(codeKey)
+      ? 0
+      : 1;
+    if (aHit !== bHit) return aHit - bHit;
+    const aLang = subtitleLangRank(subtitleLangCode(a));
+    const bLang = subtitleLangRank(subtitleLangCode(b));
+    if (aLang !== bLang) return aLang - bLang;
+    return Number(b.duration || 0) - Number(a.duration || 0);
+  });
+}
+
+function uniquifySubtitleTitles(items) {
+  const counts = {};
+  for (let i = 0; i < items.length; i++) {
+    const title = items[i].title;
+    counts[title] = (counts[title] || 0) + 1;
+  }
+  const seen = {};
+  for (let i = 0; i < items.length; i++) {
+    const title = items[i].title;
+    if ((counts[title] || 1) <= 1) continue;
+    seen[title] = (seen[title] || 0) + 1;
+    items[i].title = title + " #" + seen[title];
+  }
+  return items;
+}
+
+function buildSubtitleFileUrl(originalUrl) {
+  const raw = String(originalUrl || "").trim();
+  if (!raw) return "";
+  // 走站点代理，与网页端一致，避免部分 CDN 直链鉴权/防盗链问题
+  return siteUrl("/api/subtitle/file?url=" + encodeURIComponent(raw));
+}
+
+async function fetchSubtitleCandidates(code) {
+  const name = String(code || "").trim();
+  if (!name) return [];
+  const data = await siteGet("/api/subtitle", { name: name }, { allowError: true });
+  if (!data || Number(data.code) !== 0 || !Array.isArray(data.data) || !data.data.length) return [];
+  return sortSubtitleItems(dedupeSubtitleItems(data.data, name), name);
+}
+
+async function loadSubtitle(params) {
+  try {
+    const code = extractCodeFromParams(params || {});
+    if (!code) return [];
+
+    const candidates = await fetchSubtitleCandidates(code);
+    if (!candidates.length) return [];
+
+    const items = candidates.slice(0, 40).map((item) => {
+      const lang = subtitleLangCode(item);
+      const ext = String(item.ext || "srt").toLowerCase();
+      const durationMs = Number(item.duration || 0);
+      return {
+        id: String(item.cid || item.gcid || item.url),
+        title: buildSubtitleTitle(item, lang),
+        lang: lang,
+        url: buildSubtitleFileUrl(item.url),
+        count: durationMs > 0 ? Math.round(durationMs / 1000) : undefined,
+        format: ext,
+        description: [code, ext.toUpperCase(), item.extra_name || ""].filter(Boolean).join(" · "),
+      };
+    });
+
+    return uniquifySubtitleTitles(items);
+  } catch (e) {
+    console.error("[catemby] loadSubtitle 失败:", e && e.message ? e.message : e);
+    return [];
+  }
+}
+
+/** zip 字幕包时由客户端回调；站点当前多为 srt/ass 直链，保留兼容 */
+async function resolveSubtitleArchive(params) {
+  try {
+    const subtitleFiles = JSON.parse((params && params.subtitleFiles) || "[]");
+    if (!Array.isArray(subtitleFiles) || !subtitleFiles.length) return null;
+    const prefer =
+      subtitleFiles.find((file) => /简|chs|zh-?cn/i.test(String((file && file.name) || ""))) ||
+      subtitleFiles.find((file) => /繁|cht|zh-?tw/i.test(String((file && file.name) || ""))) ||
+      subtitleFiles.find((file) => /\.(srt|ass|ssa|vtt)$/i.test(String((file && file.name) || ""))) ||
+      subtitleFiles[0];
+    return prefer && prefer.path ? prefer.path : null;
+  } catch (e) {
+    return null;
   }
 }
