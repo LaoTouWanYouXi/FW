@@ -948,9 +948,11 @@ var DEVICE_DEFAULTS = {
 var DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
 var DMM_PROBE_WORKER_CACHE = {};
 var DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
-var DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
+var DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v2.";
 var DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
 var DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
+var DMM_PROBE_BATCH_TIMEOUT_MS = 20000;
+var DMM_PROBE_BATCH_SIZE = 20;
 var DMM_CONTENT_ID_OVERRIDES = {};
 var MGSTAGE_COVER_RULES = {
   ABF: { maker: "prestige" },
@@ -1031,9 +1033,9 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.3.0",
+  version: "4.3.1",
   requiredVersion: "0.0.1",
-  description: "JavDB API：最近更新 / TOP250 / 分类；列表 DMM 竖版海报，详情复用 + 预告片模块",
+  description: "JavDB API：最近更新 / TOP250 / 分类；列表仅用验证过的 DMM 竖版，否则站点封面；详情复用 + 预告片",
   author: "老头",
   site: API_SITE,
   detailCacheDuration: 3600,
@@ -1783,18 +1785,14 @@ function resolveListPosterUrl(code, siteFallback, dmmProbe) {
   var fallback = String(siteFallback || "").trim();
   if (!code) return fallback;
   var probe = dmmProbe !== undefined ? dmmProbe : getCachedDmmProbeCover(code);
-  if (probe && probe.posterUrl && !isInvalidCoverTarget(probe.posterUrl)) {
-    return String(probe.posterUrl).trim();
+  // 仅采用 Worker 验证过的竖版海报；不再猜 awsimgsrc 链接（猜错易出占位图）
+  if (probe && probe.posterUrl) {
+    var poster = String(probe.posterUrl).trim();
+    if (poster && !isInvalidCoverTarget(poster) && !isLowResDmmPosterUrl(poster)) {
+      return poster;
+    }
   }
-  var candidates = buildCoverCandidatesFromVideoId(code, probe);
-  return (
-    resolvePosterUrlWithSiteFallback(
-      pickFirstUsableCoverUrl(filterTrustedCdnUrls(candidates.posterCandidates)),
-      fallback
-    ) ||
-    fallback ||
-    ""
-  );
+  return fallback;
 }
 
 function mapListMovie(movie) {
@@ -2029,6 +2027,21 @@ function getDmmProbeWorkerHeaders(params) {
   return headers;
 }
 
+function normalizeProbeBest(best) {
+  if (!best || typeof best !== "object") return null;
+  var posterUrl = String(best.posterUrl || "").trim();
+  var backdropUrl = String(best.backdropUrl || "").trim();
+  if (posterUrl && (isInvalidCoverTarget(posterUrl) || isLowResDmmPosterUrl(posterUrl))) {
+    posterUrl = "";
+  }
+  if (backdropUrl && isInvalidCoverTarget(backdropUrl)) backdropUrl = "";
+  return {
+    contentId: String(best.contentId || ""),
+    posterUrl: posterUrl,
+    backdropUrl: backdropUrl,
+  };
+}
+
 function parseDmmProbeWorkerResponse(res) {
   if (!res || res.data === undefined || res.data === null) {
     return { probe: undefined, knownMiss: false };
@@ -2039,14 +2052,10 @@ function parseDmmProbeWorkerResponse(res) {
     var data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
     if (!data) return { probe: undefined, knownMiss: false };
     if (data.ok && data.best) {
-      return {
-        probe: {
-          contentId: String(data.best.contentId || ""),
-          posterUrl: String(data.best.posterUrl || ""),
-          backdropUrl: String(data.best.backdropUrl || ""),
-        },
-        knownMiss: false,
-      };
+      var probe = normalizeProbeBest(data.best);
+      // 无可用竖版也缓存 contentId/backdrop，避免列表再猜 DMM 链接
+      if (!probe) return { probe: null, knownMiss: true };
+      return { probe: probe, knownMiss: false };
     }
     if (data.ok === false) return { probe: null, knownMiss: true };
     return { probe: undefined, knownMiss: false };
@@ -2167,6 +2176,59 @@ function getCachedDmmProbeCover(code) {
   return null;
 }
 
+function applyDmmProbeBatchResults(data, requestedCodes) {
+  var rows = (data && data.results) || (data && data.items) || [];
+  if (!Array.isArray(rows)) rows = [];
+  var byCode = {};
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (!row) continue;
+    var code = String(row.code || "").trim().toUpperCase();
+    if (!code) continue;
+    if (row.ok && row.best) {
+      byCode[code] = normalizeProbeBest(row.best);
+    } else if (row.ok === false) {
+      byCode[code] = null;
+    }
+  }
+  for (var j = 0; j < (requestedCodes || []).length; j++) {
+    var c = requestedCodes[j];
+    if (!Object.prototype.hasOwnProperty.call(byCode, c)) continue;
+    DMM_PROBE_WORKER_CACHE[c] = byCode[c];
+    saveDmmProbeToStorage(c, byCode[c]);
+  }
+  return true;
+}
+
+async function fetchDmmProbeCoverBatch(codes, params) {
+  var list = codes || [];
+  if (!list.length) return true;
+  var base = getDmmProbeWorkerBase(params);
+  if (!base) return false;
+  try {
+    var headers = getDmmProbeWorkerHeaders(params);
+    headers["Content-Type"] = "application/json";
+    headers.Accept = "application/json";
+    var res = await Widget.http.post(
+      base + "/probe",
+      { codes: list, force: false, variants: false },
+      {
+        headers: headers,
+        timeout: DMM_PROBE_BATCH_TIMEOUT_MS,
+        allow_redirects: true,
+      }
+    );
+    if (!res || res.data === undefined || res.data === null) return false;
+    var status = Number(res.status || res.statusCode || 0);
+    if (status >= 400) return false;
+    var data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+    return applyDmmProbeBatchResults(data, list);
+  } catch (err) {
+    console.error("[javdb] DMM batch probe failed:", (err && err.message) || err);
+    return false;
+  }
+}
+
 async function prefetchDmmProbeCovers(codes, params) {
   var pending = [];
   var seen = {};
@@ -2184,9 +2246,11 @@ async function prefetchDmmProbeCovers(codes, params) {
   }
   if (!pending.length) return;
 
-  var concurrency = 6;
-  for (var start = 0; start < pending.length; start += concurrency) {
-    var chunk = pending.slice(start, start + concurrency);
+  // 优先批量 /probe，失败再逐条 /cover
+  for (var start = 0; start < pending.length; start += DMM_PROBE_BATCH_SIZE) {
+    var chunk = pending.slice(start, start + DMM_PROBE_BATCH_SIZE);
+    var ok = await fetchDmmProbeCoverBatch(chunk, params);
+    if (ok) continue;
     var tasks = [];
     for (var j = 0; j < chunk.length; j++) {
       tasks.push(fetchDmmProbeCover(chunk[j], params));
