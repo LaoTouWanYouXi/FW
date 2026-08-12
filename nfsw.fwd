@@ -13,6 +13,15 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/guangya_jav.js"
     },
     {
+      "id": "forward.huangdou",
+      "title": "黄豆短剧",
+      "description": "黄豆短剧聚合模块",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/huangdou.js"
+    },
+    {
       "id": "forward.catemby",
       "title": "catemby",
       "description": "catemby聚合模块",
