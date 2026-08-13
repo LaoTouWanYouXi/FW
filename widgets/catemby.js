@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.6.0",
+  version: "1.6.2",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -2179,13 +2179,24 @@ function getMgstageCoverRule(parts) {
   return MGSTAGE_COVER_RULES[parts.prefix] || null;
 }
 
+function urlDedupeKey(url) {
+  return String(url || "")
+    .trim()
+    .toLowerCase()
+    .split("?")[0]
+    .split("#")[0]
+    .replace(/\/+$/, "");
+}
+
 function compactUniqueUrls(urls) {
   const seen = {};
   const result = [];
   for (let i = 0; i < (urls || []).length; i++) {
     const value = String(urls[i] || "").trim();
-    if (!value || seen[value]) continue;
-    seen[value] = true;
+    if (!value) continue;
+    const key = urlDedupeKey(value);
+    if (!key || seen[key]) continue;
+    seen[key] = true;
     result.push(value);
   }
   return result;
@@ -2756,11 +2767,6 @@ function buildDetailCoverBundle(code, siteFallback, dmmProbe, options) {
   return buildCoverBundleFromUrls(hdPoster, hdBackdrop || hdPoster);
 }
 
-function buildDetailBackdropPaths(displayCode, dmmProbe) {
-  const jtMeta = fetchJavTrailersMeta(displayCode, dmmProbe);
-  return compactUniqueUrls([jtMeta.backdropPath].concat(jtMeta.backdropPaths || [])).filter(Boolean);
-}
-
 function applyDmmCoverBundleToItem(item, coverBundle) {
   if (!item || !coverBundle) return item;
   return Object.assign({}, item, {
@@ -3327,19 +3333,14 @@ function collectGalleryUrls(movie) {
   const urls = [];
   const seen = {};
   (movie.preview_images || []).forEach((item) => {
-    const raw = String((item && item.large_url) || "").trim();
-    if (!raw || /^data:/i.test(raw) || seen[raw]) return;
-    seen[raw] = true;
+    const raw = String((item && (item.large_url || item.thumb_url)) || "").trim();
+    if (!raw || /^data:/i.test(raw)) return;
+    const key = urlDedupeKey(raw);
+    if (!key || seen[key]) return;
+    seen[key] = true;
     urls.push(raw);
   });
-  if (!urls.length) {
-    const thumb = resolveListThumbUrl(movie);
-    if (thumb) urls.push(thumb);
-    else {
-      const cover = resolveListCoverUrl(movie);
-      if (cover) urls.push(cover);
-    }
-  }
+  // 不回退封面/缩略图：封面已单独作为 backdropPaths[0]，避免剧照区重复展示
   return urls;
 }
 
@@ -3452,14 +3453,93 @@ function parseDetailMeta(movie) {
   return { genreItems, peoples };
 }
 
-async function resolveFullVideo(code, lang) {
+const RESOLVE_CACHE = {};
+const RESOLVE_CACHE_TTL_OK_MS = 30 * 60 * 1000;
+const RESOLVE_CACHE_TTL_MISS_MS = 10 * 60 * 1000;
+const RESOLVE_REQUEST_TIMEOUT_MS = 6000;
+
+function resolveCacheKey(code) {
+  return String(code || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s_]+/g, "")
+    .replace(/-+/g, "-");
+}
+
+function getCachedResolve(code) {
+  const key = resolveCacheKey(code);
+  if (!key) return undefined;
+  const entry = RESOLVE_CACHE[key];
+  if (!entry) return undefined;
+  const ttl = entry.ok ? RESOLVE_CACHE_TTL_OK_MS : RESOLVE_CACHE_TTL_MISS_MS;
+  if (Date.now() - Number(entry.savedAt) > ttl) {
+    delete RESOLVE_CACHE[key];
+    return undefined;
+  }
+  return entry.ok ? entry.value : null;
+}
+
+function setCachedResolve(code, value) {
+  const key = resolveCacheKey(code);
+  if (!key) return;
+  RESOLVE_CACHE[key] = { ok: !!value, value: value || null, savedAt: Date.now() };
+}
+
+function withTimeoutResult(promise, ms) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ timedOut: true, value: null });
+    }, Math.max(1, Number(ms) || 1));
+    Promise.resolve(promise).then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ timedOut: false, value: value });
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ timedOut: false, value: null });
+      }
+    );
+  });
+}
+
+async function resolveFullVideo(code, lang, options) {
+  options = options || {};
   if (!code) return null;
-  const codes = buildResolveCodeVariants(code);
-  for (let i = 0; i < codes.length; i++) {
-    const data = await siteGet("/api/v/resolve", { code: codes[i], lang: lang || "zh" }, { allowError: true });
-    const picked = pickResolveVariant(data);
-    if (picked) return picked;
-    if (data && data.error === "video_not_found") return null;
+  const cached = getCachedResolve(code);
+  if (cached !== undefined) return cached;
+
+  // 只请求带横杠的规范番号；无横杠变体常被判 invalid_code，属于无效重试
+  const variants = buildResolveCodeVariants(code);
+  const primary =
+    variants.find((item) => String(item).indexOf("-") >= 0) ||
+    variants[0] ||
+    "";
+  if (!primary) return null;
+
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : RESOLVE_REQUEST_TIMEOUT_MS;
+  const raced = await withTimeoutResult(
+    siteGet("/api/v/resolve", { code: primary, lang: lang || "zh" }, { allowError: true }),
+    timeoutMs
+  );
+  if (raced.timedOut) return null;
+
+  const data = raced.value;
+  const picked = pickResolveVariant(data);
+  if (picked) {
+    setCachedResolve(code, picked);
+    return picked;
+  }
+  if (data && (data.error === "video_not_found" || data.error === "invalid_code")) {
+    setCachedResolve(code, null);
+    return null;
   }
   return null;
 }
@@ -3613,18 +3693,14 @@ async function searchGlobal(params) {
 
 async function loadDetail(link) {
   const movieId = extractMovieId(link);
-  const parsed = parseLinkQuery(link);
-  const videoMode = String(parsed.query.mode || parsed.query.video_mode || "full").toLowerCase();
-  const preferPreview = videoMode === "preview" || videoMode === "trailer";
 
   const detail = await apiGet("/v4/movies/" + movieId);
   const movie = detail.movie || {};
   const rawCode = safeText(movie.number || "");
   const code = isValidJavCatalogCode(rawCode) ? rawCode : "";
   const siteCoverUrl = resolveDetailBackdropUrl(movie);
-  // DMM 高清只复用列表阶段缓存，详情不再发起探测；片源解析保持完整等待
+  // DMM 高清只复用列表阶段缓存，详情不再发起探测；详情不做 resolve，有预告展示、无预告留空
   const dmmProbe = code ? getCachedDmmProbeCover(code) : null;
-  const fullVideo = movie.number && !preferPreview ? await resolveFullVideo(movie.number, "zh") : null;
   // 与列表同一套封面拼装，确保顶图继续用已探测到的高清图
   const coverBundle = code
     ? buildCatembyListCoverBundle(code, movie.id || movieId, dmmProbe, siteCoverUrl)
@@ -3644,8 +3720,12 @@ async function loadDetail(link) {
     coverBundle.detailPoster ||
     coverUrl ||
     resolveDetailPosterUrl(movie);
-  const dmmBackdropPaths = code ? buildDetailBackdropPaths(code, dmmProbe) : [];
   const galleryUrls = collectGalleryUrls(movie);
+  // 有站点剧照时只用站点图；无剧照才回退 DMM/MGS 合成剧照（不含封面，避免与顶图重复）
+  const fallbackGallery =
+    !galleryUrls.length && code
+      ? compactUniqueUrls((fetchJavTrailersMeta(code, dmmProbe).backdropPaths || [])).filter(Boolean)
+      : [];
   const meta = parseDetailMeta(movie);
   const actorMovies = (movie.actor_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
   const fallbackRelated = (movie.relative_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
@@ -3653,18 +3733,16 @@ async function loadDetail(link) {
   const relatedItems = relatedSource.map((item) => mapRelatedMovie(item, posterUrl || coverUrl));
 
   const previewUrl = movie.preview_video_url || "";
-  const fullUrl = fullVideo && fullVideo.sourceUrl ? fullVideo.sourceUrl : "";
-  const playbackUrl = preferPreview ? previewUrl || fullUrl || "" : fullUrl || previewUrl || "";
   const trailers = buildTrailers(movie, posterUrl || coverUrl);
 
   const titleText = safeText(movie.title || code);
   const displayTitle = code && titleText.indexOf(code) !== 0 ? code + " " + titleText : titleText;
   const summary = safeText(movie.summary || "");
 
-  // 顶图/首张必须是高清封面；站点剧照放后面，避免客户端取 backdropPaths[0] 时回落站点图
-  const backdropPathsList = compactUniqueUrls(
-    [].concat(coverUrl ? [coverUrl] : [], dmmBackdropPaths || [], galleryUrls || [])
-  ).filter(Boolean);
+  // 顶图/首张必须是高清封面；剧照去重后接在后面
+  const coverKey = urlDedupeKey(coverUrl);
+  const stills = (galleryUrls.length ? galleryUrls : fallbackGallery).filter((u) => urlDedupeKey(u) !== coverKey);
+  const backdropPathsList = compactUniqueUrls([].concat(coverUrl ? [coverUrl] : [], stills)).filter(Boolean);
 
   return {
     id: code || movie.id || movieId,
@@ -3673,8 +3751,8 @@ async function loadDetail(link) {
     title: displayTitle,
     link: movieLink(movie.id || movieId),
     description: summary || undefined,
-    videoUrl: playbackUrl || undefined,
-    playerType: playbackUrl && /\.m3u8/i.test(playbackUrl) ? "ijk" : "system",
+    videoUrl: previewUrl || undefined,
+    playerType: previewUrl && /\.m3u8/i.test(previewUrl) ? "ijk" : "system",
     customHeaders: {
       "User-Agent": UA,
       Referer: SITE_BASE + "/movie/" + movieId,
@@ -3694,21 +3772,11 @@ async function loadDetail(link) {
     durationText: movie.duration ? movie.duration + " 分钟" : "",
     rating: Number(movie.score || 0) || 0,
     videoId: movie.id || movieId,
-    extra: Object.assign(
-      {
-        videoMode: fullUrl ? "full" : previewUrl ? "preview" : "none",
-        previewVideoUrl: previewUrl || "",
-        fullVideoAvailable: !!fullUrl,
-      },
-      !fullUrl && movie.number ? { resolveNote: "站点未收录完整片源(" + movie.number + ")" } : {},
-      fullVideo
-        ? {
-            fullVideoUrl: fullVideo.sourceUrl,
-            fullVideoLabel: fullVideo.label || fullVideo.variant || "完整视频",
-            fullVideoType: fullVideo.sourceType || "video/mp4",
-          }
-        : {}
-    ),
+    extra: {
+      videoMode: previewUrl ? "preview" : "none",
+      previewVideoUrl: previewUrl || "",
+      fullVideoAvailable: false,
+    },
   };
 }
 
