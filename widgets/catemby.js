@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.6.2",
+  version: "1.6.4",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -2934,27 +2934,6 @@ function resolveDetailPosterUrl(movie) {
   return resolveListCoverUrl(movie);
 }
 
-function buildResolveCodeVariants(code) {
-  const raw = safeText(code);
-  const variants = [];
-  if (raw) variants.push(raw);
-  if (raw) {
-    const upper = raw.toUpperCase();
-    const compact = upper.replace(/[\s_]+/g, "").replace(/-+/g, "-");
-    const noDash = upper.replace(/-/g, "");
-    variants.push(upper, compact, noDash);
-  }
-  const out = [];
-  const seen = {};
-  variants.forEach((item) => {
-    const val = String(item || "").trim();
-    if (!val || seen[val]) return;
-    seen[val] = true;
-    out.push(val);
-  });
-  return out;
-}
-
 function isPreviewVariant(item) {
   if (!item || !item.sourceUrl) return true;
   const variant = String(item.variant || "").toLowerCase();
@@ -3455,8 +3434,8 @@ function parseDetailMeta(movie) {
 
 const RESOLVE_CACHE = {};
 const RESOLVE_CACHE_TTL_OK_MS = 30 * 60 * 1000;
-const RESOLVE_CACHE_TTL_MISS_MS = 10 * 60 * 1000;
-const RESOLVE_REQUEST_TIMEOUT_MS = 6000;
+const RESOLVE_CACHE_TTL_MISS_MS = 15 * 60 * 1000;
+const RESOLVE_STORAGE_PREFIX = "catemby.resolve.v1.";
 
 function resolveCacheKey(code) {
   return String(code || "")
@@ -3466,72 +3445,59 @@ function resolveCacheKey(code) {
     .replace(/-+/g, "-");
 }
 
+function pickPrimaryResolveCode(code) {
+  const raw = safeText(code);
+  if (!raw) return "";
+  // 站点只要规范番号（如 SAN-449）；无横杠变体会直接 invalid_code
+  return raw.toUpperCase().replace(/[\s_]+/g, "").replace(/-+/g, "-");
+}
+
 function getCachedResolve(code) {
   const key = resolveCacheKey(code);
   if (!key) return undefined;
-  const entry = RESOLVE_CACHE[key];
-  if (!entry) return undefined;
-  const ttl = entry.ok ? RESOLVE_CACHE_TTL_OK_MS : RESOLVE_CACHE_TTL_MISS_MS;
-  if (Date.now() - Number(entry.savedAt) > ttl) {
+  const mem = RESOLVE_CACHE[key];
+  if (mem) {
+    const ttl = mem.ok ? RESOLVE_CACHE_TTL_OK_MS : RESOLVE_CACHE_TTL_MISS_MS;
+    if (Date.now() - Number(mem.savedAt) <= ttl) return mem.ok ? mem.value : null;
     delete RESOLVE_CACHE[key];
+  }
+  try {
+    const raw = Widget.storage.get(RESOLVE_STORAGE_PREFIX + key);
+    if (!raw) return undefined;
+    const entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!entry || !entry.savedAt) return undefined;
+    const ttl = entry.ok ? RESOLVE_CACHE_TTL_OK_MS : RESOLVE_CACHE_TTL_MISS_MS;
+    if (Date.now() - Number(entry.savedAt) > ttl) return undefined;
+    RESOLVE_CACHE[key] = entry;
+    return entry.ok ? entry.value : null;
+  } catch (e) {
     return undefined;
   }
-  return entry.ok ? entry.value : null;
 }
 
 function setCachedResolve(code, value) {
   const key = resolveCacheKey(code);
   if (!key) return;
-  RESOLVE_CACHE[key] = { ok: !!value, value: value || null, savedAt: Date.now() };
+  const entry = { ok: !!value, value: value || null, savedAt: Date.now() };
+  RESOLVE_CACHE[key] = entry;
+  try {
+    const url = value && value.sourceUrl ? String(value.sourceUrl) : "";
+    // 超大 data: m3u8 只留内存缓存，避免撑爆 Widget.storage
+    if (value && url.indexOf("data:") === 0 && url.length > 4096) return;
+    Widget.storage.set(RESOLVE_STORAGE_PREFIX + key, JSON.stringify(entry));
+  } catch (e) {}
 }
 
-function withTimeoutResult(promise, ms) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      resolve({ timedOut: true, value: null });
-    }, Math.max(1, Number(ms) || 1));
-    Promise.resolve(promise).then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({ timedOut: false, value: value });
-      },
-      () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({ timedOut: false, value: null });
-      }
-    );
-  });
-}
-
-async function resolveFullVideo(code, lang, options) {
-  options = options || {};
+// 供 loadResource / stream 使用：详情页不走这里
+async function resolveFullVideo(code, lang) {
   if (!code) return null;
   const cached = getCachedResolve(code);
   if (cached !== undefined) return cached;
 
-  // 只请求带横杠的规范番号；无横杠变体常被判 invalid_code，属于无效重试
-  const variants = buildResolveCodeVariants(code);
-  const primary =
-    variants.find((item) => String(item).indexOf("-") >= 0) ||
-    variants[0] ||
-    "";
+  const primary = pickPrimaryResolveCode(code);
   if (!primary) return null;
 
-  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : RESOLVE_REQUEST_TIMEOUT_MS;
-  const raced = await withTimeoutResult(
-    siteGet("/api/v/resolve", { code: primary, lang: lang || "zh" }, { allowError: true }),
-    timeoutMs
-  );
-  if (raced.timedOut) return null;
-
-  const data = raced.value;
+  const data = await siteGet("/api/v/resolve", { code: primary, lang: lang || "zh" }, { allowError: true });
   const picked = pickResolveVariant(data);
   if (picked) {
     setCachedResolve(code, picked);
@@ -3780,10 +3746,6 @@ async function loadDetail(link) {
   };
 }
 
-function normalizeCode(value) {
-  return String(value || "").toUpperCase().replace(/[\s_\-]+/g, "");
-}
-
 function extractSearchCode(text) {
   const s = String(text || "").toUpperCase().replace(/\./g, " ").replace(/_/g, "-").replace(/\s+/g, " ").trim();
   if (!s) return "";
@@ -3848,34 +3810,20 @@ function extractCodeFromParams(params) {
   return "";
 }
 
-async function findMovieByCode(code) {
-  const target = normalizeCode(code);
-  const keys = [...new Set([code, code.replace(/-/g, "")])];
-  for (const key of keys) {
-    const data = await apiGet("/v2/search", { q: key, page: 1, type: "movie" });
-    const movies = data.movies || [];
-    const exact = movies.find((item) => normalizeCode(item.number) === target);
-    if (exact) return exact;
-    if (movies.length === 1) return movies[0];
-  }
-  return null;
-}
-
 async function loadResource(params) {
   try {
     const code = extractCodeFromParams(params || {});
     if (!code) return [];
 
-    const matched = await findMovieByCode(code);
-    if (!matched || !matched.id) return [];
-
-    const detail = await apiGet("/v4/movies/" + matched.id);
-    const movie = detail.movie || matched;
-    const referer = SITE_BASE + "/movie/" + movie.id;
-    const headers = { "User-Agent": UA, Referer: referer, Origin: SITE_BASE };
-
-    const fullVideo = await resolveFullVideo(movie.number || code, "zh");
+    // 片源只依赖番号 resolve，不再串行搜片+详情（可省 1–3s）
+    const fullVideo = await resolveFullVideo(code, "zh");
     if (!fullVideo || !fullVideo.sourceUrl) return [];
+
+    const headers = {
+      "User-Agent": UA,
+      Referer: SITE_BASE + "/",
+      Origin: SITE_BASE,
+    };
 
     return [
       {
