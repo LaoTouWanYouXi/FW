@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.6.5",
+  version: "1.6.6",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -2936,19 +2936,23 @@ function resolveDetailPosterUrl(movie) {
 
 function isPreviewVariant(item) {
   if (!item || !item.sourceUrl) return true;
-  const variant = String(item.variant || "").toLowerCase();
+  const variant = String(item.variant || "").toLowerCase().trim();
   const label = String(item.label || "").toLowerCase();
-  const url = String(item.sourceUrl || "").toLowerCase();
-  const text = variant + " " + label + " " + url;
-  // variant / label 明确为预告
-  if (/^(preview|trailer|teaser|sample)$/i.test(variant)) return true;
+  // 站点标记 original/原版/完整 即为正片；data: m3u8 正文里常带 preview 字样，不能当过滤依据
+  if (variant === "original" || variant === "full") return false;
+  if (/原版|完整/.test(label) && !/预告|預覽|预览|样品|樣品|preview|trailer/.test(label)) return false;
+
+  const urlRaw = String(item.sourceUrl || "");
+  const urlHead =
+    urlRaw.indexOf("data:") === 0
+      ? urlRaw.slice(0, 96).toLowerCase()
+      : urlRaw.toLowerCase().split("?")[0].split("#")[0];
+
+  if (/^(preview|trailer|teaser|sample)$/.test(variant)) return true;
   if (/preview|trailer|teaser|预告|預覽|样品|樣品|预览/.test(variant + " " + label)) return true;
-  // URL 形态：站点预告、DMM sample/litevideo 等短片
-  if (/\/preview\.mp4(?:\?|$)|preview_video|\/preview\/|\/trailer\/|\/teaser\//.test(url)) return true;
-  if (/\/sample(?:s)?\/|litevideo|_sm_|_s_sample|sample_s\./.test(url)) return true;
-  if (/dmm\.co\.jp\/.*sample|cvpsample|avsctld/.test(url)) return true;
-  // 兜底：文案里带预告关键词（不含宽泛 sample，避免误伤完整片 CDN）
-  if (/preview|trailer|teaser|预告|預覽|预览/.test(text)) return true;
+  if (/\/preview\.mp4$|preview_video|\/preview\/|\/trailer\/|\/teaser\//.test(urlHead)) return true;
+  if (/\/sample(?:s)?\/|litevideo|_sm_|_s_sample|sample_s\./.test(urlHead)) return true;
+  if (/dmm\.co\.jp\/.*sample|cvpsample|avsctld/.test(urlHead)) return true;
   return false;
 }
 
@@ -3761,7 +3765,7 @@ function extractSearchCode(text) {
   if (!s) return "";
   const patterns = [
     /\bFC2(?:[- ]?PPV)?[- ]?\d{5,8}\b/,
-    /\b(?:S2M|MIAA|SSNI|SNIS|IPX|IPZZ|SSIS|JUQ|MIDE|MIDV|STARS|ABW|RKI|DVAJ|WANZ|LULU|DLDSS|VRTM|SDMU|SDDE|MKMP|HMN|MUDR|ADN|CAWD|PPPE|PRED|MGR|SHKD|MXGS|FSDSS|JUL|KTB|MIAB|GVH|MIMK|JUY|JUTA|IDBD|HND|DASD|CLO|BF|HONB|ROE|CEMD|MIUM|NITR|RCTD|RCT|IPVR|MIBD|JUR|JURD|SOE|ORE|PYO|START|NSFS|JJGG|BANK|MILK|SIR|FSOK|KV|KIWVR|MREC|DVRT|VOD)\s*[-_ ]?\d{2,6}[A-Z]?(?:[-_ ]?[A-Z]{0,4})?\b/,
+    /\b(?:S2M|MIAA|SSNI|SNIS|IPX|IPZZ|SSIS|JUQ|MIDE|MIDV|STARS|ABW|RKI|DVAJ|WANZ|LULU|DLDSS|VRTM|SDMU|SDDE|MKMP|HMN|MUDR|ADN|CAWD|PPPE|PRED|MGR|SHKD|MXGS|FSDSS|JUL|KTB|MIAB|GVH|MIMK|JUY|JUTA|IDBD|HND|DASD|CLO|BF|HONB|ROE|CEMD|MIUM|NITR|RCTD|RCT|IPVR|MIBD|JUR|JURD|SOE|ORE|PYO|START|NSFS|JJGG|BANK|MILK|SIR|FSOK|KV|KIWVR|MREC|DVRT|VOD)\s*[-_ ]?\d{2,6}[A-Z]?(?:[-_][A-Z]{1,4})?\b/,
     /\b[A-Z]{2,10}\s*[-_ ]?\d{2,8}[A-Z]?\b/,
     /\b\d{6,8}\b/,
   ];
@@ -3796,12 +3800,13 @@ function collectStringValues(value, depth, out, visited) {
 
 function extractCodeFromParams(params) {
   params = params || {};
+  // videoId 常为站点哈希或媒体库数字 ID，放到文件名/标题之后，避免误当成番号
   const priority = [
-    params.code, params.videoId, params.number, params.fileName, params.filename, params.file_name,
+    params.code, params.number, params.fileName, params.filename, params.file_name,
     params.name, params.path, params.filePath, params.file_path, params.mediaPath, params.media_path,
-    params.id, params.title, params.seriesName, params.originalTitle, params.originalName,
-    params.episodeName, params.description, params.link, params.url, params.videoUrl, params.playUrl,
-    params.streamUrl,
+    params.title, params.seriesName, params.originalTitle, params.originalName,
+    params.episodeName, params.id, params.description, params.link,
+    params.videoId, params.url, params.videoUrl, params.playUrl, params.streamUrl,
   ];
   if (params.tmdbInfo) {
     priority.push(params.tmdbInfo.title, params.tmdbInfo.name, params.tmdbInfo.originalTitle, params.tmdbInfo.originalName);
@@ -3811,11 +3816,11 @@ function extractCodeFromParams(params) {
   }
   for (const value of priority) {
     const code = extractSearchCode(value);
-    if (code) return code;
+    if (code && isValidJavCatalogCode(code)) return code;
   }
   for (const value of collectStringValues(params)) {
     const code = extractSearchCode(value);
-    if (code) return code;
+    if (code && isValidJavCatalogCode(code)) return code;
   }
   return "";
 }
@@ -3827,7 +3832,6 @@ async function loadResource(params) {
 
     // 片源只依赖番号 resolve，不再串行搜片+详情（可省 1–3s）
     const fullVideo = await resolveFullVideo(code, "zh");
-    // 二次拦截：绝不把预告/样品当成完整播放源返回
     if (!fullVideo || !fullVideo.sourceUrl || isPreviewVariant(fullVideo)) return [];
 
     const headers = {
@@ -3845,6 +3849,7 @@ async function loadResource(params) {
       },
     ];
   } catch (e) {
+    console.error("[catemby] loadResource 失败:", e && e.message ? e.message : e);
     return [];
   }
 }
