@@ -3,7 +3,7 @@ WidgetMetadata = {
     title: "MissAV_ovo",
     author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|CC|EL|Eric|墨白",
     description: "MissAV 视频聚合模块，支持其他模块聚合missav资源、支持高清海报、封面图、预告片、相似推荐、演员信息及头像",
-    version: "3.3",
+    version: "3.4",
     requiredVersion: "0.0.1",
     site: "https://missav.fans",
     modules: [
@@ -1136,35 +1136,118 @@ async function findAllMissAVDetailPages(code) {
     return pages;
 }
 
-async function buildMissavStreamItems(uuid, code, detailLink, type = "有码") {
-    const items = [];
-    const headers = {
-        "Referer": `${BASE_URL}/`,
+function collectSurritM3u8Urls(text) {
+    const urls = [];
+    const re = /https:\/\/surrit\.[a-z0-9.-]+\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/[^"'\\\s]*\.m3u8/gi;
+    let match;
+    while ((match = re.exec(String(text || ""))) !== null) {
+        if (urls.indexOf(match[0]) < 0) urls.push(match[0]);
+    }
+    return urls;
+}
+
+function parseSurritPlaybackFromUrl(url) {
+    const match = String(url || "").match(/https:\/\/(surrit\.[a-z0-9.-]+)\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\//i);
+    if (!match) return null;
+    return { host: match[1], uuid: match[2], url: String(url) };
+}
+
+function extractSurritPlaybackFromHtml(html) {
+    if (!html) return null;
+    const texts = [html];
+    const unpacked = unpackPacker(html);
+    if (unpacked) texts.push(unpacked);
+
+    const urls = [];
+    texts.forEach((text) => {
+        collectSurritM3u8Urls(text).forEach((url) => {
+            if (urls.indexOf(url) < 0) urls.push(url);
+        });
+    });
+    if (!urls.length) return null;
+
+    const parsed = parseSurritPlaybackFromUrl(urls[0]);
+    if (!parsed) return null;
+    return {
+        host: parsed.host,
+        uuid: parsed.uuid,
+        urls,
+        playlistUrl: urls.find((url) => /\/playlist\.m3u8/i.test(url)) || `https://${parsed.host}/${parsed.uuid}/playlist.m3u8`
+    };
+}
+
+function normalizeSurritPlayback(value) {
+    if (!value) return null;
+    if (typeof value === "string") {
+        const fromUrl = parseSurritPlaybackFromUrl(value);
+        if (fromUrl) {
+            return {
+                host: fromUrl.host,
+                uuid: fromUrl.uuid,
+                urls: [fromUrl.url],
+                playlistUrl: /\/playlist\.m3u8/i.test(fromUrl.url) ? fromUrl.url : `https://${fromUrl.host}/${fromUrl.uuid}/playlist.m3u8`
+            };
+        }
+        if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)) {
+            return {
+                host: "surrit.mrstcdn.store",
+                uuid: value,
+                urls: [],
+                playlistUrl: `https://surrit.mrstcdn.store/${value}/playlist.m3u8`
+            };
+        }
+        return null;
+    }
+    if (value.uuid) {
+        const host = value.host || "surrit.mrstcdn.store";
+        const urls = Array.isArray(value.urls) ? value.urls.slice() : [];
+        return {
+            host,
+            uuid: value.uuid,
+            urls,
+            playlistUrl: value.playlistUrl || urls.find((url) => /\/playlist\.m3u8/i.test(url)) || `https://${host}/${value.uuid}/playlist.m3u8`
+        };
+    }
+    return null;
+}
+
+function buildMissavStreamHeaders(detailLink) {
+    const referer = String(detailLink || `${BASE_URL}/`);
+    return {
+        "Referer": referer,
         "User-Agent": HEADERS["User-Agent"],
         "Origin": BASE_URL
     };
+}
 
-    try {
-        const resp = await Widget.http.get(`https://surrit.com/${uuid}/1080p/video.m3u8`, {
-            headers, timeout: 1500
+function buildMissavStreamItems(playbackOrUuid, code, detailLink, type = "有码") {
+    const playback = normalizeSurritPlayback(playbackOrUuid);
+    if (!playback) return [];
+
+    const headers = buildMissavStreamHeaders(detailLink);
+    const base = `https://${playback.host}/${playback.uuid}`;
+    const items = [];
+    const seen = new Set();
+
+    const push = (label, url) => {
+        if (!url || seen.has(url)) return;
+        seen.add(url);
+        items.push({
+            name: `MissAV ${type} ${label}`,
+            description: `番号：${code}\n类型：${type}\n来源：MissAV\n清晰度：${label}`,
+            url,
+            customHeaders: headers
         });
-        if (resp && resp.statusCode === 200 && String(resp.data || "").includes("#EXTM3U")) {
-            items.push({
-                name: `MissAV ${type} 1080P`,
-                description: `番号：${code}\n类型：${type}\n来源：MissAV\n清晰度：1080P`,
-                url: `https://surrit.com/${uuid}/1080p/video.m3u8`,
-                customHeaders: headers
-            });
-        }
-    } catch (e) {}
+    };
 
-    items.push({
-        name: `MissAV ${type} 720P`,
-        description: `番号：${code}\n类型：${type}\n来源：MissAV\n清晰度：720P`,
-        url: `https://surrit.com/${uuid}/720p/video.m3u8`,
-        customHeaders: headers
-    });
+    const url1080 = playback.urls.find((url) => /\/1080p\//i.test(url));
+    const url720 = playback.urls.find((url) => /\/720p\//i.test(url)) || `${base}/720p/video.m3u8`;
+    const url480 = playback.urls.find((url) => /\/480p\//i.test(url));
 
+    if (url1080) push("1080P", url1080);
+    push("720P", url720);
+    if (url480) push("480P", url480);
+    push("自适应", playback.playlistUrl);
     return items;
 }
 
@@ -2235,25 +2318,24 @@ async function loadResource(params = {}) {
 
         for (const page of detailPages) {
             const cacheKey = `${code.toUpperCase()}_${page.type}`;
-            let uuid = VIDEO_URL_CACHE[cacheKey];
+            let playback = normalizeSurritPlayback(VIDEO_URL_CACHE[cacheKey]);
 
-            if (!uuid) {
+            if (!playback) {
                 try {
                     const html = await fetchMissavHtml(page.link);
                     if (html.includes("Just a moment")) continue;
 
-                    // 提取 surrit UUID
-                    uuid = extractSurritUuidFromDetailHtml(html);
-                    if (uuid) VIDEO_URL_CACHE[cacheKey] = uuid;
+                    playback = extractSurritPlaybackFromHtml(html);
+                    if (playback) VIDEO_URL_CACHE[cacheKey] = playback;
                 } catch (e) {
                     continue;
                 }
             }
 
-            if (!uuid || seenUuids.has(uuid)) continue;
-            seenUuids.add(uuid);
+            if (!playback || !playback.uuid || seenUuids.has(playback.uuid)) continue;
+            seenUuids.add(playback.uuid);
 
-            const streams = await buildMissavStreamItems(uuid, code, page.link, page.type);
+            const streams = buildMissavStreamItems(playback, code, page.link, page.type);
             allStreams.push(...streams);
         }
 
@@ -2346,11 +2428,9 @@ async function loadResourceLegacy(params, code) {
         }
 
         if (videoUrl) {
-            const uuidMatch = videoUrl.match(/surrit\.com\/([a-f0-9\-]{36})\//i);
-            const uuid = uuidMatch ? uuidMatch[1] : "";
-
-            if (uuid) {
-                return await buildMissavStreamItems(uuid, code, currentReferer, "有码");
+            const playback = parseSurritPlaybackFromUrl(videoUrl);
+            if (playback) {
+                return buildMissavStreamItems(playback, code, currentReferer, "有码");
             }
 
             return [{
@@ -2367,64 +2447,16 @@ async function loadResourceLegacy(params, code) {
 }
 
 function extractSurritUuidFromDetailHtml(html) {
-    if (!html) return "";
-    const $ = Widget.html.load(html);
-    let uuid = "";
-
-    $("script").each((i, el) => {
-        const scriptContent = $(el).html() || "";
-        if (scriptContent.includes("surrit.com") && scriptContent.includes(".m3u8")) {
-            const uuidFromUrl = scriptContent.match(/https:\/\/surrit\.com\/([a-f0-9\-]{36})\/[^"'\s]*\.m3u8/i);
-            if (uuidFromUrl && uuidFromUrl[1]) { uuid = uuidFromUrl[1]; return false; }
-        }
-        if (!uuid && scriptContent.includes("eval(function")) {
-            const uuidMatches = scriptContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi);
-            if (uuidMatches && uuidMatches.length > 0) { uuid = uuidMatches[0]; return false; }
-        }
-    });
-
-    if (!uuid) {
-        const match = html.match(/surrit\.com\/([a-f0-9\-]{36})\//i);
-        if (match && match[1]) uuid = match[1];
-    }
-
-    return uuid;
+    const playback = extractSurritPlaybackFromHtml(html);
+    return playback ? playback.uuid : "";
 }
 
-// ==================== 播放地址增强（合并自 3.8 方案）：直接提取 + Packer 解混淆 ====================
+// ==================== 播放地址增强：解 Packer 后提取 surrit / mrstcdn 直链 ====================
 
 function extractVideoUrlFromHtml(html) {
-    if (!html) return "";
-    const $ = Widget.html.load(html);
-    let videoUrl = "";
-
-    $('script').each((i, el) => {
-        const scriptContent = $(el).html() || "";
-
-        if (scriptContent.includes('surrit.com') && scriptContent.includes('.m3u8')) {
-            const matches = scriptContent.match(/https:\/\/surrit\.com\/[a-f0-9\-]+\/[^"'\s]*\.m3u8/g);
-            if (matches && matches.length > 0) { videoUrl = matches[0]; return false; }
-        }
-
-        if (!videoUrl && scriptContent.includes('eval(function')) {
-            const unpacked = unpackPacker(scriptContent);
-            if (unpacked) {
-                const matches = unpacked.match(/https:\/\/surrit\.com\/[a-f0-9\-]+\/[^"'\s]*\.m3u8/g);
-                if (matches && matches.length > 0) { videoUrl = matches[0]; return false; }
-            }
-            const uuidMatches = scriptContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/g);
-            if (uuidMatches && uuidMatches.length > 0) { videoUrl = `https://surrit.com/${uuidMatches[0]}/playlist.m3u8`; return false; }
-        }
-    });
-
-    if (!videoUrl) {
-        const matchFull = html.match(/https:\/\/surrit\.com\/[a-f0-9\-]+\/[^"'\s]*\.m3u8/i);
-        if (matchFull && matchFull[0]) return matchFull[0];
-        const matchSimple = html.match(/source\s*=\s*['"]([^'"]+)['"]/);
-        if (matchSimple && matchSimple[1]) return matchSimple[1];
-    }
-
-    return videoUrl;
+    const playback = extractSurritPlaybackFromHtml(html);
+    if (!playback) return "";
+    return playback.urls.find((url) => /\/720p\//i.test(url)) || playback.playlistUrl || playback.urls[0] || "";
 }
 
 function extractRelatedItems($, currentLink) {
