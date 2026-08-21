@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.6.4",
+  version: "1.6.5",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   modules: [
@@ -2940,16 +2940,26 @@ function isPreviewVariant(item) {
   const label = String(item.label || "").toLowerCase();
   const url = String(item.sourceUrl || "").toLowerCase();
   const text = variant + " " + label + " " + url;
-  if (/preview|trailer|teaser|sample|预告|預覽|样品|樣品/.test(text)) return true;
-  if (/\/preview\.mp4(?:\?|$)|preview_video|\/preview\//.test(url)) return true;
+  // variant / label 明确为预告
+  if (/^(preview|trailer|teaser|sample)$/i.test(variant)) return true;
+  if (/preview|trailer|teaser|预告|預覽|样品|樣品|预览/.test(variant + " " + label)) return true;
+  // URL 形态：站点预告、DMM sample/litevideo 等短片
+  if (/\/preview\.mp4(?:\?|$)|preview_video|\/preview\/|\/trailer\/|\/teaser\//.test(url)) return true;
+  if (/\/sample(?:s)?\/|litevideo|_sm_|_s_sample|sample_s\./.test(url)) return true;
+  if (/dmm\.co\.jp\/.*sample|cvpsample|avsctld/.test(url)) return true;
+  // 兜底：文案里带预告关键词（不含宽泛 sample，避免误伤完整片 CDN）
+  if (/preview|trailer|teaser|预告|預覽|预览/.test(text)) return true;
   return false;
 }
 
 function pickResolveVariant(data) {
   if (!data || data.error || !Array.isArray(data.variants) || !data.variants.length) return null;
+  const usable = data.variants.filter((item) => item && item.sourceUrl && !isPreviewVariant(item));
+  if (!usable.length) return null;
   const picked =
-    data.variants.find((item) => item.variant === "original" && item.sourceUrl && !isPreviewVariant(item)) ||
-    data.variants.find((item) => item.sourceUrl && !isPreviewVariant(item));
+    usable.find((item) => String(item.variant || "").toLowerCase() === "original") ||
+    usable.find((item) => /原版|完整|full|original/i.test(String(item.label || "") + " " + String(item.variant || ""))) ||
+    usable[0];
   return picked && picked.sourceUrl ? picked : null;
 }
 
@@ -3717,8 +3727,8 @@ async function loadDetail(link) {
     title: displayTitle,
     link: movieLink(movie.id || movieId),
     description: summary || undefined,
-    videoUrl: previewUrl || undefined,
-    playerType: previewUrl && /\.m3u8/i.test(previewUrl) ? "ijk" : "system",
+    // 预告只走底部 trailers，不写入 videoUrl，避免被当成播放源
+    playerType: "system",
     customHeaders: {
       "User-Agent": UA,
       Referer: SITE_BASE + "/movie/" + movieId,
@@ -3739,7 +3749,7 @@ async function loadDetail(link) {
     rating: Number(movie.score || 0) || 0,
     videoId: movie.id || movieId,
     extra: {
-      videoMode: previewUrl ? "preview" : "none",
+      videoMode: "none",
       previewVideoUrl: previewUrl || "",
       fullVideoAvailable: false,
     },
@@ -3817,7 +3827,8 @@ async function loadResource(params) {
 
     // 片源只依赖番号 resolve，不再串行搜片+详情（可省 1–3s）
     const fullVideo = await resolveFullVideo(code, "zh");
-    if (!fullVideo || !fullVideo.sourceUrl) return [];
+    // 二次拦截：绝不把预告/样品当成完整播放源返回
+    if (!fullVideo || !fullVideo.sourceUrl || isPreviewVariant(fullVideo)) return [];
 
     const headers = {
       "User-Agent": UA,

@@ -1033,7 +1033,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.3.2",
+  version: "4.3.3",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 分类；列表横图 backdrop + 竖图 poster（仅验证过的 DMM）；详情复用 + 预告片",
   author: "老头",
@@ -2591,25 +2591,33 @@ async function loadDetail(link) {
     var title = safeText(movie.title || code || movieId);
     if (code && title.indexOf(code) !== 0) title = code + " " + title;
 
-    // 顶图复用列表阶段探测缓存（仅读缓存，不再发起 DMM 探测）；横/竖分流对齐 catemby
-    var siteCover = pickCover(movie);
+    // 顶图仅用列表阶段 DMM 探测缓存；无高清则不赋值，不做站点图兜底
     var dmmProbe = code ? getCachedDmmProbeCover(code) : null;
-    var covers = buildListCoverBundle(code, siteCover, dmmProbe);
-    var posterUrl = covers.posterPath || siteCover || "";
-    var coverUrl = covers.backdropPath || covers.coverUrl || siteCover || "";
-    if (!posterUrl) posterUrl = coverUrl;
+    var posterUrl = "";
+    var coverUrl = "";
+    if (dmmProbe) {
+      var probePoster = String(dmmProbe.posterUrl || "").trim();
+      var probeBackdrop = String(dmmProbe.backdropUrl || "").trim();
+      if (probePoster && !isInvalidCoverTarget(probePoster) && !isLowResDmmPosterUrl(probePoster)) {
+        posterUrl = probePoster;
+      }
+      if (probeBackdrop && !isInvalidCoverTarget(probeBackdrop)) {
+        coverUrl = probeBackdrop;
+      }
+    }
 
     var galleryUrls = [];
     (movie.preview_images || []).forEach(function (img) {
       var u = safeText((img && (img.large_url || img.thumb_url)) || "");
       if (u) galleryUrls.push(u);
     });
+    // 顶图有 DMM 高清才放首位；无高清不拿站点封面顶上
     var backdropPaths = compactUniqueUrls(
       [].concat(coverUrl ? [coverUrl] : [], galleryUrls || [])
     ).filter(Boolean);
 
     var previewUrl = safeText(movie.preview_video_url || "");
-    var trailers = buildDetailTrailers(previewUrl, coverUrl);
+    var trailers = buildDetailTrailers(previewUrl, coverUrl || posterUrl);
 
     var meta = parseDetailMeta(movie);
     var magnetText = "";
@@ -2625,17 +2633,12 @@ async function loadDetail(link) {
     if (movie.summary) descParts.push(safeText(movie.summary));
     if (magnetText) descParts.push("磁力:\n" + magnetText);
 
-    return {
+    var item = {
       id: code || movie.id || movieId,
       type: "detail",
       mediaType: "movie",
       title: title,
       link: movieLink(movie.id || movieId),
-      backdropPath: coverUrl,
-      posterPath: posterUrl || coverUrl,
-      detailPoster: posterUrl || coverUrl,
-      coverUrl: coverUrl,
-      image: coverUrl,
       backdropPaths: backdropPaths,
       releaseDate: movie.release_date || "",
       durationText: movie.duration ? movie.duration + " 分钟" : "",
@@ -2648,6 +2651,16 @@ async function loadDetail(link) {
       previewUrl: previewUrl || "",
       videoId: movie.id || movieId,
     };
+    if (coverUrl) {
+      item.backdropPath = coverUrl;
+      item.coverUrl = coverUrl;
+      item.image = coverUrl;
+    }
+    if (posterUrl) {
+      item.posterPath = posterUrl;
+      item.detailPoster = posterUrl;
+    }
+    return item;
   } catch (error) {
     console.error("[javdb] 详情加载失败:", error.message || error);
     throw error;
