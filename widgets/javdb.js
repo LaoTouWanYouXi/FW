@@ -4,7 +4,7 @@
  * 登录：POST /v1/sessions（账号密码 → JWT）
  * 列表：DMM 竖版海报（方格）；详情顶图复用列表缓存，不再探测
  * 详情：trailers 预告片模块（不进播放资源）
- * 磁力：relatedItems 展示 API 磁链，点击模块内 token/目录直转光鸭（含广告过滤）
+ * 磁力：relatedItems 展示 API 磁链；无磁链时从短评解析 magnet: 链接并提取大小/标签
  */
 
 /* @category-options-begin — 由 build-javdb-categories.js 生成，勿手改 */
@@ -1045,7 +1045,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.4.1",
+  version: "4.4.3",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 分类；详情磁力 relatedItems 一键转存光鸭（含广告过滤）",
   author: "老头",
@@ -2123,8 +2123,268 @@ function stripCodeFromMagnetName(name, code) {
   return stripped || name;
 }
 
+/* ========================= 短评磁力解析 ========================= */
+
+function decodeMagnetSegment(raw) {
+  try {
+    return decodeURIComponent(String(raw || "").replace(/\+/g, " "));
+  } catch (e) {
+    return String(raw || "");
+  }
+}
+
+function extractMagnetHash(magnet) {
+  var text = decodeMagnetSegment(String(magnet || ""));
+  var m = text.match(/(?:^|[?&])xt=urn:btih:([0-9a-fA-F]{40}|[0-9a-zA-Z]{32,40})/i);
+  if (m) return m[1].toLowerCase();
+  m = text.match(/btih:([0-9a-fA-F]{40}|[0-9a-zA-Z]{32,40})/i);
+  return m ? m[1].toLowerCase() : "";
+}
+
+function parseMagnetSizeMb(text) {
+  text = String(text || "");
+  var m = text.match(/(\d+(?:\.\d+)?)\s*(TB|GB|G|MB|M|KB|K)\b/i);
+  if (!m) return 0;
+  var n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  var unit = m[2].toUpperCase();
+  if (unit === "TB") return n * 1024 * 1024;
+  if (unit === "GB" || unit === "G") return n * 1024;
+  if (unit === "MB" || unit === "M") return n;
+  if (unit === "KB" || unit === "K") return n / 1024;
+  return 0;
+}
+
+function parseMagnetSizeFromUri(magnet) {
+  var m = String(magnet || "").match(/(?:^|[?&])xl=(\d+)/i);
+  if (!m) return 0;
+  var bytes = Number(m[1]);
+  if (!Number.isFinite(bytes) || bytes <= 0) return 0;
+  return bytes / (1024 * 1024);
+}
+
+function parseMagnetFlags(text) {
+  text = String(text || "");
+  return {
+    cnsub: /字幕|中字|中文|cnsub|chs|subbed/i.test(text),
+    hd: /\bHD\b|1080|720p|2160|4K|4k/i.test(text),
+    uncensored: /破解|流出|无码|uncensored|uncen|-uc\b|leak/i.test(text),
+  };
+}
+
+function trimMagnetUri(raw) {
+  return String(raw || "")
+    .replace(/[)\]}>,.;。，、！!？?]+$/g, "")
+    .replace(/\\+$/, "")
+    .trim();
+}
+
+function extractMagnetsFromText(text) {
+  var results = [];
+  var src = String(text || "");
+  if (!src || src.toLowerCase().indexOf("magnet:") < 0) return results;
+  var re = /magnet:\?[^\s<>"'\u0000-\u001f]+/gi;
+  var match;
+  while ((match = re.exec(src)) !== null) {
+    var magnet = trimMagnetUri(match[0]);
+    if (!/^magnet:\?/i.test(magnet)) continue;
+    var hash = extractMagnetHash(magnet);
+    if (!hash) continue;
+    var start = Math.max(0, match.index - 160);
+    var end = Math.min(src.length, match.index + magnet.length + 160);
+    results.push({
+      magnet: magnet,
+      hash: hash,
+      context: src.slice(start, end),
+    });
+  }
+  return results;
+}
+
+function reviewTextFromItem(item) {
+  if (!item || typeof item !== "object") return "";
+  var keys = ["body", "content", "text", "review", "comment", "message", "description"];
+  for (var i = 0; i < keys.length; i++) {
+    var val = item[keys[i]];
+    if (typeof val === "string" && val.trim()) return val;
+  }
+  return "";
+}
+
+function parseMagnetDisplayName(magnet, context, code) {
+  var dnMatch = String(magnet || "").match(/(?:^|[?&])dn=([^&]+)/i);
+  if (dnMatch) {
+    var dn = safeText(decodeMagnetSegment(dnMatch[1]));
+    var cleaned = stripCodeFromMagnetName(dn, code);
+    if (cleaned && cleaned.toUpperCase() !== safeText(code).toUpperCase()) return cleaned;
+    if (dn && (!code || dn.toUpperCase() !== safeText(code).toUpperCase())) return dn;
+  }
+  var ctx = safeText(
+    String(context || "")
+      .replace(magnet, "")
+      .replace(/magnet:\?[^\s<>"']+/gi, " ")
+      .replace(/\s+/g, " ")
+  );
+  ctx = stripCodeFromMagnetName(ctx, code);
+  if (ctx && ctx.length <= 80 && ctx.toUpperCase() !== safeText(code).toUpperCase()) return ctx;
+  return "短评分享";
+}
+
+function magnetsFromReviews(reviews, code) {
+  var out = [];
+  var seen = {};
+  (reviews || []).forEach(function (review) {
+    extractMagnetsFromText(reviewTextFromItem(review)).forEach(function (entry) {
+      if (seen[entry.hash]) return;
+      seen[entry.hash] = true;
+      var flags = parseMagnetFlags(entry.context + " " + entry.magnet);
+      var sizeMb = parseMagnetSizeMb(entry.context) || parseMagnetSizeFromUri(entry.magnet);
+      out.push({
+        hash: entry.hash,
+        name: parseMagnetDisplayName(entry.magnet, entry.context, code),
+        size: sizeMb,
+        cnsub: flags.cnsub,
+        hd: flags.hd,
+        uncensored: flags.uncensored,
+        source: "review",
+        magnet: entry.magnet,
+      });
+    });
+  });
+  return out;
+}
+
+async function fetchMovieReviews(movieId, params, options) {
+  options = options || {};
+  var page = Number(options.page || 1) || 1;
+  var limit = Number(options.limit || 20) || 20;
+  var maxPages = Number(options.maxPages || 5) || 5;
+  var all = [];
+  for (var p = page; p < page + maxPages; p++) {
+    var data;
+    try {
+      data = await apiGet("/v1/movies/" + movieId + "/reviews", { page: p, limit: limit }, params);
+    } catch (e) {
+      break;
+    }
+    var list = (data && (data.reviews || data.comments || data.list || data.items)) || [];
+    if (!Array.isArray(list) || !list.length) break;
+    all = all.concat(list);
+    if (list.length < limit) break;
+  }
+  return all;
+}
+
+async function fetchDetailMagnets(movieId, params, code) {
+  var apiMagnets = [];
+  var reviewMagnets = [];
+  try {
+    var magnetData = await apiGet("/v1/movies/" + movieId + "/magnets", null, params);
+    apiMagnets = (magnetData && magnetData.magnets) || [];
+  } catch (eMag) {}
+  try {
+    var reviews = await fetchMovieReviews(movieId, params, { page: 1, limit: 20, maxPages: 5 });
+    reviewMagnets = magnetsFromReviews(reviews, code);
+  } catch (eRev) {}
+  var merged = mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code);
+  var source = "";
+  if (apiMagnets.length && reviewMagnets.length) source = "mixed";
+  else if (apiMagnets.length) source = "api";
+  else if (reviewMagnets.length) source = "review";
+  return { magnets: merged, source: source };
+}
+
+function normalizeMagnetEntry(raw, code, source) {
+  raw = raw || {};
+  var magnet = raw.magnet || (raw.hash ? buildMagnetUrl(raw.hash) : "");
+  var hash = String(raw.hash || extractMagnetHash(magnet) || "").trim().toLowerCase();
+  if (!hash) return null;
+  var name = safeText(raw.name || raw.title || hash);
+  var text = name + " " + safeText(raw.description || "");
+  var flags = parseMagnetFlags(text + " " + magnet);
+  var sizeMb = Number(raw.size || 0);
+  if (!Number.isFinite(sizeMb) || sizeMb <= 0) sizeMb = parseMagnetSizeFromUri(magnet);
+  if (!sizeMb) sizeMb = parseMagnetSizeMb(text);
+  return {
+    hash: hash,
+    name: name,
+    size: sizeMb,
+    cnsub: !!(raw.cnsub || flags.cnsub),
+    hd: !!(raw.hd || flags.hd),
+    uncensored: !!(raw.uncensored || flags.uncensored),
+    source: source || raw.source || "api",
+    magnet: magnet || buildMagnetUrl(hash),
+  };
+}
+
+function magnetTagScore(m) {
+  var score = 0;
+  if (m && m.uncensored) score += 1000;
+  if (m && m.cnsub) score += 100;
+  if (m && m.hd) score += 10;
+  return score;
+}
+
+function compareMagnetPriority(a, b) {
+  var tagDiff = magnetTagScore(a) - magnetTagScore(b);
+  if (tagDiff !== 0) return tagDiff;
+  return Number(a.size || 0) - Number(b.size || 0);
+}
+
+function magnetGbBucket(sizeMb) {
+  var mb = Number(sizeMb || 0);
+  if (!Number.isFinite(mb) || mb <= 0) return "unknown";
+  var gb = mb / 1024;
+  if (gb < 1) return "0";
+  return String(Math.floor(gb));
+}
+
+function pickBetterMagnet(current, candidate) {
+  if (!current) return candidate;
+  if (!candidate) return current;
+  return compareMagnetPriority(candidate, current) > 0 ? candidate : current;
+}
+
+function mergeMagnetLists(apiMagnets, reviewMagnets, code) {
+  var map = {};
+  (apiMagnets || []).forEach(function (raw) {
+    var item = normalizeMagnetEntry(raw, code, "api");
+    if (!item) return;
+    map[item.hash] = pickBetterMagnet(map[item.hash], item);
+  });
+  (reviewMagnets || []).forEach(function (raw) {
+    var item = normalizeMagnetEntry(raw, code, "review");
+    if (!item) return;
+    map[item.hash] = pickBetterMagnet(map[item.hash], item);
+  });
+  return Object.keys(map).map(function (hash) {
+    return map[hash];
+  });
+}
+
+function dedupeMagnetsByGbBucket(magnets) {
+  var buckets = {};
+  (magnets || []).forEach(function (m) {
+    var key = magnetGbBucket(m.size);
+    buckets[key] = pickBetterMagnet(buckets[key], m);
+  });
+  return Object.keys(buckets)
+    .map(function (key) {
+      return buckets[key];
+    })
+    .sort(function (a, b) {
+      return Number(b.size || 0) - Number(a.size || 0);
+    });
+}
+
+function mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code) {
+  var merged = mergeMagnetLists(apiMagnets, reviewMagnets, code);
+  return dedupeMagnetsByGbBucket(merged);
+}
+
 function buildMagnetItemTitle(m, code) {
   var flags = [];
+  if (m.uncensored) flags.push("破解");
   if (m.cnsub) flags.push("中字");
   if (m.hd) flags.push("HD");
   var size = formatMagnetSize(m.size);
@@ -2148,7 +2408,7 @@ function buildMagnetRelatedItems(magnets, ctx) {
     if (!hash) continue;
     var displayName = stripCodeFromMagnetName(safeText(m.name || hash), ctx.code);
     cacheMagnetEntry(hash, {
-      magnet: buildMagnetUrl(hash),
+      magnet: m.magnet || buildMagnetUrl(hash),
       hash: hash,
       name: safeText(m.name || hash),
       size: m.size || 0,
@@ -2156,6 +2416,7 @@ function buildMagnetRelatedItems(magnets, ctx) {
       code: ctx.code || "",
       title: ctx.title || "",
       backdropPath: ctx.backdropPath || "",
+      source: m.source || "api",
     });
     items.push({
       id: hash,
@@ -3363,9 +3624,11 @@ async function loadDetail(link) {
 
     var meta = parseDetailMeta(movie);
     var relatedItems = [];
+    var magnetSource = "";
     try {
-      var magnetData = await apiGet("/v1/movies/" + movieId + "/magnets", null, params);
-      relatedItems = buildMagnetRelatedItems(magnetData && magnetData.magnets, {
+      var magnetBundle = await fetchDetailMagnets(movieId, params, code);
+      magnetSource = magnetBundle.source || "";
+      relatedItems = buildMagnetRelatedItems(magnetBundle.magnets, {
         movieId: movieId,
         code: code,
         title: title,
@@ -3379,7 +3642,13 @@ async function loadDetail(link) {
     if (movie.duration) descParts.push("时长: " + movie.duration + " 分钟");
     if (movie.summary) descParts.push(safeText(movie.summary));
     if (relatedItems.length) {
-      descParts.push("磁力: 见下方相似作品栏，点击即可转存光鸭云盘");
+      descParts.push(
+        magnetSource === "review"
+          ? "磁力: 见下方相似作品栏（来自短评分享），点击即可转存光鸭云盘"
+          : magnetSource === "mixed"
+            ? "磁力: 见下方相似作品栏（官方+短评已合并去重），点击即可转存光鸭云盘"
+            : "磁力: 见下方相似作品栏，点击即可转存光鸭云盘"
+      );
     } else if (String(getGuangyaConfigFromStore().guangya_token || "").trim()) {
       descParts.push("磁力: 暂无可用磁链");
     }
@@ -3449,6 +3718,12 @@ if (typeof module !== "undefined" && module.exports) {
     loginAccount: loginAccount,
     buildMagnetRelatedItems: buildMagnetRelatedItems,
     handleGuangyaMagnetSave: handleGuangyaMagnetSave,
+    extractMagnetsFromText: extractMagnetsFromText,
+    magnetsFromReviews: magnetsFromReviews,
+    fetchDetailMagnets: fetchDetailMagnets,
+    mergeAndDedupeMagnets: mergeAndDedupeMagnets,
+    dedupeMagnetsByGbBucket: dedupeMagnetsByGbBucket,
+    compareMagnetPriority: compareMagnetPriority,
     gyFilterResolvedFiles: gyFilterResolvedFiles,
     getGuangyaConfigFromStore: getGuangyaConfigFromStore,
     WidgetMetadata: typeof WidgetMetadata !== "undefined" ? WidgetMetadata : null,
