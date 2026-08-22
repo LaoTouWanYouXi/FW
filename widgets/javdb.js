@@ -4,6 +4,7 @@
  * 登录：POST /v1/sessions（账号密码 → JWT）
  * 列表：DMM 竖版海报（方格）；详情顶图复用列表缓存，不再探测
  * 详情：trailers 预告片模块（不进播放资源）
+ * 磁力：relatedItems 展示 API 磁链，点击模块内 token/目录直转光鸭（含广告过滤）
  */
 
 /* @category-options-begin — 由 build-javdb-categories.js 生成，勿手改 */
@@ -933,7 +934,20 @@ var SORT_API_MAP = {
   fav: { sort_by: "fav", order_by: "desc" },
 };
 var SEARCH_SORT_MAP = { published: "release", score: "score", fav: "fav" };
-var GLOBAL_KEYS = ["locale", "email", "password", "apiToken", "dmmProbeWorker", "dmmProbeApiKey"];
+var GLOBAL_KEYS = [
+  "locale",
+  "email",
+  "password",
+  "apiToken",
+  "dmmProbeWorker",
+  "dmmProbeApiKey",
+  "guangya_token",
+  "guangya_parent_id",
+  "magnet_filter",
+  "magnet_video_only",
+  "magnet_min_video_mb",
+  "magnet_block_patterns",
+];
 var DEVICE_DEFAULTS = {
   device_name: "iPhone",
   device_model: "iPhone15,2",
@@ -1033,9 +1047,9 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.3.3",
+  version: "4.4.0",
   requiredVersion: "0.0.1",
-  description: "JavDB API：最近更新 / TOP250 / 分类；列表横图 backdrop + 竖图 poster（仅验证过的 DMM）；详情复用 + 预告片",
+  description: "JavDB API：最近更新 / TOP250 / 分类；详情磁力 relatedItems 一键转存光鸭（含广告过滤）",
   author: "老头",
   site: API_SITE,
   detailCacheDuration: 3600,
@@ -1084,6 +1098,54 @@ WidgetMetadata = {
       title: "DMM Probe Key（可选）",
       type: "input",
       description: "Worker 开启鉴权时填写 X-Probe-Key",
+      value: "",
+    },
+    {
+      name: "guangya_token",
+      title: "光鸭 refresh_token",
+      type: "input",
+      description: "gy.- 开头；填写后详情页磁力栏点击可直转光鸭",
+      value: "",
+    },
+    {
+      name: "guangya_parent_id",
+      title: "光鸭保存目录 ID",
+      type: "input",
+      description: "留空保存到根目录",
+      value: "",
+    },
+    {
+      name: "magnet_filter",
+      title: "转存前过滤广告",
+      type: "enumeration",
+      enumOptions: [
+        { title: "开启", value: "1" },
+        { title: "关闭", value: "0" },
+      ],
+      value: "1",
+    },
+    {
+      name: "magnet_video_only",
+      title: "仅保留视频文件",
+      type: "enumeration",
+      enumOptions: [
+        { title: "是", value: "1" },
+        { title: "否", value: "0" },
+      ],
+      value: "1",
+    },
+    {
+      name: "magnet_min_video_mb",
+      title: "最小保留视频 MB",
+      type: "input",
+      description: "0=仅按相对体积判断小广告片",
+      value: "0",
+    },
+    {
+      name: "magnet_block_patterns",
+      title: "拦截正则（可选）",
+      type: "input",
+      description: "分号分隔；留空用内置规则",
       value: "",
     },
   ],
@@ -1984,6 +2046,687 @@ function mapMagnets(magnets) {
   return lines.join("\n\n");
 }
 
+/* ========================= 光鸭磁力转存 ========================= */
+
+var GUANGYA_ACCOUNT_URL = "https://account.guangyapan.com";
+var GUANGYA_API_BASE = "https://api.guangyapan.com";
+var GUANGYA_SITE = "https://www.guangyapan.com";
+var GUANGYA_CLIENT_ID = "aMe-8VSlkrbQXpUR";
+var GUANGYA_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
+var MAGNET_LINK_PREFIX = "gy:";
+var MAGNET_STORE_PREFIX = "javdb.magnet.v1.";
+var GUANGYA_ACCESS_STORE = "javdb.guangya.access.v1";
+var GUANGYA_DID_STORE = "javdb.guangya.did.v1";
+var GY_VIDEO_EXTS = {
+  mp4: 1,
+  mkv: 1,
+  avi: 1,
+  wmv: 1,
+  mov: 1,
+  m4v: 1,
+  ts: 1,
+  flv: 1,
+  rmvb: 1,
+  webm: 1,
+  "3gp": 1,
+};
+var GY_DEFAULT_BLOCK_PATTERNS = [
+  "广告|推广|宣传|加群|更多资源|最新地址|影视大站|草榴|91porn|91\\.tv|1024\\.org|1024la|直播|社[區区]|情[報报]|信誉|uu美少女",
+  "(?:^|[/\\\\_.\\-\\s])(?:sample|preview|trailer|预告|预览|样片|精彩花絮)(?:[/\\\\_.\\-\\s]|\\.|$)",
+  "\\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent)$",
+];
+var GY_AUTO_INDEX = 10000;
+
+function gyRandomHex(len) {
+  var out = "";
+  for (var i = 0; i < len; i++) out += ((Math.random() * 16) | 0).toString(16);
+  return out;
+}
+
+function ensureGuangyaDeviceId() {
+  var id = String(readStore(GUANGYA_DID_STORE) || "").trim().toLowerCase();
+  if (id) return id;
+  id = gyRandomHex(16);
+  writeStore(GUANGYA_DID_STORE, id);
+  return id;
+}
+
+function getGuangyaConfigFromStore() {
+  return {
+    guangya_token: readStore("javdb.global.guangya_token") || "",
+    guangya_parent_id: readStore("javdb.global.guangya_parent_id") || "",
+    magnet_filter: readStore("javdb.global.magnet_filter") || "1",
+    magnet_video_only: readStore("javdb.global.magnet_video_only") || "1",
+    magnet_min_video_mb: readStore("javdb.global.magnet_min_video_mb") || "0",
+    magnet_block_patterns: readStore("javdb.global.magnet_block_patterns") || "",
+  };
+}
+
+function buildMagnetUrl(hash) {
+  hash = String(hash || "").trim();
+  if (!hash) return "";
+  return "magnet:?xt=urn:btih:" + hash;
+}
+
+function magnetStoreKey(hash) {
+  return MAGNET_STORE_PREFIX + String(hash || "").trim().toLowerCase();
+}
+
+function cacheMagnetEntry(hash, data) {
+  hash = String(hash || "").trim().toLowerCase();
+  if (!hash) return;
+  try {
+    writeStore(magnetStoreKey(hash), JSON.stringify(Object.assign({ savedAt: Date.now() }, data || {})));
+  } catch (e) {}
+}
+
+function loadMagnetEntry(hash) {
+  hash = String(hash || "").trim().toLowerCase();
+  if (!hash) return null;
+  try {
+    var raw = readStore(magnetStoreKey(hash));
+    if (!raw) return null;
+    return typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (e) {
+    return null;
+  }
+}
+
+function buildMagnetItemTitle(m) {
+  var flags = [];
+  if (m.cnsub) flags.push("中字");
+  if (m.hd) flags.push("HD");
+  var size = formatMagnetSize(m.size);
+  var name = safeText(m.name || m.hash || "磁力");
+  var title = name;
+  if (size) title += " · " + size;
+  if (flags.length) title += " · " + flags.join("/");
+  return title;
+}
+
+function buildMagnetRelatedItems(magnets, ctx) {
+  ctx = ctx || {};
+  var items = [];
+  var list = magnets || [];
+  for (var i = 0; i < list.length && i < 12; i++) {
+    var m = list[i];
+    var hash = String(m.hash || "").trim().toLowerCase();
+    if (!hash) continue;
+    cacheMagnetEntry(hash, {
+      magnet: buildMagnetUrl(hash),
+      hash: hash,
+      name: safeText(m.name || hash),
+      size: m.size || 0,
+      movieId: ctx.movieId || "",
+      code: ctx.code || "",
+      title: ctx.title || "",
+      backdropPath: ctx.backdropPath || "",
+    });
+    items.push({
+      id: hash,
+      type: "url",
+      mediaType: "movie",
+      title: buildMagnetItemTitle(m),
+      link: MAGNET_LINK_PREFIX + hash,
+      backdropPath: ctx.backdropPath || undefined,
+      description: "点击转存到光鸭云盘",
+    });
+  }
+  return items;
+}
+
+function gyAccountHeaders(did) {
+  return {
+    accept: "*/*",
+    "content-type": "application/json",
+    origin: GUANGYA_SITE,
+    referer: GUANGYA_SITE + "/",
+    "user-agent": GUANGYA_UA,
+    "x-client-id": GUANGYA_CLIENT_ID,
+    "x-client-version": "0.0.1",
+    "x-device-id": did,
+    "x-device-model": "iphone%2F18.0",
+    "x-device-name": "iPhone",
+    "x-device-sign": "wdi10." + did + gyRandomHex(32),
+    "x-net-work-type": "NONE",
+    "x-os-version": "iPhone OS 18.0",
+    "x-platform-version": "1",
+    "x-protocol-version": "301",
+    "x-provider-name": "NONE",
+    "x-sdk-version": "9.0.2",
+    "x-action": "401",
+  };
+}
+
+function gyApiHeaders(token, did) {
+  return {
+    accept: "application/json, text/plain, */*",
+    authorization: "Bearer " + token,
+    "content-type": "application/json",
+    did: did,
+    dt: "4",
+    origin: GUANGYA_SITE,
+    referer: GUANGYA_SITE + "/",
+    "user-agent": GUANGYA_UA,
+  };
+}
+
+async function gyHttpPost(url, headers, bodyObj, timeoutMs) {
+  var resp = await widgetHttp("POST", url, {
+    headerFactory: function () {
+      return headers;
+    },
+    body: bodyObj || {},
+    timeout: timeoutMs || 30000,
+  });
+  return parseApiPayload(resp);
+}
+
+function readCachedGuangyaAccess(refreshToken) {
+  refreshToken = String(refreshToken || "").trim();
+  if (!refreshToken) return "";
+  try {
+    var raw = readStore(GUANGYA_ACCESS_STORE);
+    if (!raw) return "";
+    var entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!entry || entry.refreshToken !== refreshToken) return "";
+    if (Number(entry.expiresAt || 0) <= Date.now() + 60000) return "";
+    return String(entry.accessToken || "").trim();
+  } catch (e) {
+    return "";
+  }
+}
+
+function writeCachedGuangyaAccess(refreshToken, accessToken, expiresIn) {
+  writeStore(
+    GUANGYA_ACCESS_STORE,
+    JSON.stringify({
+      refreshToken: String(refreshToken || "").trim(),
+      accessToken: String(accessToken || "").trim(),
+      expiresAt: Date.now() + Number(expiresIn || 3600) * 1000,
+    })
+  );
+}
+
+async function ensureGuangyaAccessToken(refreshToken, did) {
+  refreshToken = String(refreshToken || "").trim();
+  if (!refreshToken) throw new Error("未配置光鸭 refresh_token");
+  var cached = readCachedGuangyaAccess(refreshToken);
+  if (cached) return cached;
+  var data = await gyHttpPost(
+    GUANGYA_ACCOUNT_URL + "/v1/auth/token",
+    gyAccountHeaders(did),
+    { client_id: GUANGYA_CLIENT_ID, grant_type: "refresh_token", refresh_token: refreshToken },
+    25000
+  );
+  if (!data || !data.access_token) {
+    throw new Error((data && (data.error_description || data.msg || data.message)) || "刷新光鸭 token 失败");
+  }
+  writeCachedGuangyaAccess(refreshToken, data.access_token, data.expires_in || 3600);
+  return data.access_token;
+}
+
+function gyToNumber(v) {
+  var n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function gyPickName(values) {
+  for (var i = 0; i < values.length; i++) {
+    var s = String(values[i] || "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function gyNormalizeResolvedEntry(obj, fallbackIndex) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  var indexRaw =
+    obj.fileIndex != null
+      ? obj.fileIndex
+      : obj.file_index != null
+        ? obj.file_index
+        : obj.index != null
+          ? obj.index
+          : obj.idx != null
+            ? obj.idx
+            : obj.fileNo != null
+              ? obj.fileNo
+              : obj.file_no != null
+                ? obj.file_no
+                : obj.seq != null
+                  ? obj.seq
+                  : obj.id != null
+                    ? obj.id
+                    : obj.fileId != null
+                      ? obj.fileId
+                      : obj.file_id;
+  var index = gyToNumber(indexRaw);
+  var finalIndex = index != null && index >= 0 ? index : fallbackIndex != null ? fallbackIndex : GY_AUTO_INDEX++;
+  var name = gyPickName([
+    obj.name,
+    obj.fileName,
+    obj.file_name,
+    obj.filename,
+    obj.path,
+    obj.filePath,
+    obj.file_path,
+    obj.fullPath,
+    obj.full_path,
+    obj.relativePath,
+    obj.relative_path,
+    obj.resName,
+    obj.resourceName,
+    obj.title,
+    obj.label,
+    obj.displayName,
+  ]);
+  var size = gyToNumber(
+    obj.fileSize != null
+      ? obj.fileSize
+      : obj.file_size != null
+        ? obj.file_size
+        : obj.filesize != null
+          ? obj.filesize
+          : obj.size != null
+            ? obj.size
+            : obj.length != null
+              ? obj.length
+              : obj.bytes
+  );
+  return { index: finalIndex, name: name, size: size == null ? 0 : size, raw: obj };
+}
+
+function gyCollectObjectArrays(node, out, seen) {
+  out = out || [];
+  seen = seen || null;
+  if (!node || typeof node !== "object") return out;
+  if (seen && seen.has && seen.has(node)) return out;
+  if (seen && seen.add) seen.add(node);
+  if (Array.isArray(node)) {
+    if (node.length && node.every(function (item) { return item && typeof item === "object" && !Array.isArray(item); })) {
+      out.push(node);
+    }
+    for (var i = 0; i < node.length; i++) gyCollectObjectArrays(node[i], out, seen);
+    return out;
+  }
+  var keys = Object.keys(node);
+  for (var j = 0; j < keys.length; j++) gyCollectObjectArrays(node[keys[j]], out, seen);
+  return out;
+}
+
+function gyExtractResolvedEntries(payload) {
+  GY_AUTO_INDEX = 10000;
+  var data = payload && payload.data;
+  var directList =
+    (data &&
+      (data.list ||
+        data.files ||
+        data.fileList ||
+        data.resList ||
+        data.items ||
+        data.fileInfos ||
+        data.file_list ||
+        data.result ||
+        data.details)) ||
+    null;
+  if (Array.isArray(directList) && directList.length) {
+    var entries = [];
+    for (var i = 0; i < directList.length; i++) {
+      var entry = gyNormalizeResolvedEntry(directList[i], i);
+      if (entry) entries.push(entry);
+    }
+    if (entries.length) return entries;
+  }
+  var arrays = gyCollectObjectArrays(payload, [], null);
+  var best = [];
+  var bestScore = -1;
+  for (var a = 0; a < arrays.length; a++) {
+    var arr = arrays[a];
+    var parsed = [];
+    for (var b = 0; b < arr.length; b++) {
+      var item = gyNormalizeResolvedEntry(arr[b], b);
+      if (item) parsed.push(item);
+    }
+    if (!parsed.length) continue;
+    var nameCount = parsed.filter(function (x) { return x.name; }).length;
+    var score = parsed.length * 10 + nameCount * 3 + (parsed.length > 1 ? 5 : 0);
+    if (score > bestScore) {
+      best = parsed;
+      bestScore = score;
+    }
+  }
+  if (best.length) return best;
+  var total = gyToNumber(
+    (data && (data.fileCount || data.file_count || data.totalCount || data.total_count || data.count || data.total)) ||
+      null
+  );
+  if (total != null && total > 0) {
+    var out = [];
+    for (var t = 0; t < total; t++) out.push({ index: t, name: "", size: 0, raw: null });
+    return out;
+  }
+  return [];
+}
+
+function gyParseRegexSource(raw) {
+  var s = String(raw || "").trim();
+  if (!s) return null;
+  if (s.charAt(0) === "/") {
+    var last = s.lastIndexOf("/");
+    if (last > 0) {
+      try {
+        return new RegExp(s.slice(1, last), s.slice(last + 1) || "i");
+      } catch (e) {}
+    }
+  }
+  try {
+    return new RegExp(s, "i");
+  } catch (e2) {
+    return null;
+  }
+}
+
+function gyParseBlockPatterns(cfg) {
+  var raw = String((cfg && cfg.magnet_block_patterns) || "").trim();
+  var sources = raw
+    ? raw.split(/[;|]/).map(function (s) { return String(s || "").trim(); }).filter(Boolean)
+    : GY_DEFAULT_BLOCK_PATTERNS.slice();
+  var patterns = [];
+  for (var i = 0; i < sources.length; i++) {
+    var re = gyParseRegexSource(sources[i]);
+    if (re) patterns.push(re);
+  }
+  return patterns;
+}
+
+function gyBasename(name) {
+  var s = String(name || "").replace(/\\/g, "/");
+  var idx = s.lastIndexOf("/");
+  return idx >= 0 ? s.slice(idx + 1) : s;
+}
+
+function gyIsVideoFileName(name) {
+  var base = gyBasename(name);
+  var parts = base.split(".");
+  if (parts.length < 2) return false;
+  return !!GY_VIDEO_EXTS[parts.pop().toLowerCase()];
+}
+
+function gyIsObviousJunk(name) {
+  return /\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent|srt|ass)$/i.test(gyBasename(name));
+}
+
+function gyIsLikelyVideo(entry) {
+  if (gyIsVideoFileName(entry.name)) return true;
+  if (Number(entry.size || 0) >= 50 * 1024 * 1024) return true;
+  var raw = entry.raw;
+  if (raw) {
+    var t = raw.resType != null ? raw.resType : raw.fileType;
+    if (t === 1 || t === "1" || String(raw.type || "").toLowerCase() === "video") return true;
+  }
+  return false;
+}
+
+function gyMaxVideoSize(entries) {
+  var max = 0;
+  for (var i = 0; i < entries.length; i++) {
+    if (!gyIsLikelyVideo(entries[i])) continue;
+    max = Math.max(max, Number(entries[i].size || 0));
+  }
+  return max;
+}
+
+function gyIsMultiPartName(name) {
+  var n = String(name || "").toLowerCase();
+  return (
+    /(?:^|[\._\-])p(?:art)?[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])cd[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])disc[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])vol[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /分段|第[\d一二三四五六七八九十]+[部分集段]/.test(n)
+  );
+}
+
+function gyShouldBlock(entry, patterns, minVideoMb, videoOnly, maxVideoSize) {
+  var name = String(entry.name || "");
+  if (gyIsObviousJunk(name)) return { blocked: true, reason: "junk" };
+  for (var i = 0; i < patterns.length; i++) {
+    if (patterns[i].test(name)) return { blocked: true, reason: "pattern" };
+  }
+  if (videoOnly && name && !gyIsLikelyVideo(entry)) return { blocked: true, reason: "non-video" };
+  var size = Number(entry.size || 0);
+  var isVideo = gyIsLikelyVideo(entry);
+  if (isVideo && size > 0 && maxVideoSize > 0 && size < maxVideoSize * 0.12 && !gyIsMultiPartName(name)) {
+    return { blocked: true, reason: "small-video" };
+  }
+  if (
+    minVideoMb > 0 &&
+    isVideo &&
+    size > 0 &&
+    maxVideoSize > 0 &&
+    size < minVideoMb * 1024 * 1024 &&
+    size < maxVideoSize * 0.35
+  ) {
+    return { blocked: true, reason: "size" };
+  }
+  return { blocked: false, reason: "" };
+}
+
+function gyPruneDominantVideo(kept, blocked) {
+  if (kept.length <= 1) return { kept: kept, blocked: blocked };
+  var videos = kept.filter(gyIsLikelyVideo);
+  if (videos.length <= 1) return { kept: kept, blocked: blocked };
+  var hasMultipart = videos.some(function (e) { return gyIsMultiPartName(e.name); });
+  var maxSize = Math.max.apply(
+    null,
+    videos.map(function (e) { return Number(e.size || 0); })
+  );
+  var floor = hasMultipart ? maxSize * 0.45 : maxSize * 0.3;
+  var survivors = kept.filter(function (e) {
+    if (!gyIsLikelyVideo(e)) return true;
+    return gyIsMultiPartName(e.name) || Number(e.size || 0) >= floor;
+  });
+  if (survivors.length >= kept.length) return { kept: kept, blocked: blocked };
+  var survivorMap = {};
+  survivors.forEach(function (e) { survivorMap[e.index] = 1; });
+  var newBlocked = blocked.slice();
+  kept.forEach(function (e) {
+    if (!survivorMap[e.index]) newBlocked.push({ entry: e, reason: "pruned" });
+  });
+  return { kept: survivors, blocked: newBlocked };
+}
+
+function gyPickVideoFallback(entries, patterns) {
+  var candidates = [];
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i];
+    var name = String(entry.name || "");
+    if (gyIsObviousJunk(name)) continue;
+    var hit = false;
+    for (var p = 0; p < patterns.length; p++) {
+      if (patterns[p].test(name)) {
+        hit = true;
+        break;
+      }
+    }
+    if (hit) continue;
+    candidates.push(entry);
+  }
+  if (!candidates.length) candidates = entries.filter(gyIsLikelyVideo);
+  if (!candidates.length) candidates = entries.slice();
+  candidates.sort(function (a, b) { return Number(b.size || 0) - Number(a.size || 0); });
+  return candidates[0] || null;
+}
+
+function gyFilterResolvedFiles(entries, cfg) {
+  var patterns = gyParseBlockPatterns(cfg);
+  var minVideoMb = Number(cfg.magnet_min_video_mb || 0);
+  if (!Number.isFinite(minVideoMb) || minVideoMb < 0) minVideoMb = 0;
+  var videoOnly = String(cfg.magnet_video_only || "1") !== "0";
+  var maxVideoSize = gyMaxVideoSize(entries);
+  var kept = [];
+  var blocked = [];
+  for (var i = 0; i < entries.length; i++) {
+    var verdict = gyShouldBlock(entries[i], patterns, minVideoMb, videoOnly, maxVideoSize);
+    if (verdict.blocked) blocked.push({ entry: entries[i], reason: verdict.reason });
+    else kept.push(entries[i]);
+  }
+  if (!kept.length && entries.length) {
+    var fallback = gyPickVideoFallback(entries, patterns);
+    if (fallback) {
+      kept = [fallback];
+      blocked = entries
+        .filter(function (e) { return e.index !== fallback.index; })
+        .map(function (e) { return { entry: e, reason: "fallback" }; });
+    }
+  }
+  return gyPruneDominantVideo(kept, blocked);
+}
+
+function gyFormatEntryPreview(entries, limit) {
+  var max = limit || 8;
+  var lines = [];
+  for (var i = 0; i < entries.length && i < max; i++) {
+    lines.push(entries[i].name || "#" + entries[i].index);
+  }
+  if (entries.length > max) lines.push("… 另有 " + (entries.length - max) + " 个");
+  return lines.join("\n");
+}
+
+function gyFormatBlockedPreview(blocked, limit) {
+  var max = limit || 8;
+  var lines = [];
+  for (var i = 0; i < blocked.length && i < max; i++) {
+    var item = blocked[i];
+    var label = item.entry.name || "#" + item.entry.index;
+    var tag =
+      item.reason === "size"
+        ? " (过小)"
+        : item.reason === "small-video"
+          ? " (小广告)"
+          : item.reason === "pruned"
+            ? " (冗余)"
+            : item.reason === "non-video"
+              ? " (非视频)"
+              : item.reason === "pattern"
+                ? " (规则)"
+                : item.reason === "junk"
+                  ? " (junk)"
+                  : "";
+    lines.push(label + tag);
+  }
+  if (blocked.length > max) lines.push("… 另有 " + (blocked.length - max) + " 个");
+  return lines.join("\n");
+}
+
+async function guangyaResolveResource(accessToken, did, magnet) {
+  var data = await gyHttpPost(
+    GUANGYA_API_BASE + "/nd.bizcloudcollection.s/v1/resolve_res",
+    gyApiHeaders(accessToken, did),
+    { url: magnet },
+    45000
+  );
+  if (!data) throw new Error("光鸭解析返回空响应");
+  return data;
+}
+
+async function guangyaCreateTask(accessToken, did, magnet, parentId, fileIndexes) {
+  var body = { url: magnet, parentId: parentId || "" };
+  if (fileIndexes && fileIndexes.length) {
+    body.fileIndexes = fileIndexes.map(function (idx) { return Number(idx); });
+  }
+  return gyHttpPost(
+    GUANGYA_API_BASE + "/nd.bizcloudcollection.s/v1/create_task",
+    gyApiHeaders(accessToken, did),
+    body,
+    30000
+  );
+}
+
+async function saveMagnetToGuangya(magnet, cfg) {
+  var did = ensureGuangyaDeviceId();
+  var accessToken = await ensureGuangyaAccessToken(cfg.guangya_token, did);
+  var resolved = await guangyaResolveResource(accessToken, did, magnet);
+  var entries = gyExtractResolvedEntries(resolved);
+  if (!entries.length) throw new Error("光鸭无法解析磁力文件列表");
+  var filtered =
+    String(cfg.magnet_filter || "1") !== "0"
+      ? gyFilterResolvedFiles(entries, cfg)
+      : { kept: entries, blocked: [] };
+  if (!filtered.kept.length) throw new Error("过滤后没有可转存文件");
+  var indexes = filtered.kept.map(function (e) { return e.index; });
+  var task = await guangyaCreateTask(accessToken, did, magnet, cfg.guangya_parent_id, indexes);
+  var ok = !!(task && (task.msg === "success" || task.code === 0 || task.data));
+  if (!ok) {
+    throw new Error((task && (task.msg || task.message || task.error_description)) || "光鸭 create_task 失败");
+  }
+  return {
+    ok: true,
+    keptCount: filtered.kept.length,
+    blockedCount: filtered.blocked.length,
+    keptPreview: gyFormatEntryPreview(filtered.kept),
+    blockedPreview: filtered.blocked.length ? gyFormatBlockedPreview(filtered.blocked) : "",
+    task: task,
+  };
+}
+
+async function handleGuangyaMagnetSave(hash) {
+  hash = String(hash || "").trim().toLowerCase();
+  var entry = loadMagnetEntry(hash);
+  var link = MAGNET_LINK_PREFIX + hash;
+  if (!entry || !entry.magnet) {
+    return {
+      id: hash,
+      type: "url",
+      title: "转存失败",
+      description: "找不到磁力缓存，请返回影片详情页重新加载后再试",
+      link: link,
+    };
+  }
+  var cfg = getGuangyaConfigFromStore();
+  if (!String(cfg.guangya_token || "").trim()) {
+    return {
+      id: hash,
+      type: "url",
+      title: "未配置光鸭",
+      description: "请在模块全局参数中填写光鸭 refresh_token（gy.- 开头）",
+      link: link,
+      backdropPath: entry.backdropPath || undefined,
+    };
+  }
+  try {
+    var result = await saveMagnetToGuangya(entry.magnet, cfg);
+    var lines = [
+      "番号: " + (entry.code || "-"),
+      "名称: " + (entry.name || hash),
+      "保留: " + result.keptCount + " 个文件",
+      "过滤: " + result.blockedCount + " 个文件",
+    ];
+    if (result.keptPreview) lines.push("已提交:\n" + result.keptPreview);
+    if (result.blockedPreview) lines.push("已过滤:\n" + result.blockedPreview);
+    return {
+      id: hash,
+      type: "url",
+      title: "光鸭转存已提交",
+      description: lines.join("\n"),
+      link: link,
+      backdropPath: entry.backdropPath || undefined,
+      posterPath: entry.backdropPath || undefined,
+    };
+  } catch (err) {
+    return {
+      id: hash,
+      type: "url",
+      title: "光鸭转存失败",
+      description: String((err && err.message) || err || "未知错误"),
+      link: link,
+      backdropPath: entry.backdropPath || undefined,
+    };
+  }
+}
+
 /* ========================= DMM HD Cover（对齐 dmm-cover.js） ========================= */
 
 function compactUniqueUrls(urls) {
@@ -2542,6 +3285,11 @@ async function loadPage(params) {
 
 async function loadDetail(link) {
   try {
+    var linkStr = String(link || "");
+    if (linkStr.indexOf(MAGNET_LINK_PREFIX) === 0) {
+      return await handleGuangyaMagnetSave(linkStr.slice(MAGNET_LINK_PREFIX.length));
+    }
+
     var params = await ensureApiSession({});
     var path = normalizePath(String(link || ""));
     if (!path) return null;
@@ -2620,10 +3368,15 @@ async function loadDetail(link) {
     var trailers = buildDetailTrailers(previewUrl, coverUrl || posterUrl);
 
     var meta = parseDetailMeta(movie);
-    var magnetText = "";
+    var relatedItems = [];
     try {
       var magnetData = await apiGet("/v1/movies/" + movieId + "/magnets", null, params);
-      magnetText = mapMagnets(magnetData && magnetData.magnets);
+      relatedItems = buildMagnetRelatedItems(magnetData && magnetData.magnets, {
+        movieId: movieId,
+        code: code,
+        title: title,
+        backdropPath: coverUrl || posterUrl || (backdropPaths[0] || ""),
+      });
     } catch (eMag) {}
 
     var descParts = [];
@@ -2631,7 +3384,11 @@ async function loadDetail(link) {
     if (movie.release_date) descParts.push("日期: " + movie.release_date);
     if (movie.duration) descParts.push("时长: " + movie.duration + " 分钟");
     if (movie.summary) descParts.push(safeText(movie.summary));
-    if (magnetText) descParts.push("磁力:\n" + magnetText);
+    if (relatedItems.length) {
+      descParts.push("磁力: 见下方相似作品栏，点击即可转存光鸭云盘");
+    } else if (String(getGuangyaConfigFromStore().guangya_token || "").trim()) {
+      descParts.push("磁力: 暂无可用磁链");
+    }
 
     var item = {
       id: code || movie.id || movieId,
@@ -2651,6 +3408,7 @@ async function loadDetail(link) {
       previewUrl: previewUrl || "",
       videoId: movie.id || movieId,
     };
+    if (relatedItems.length) item.relatedItems = relatedItems;
     if (coverUrl) {
       item.backdropPath = coverUrl;
       item.coverUrl = coverUrl;
@@ -2695,6 +3453,10 @@ if (typeof module !== "undefined" && module.exports) {
     loadTop250: loadTop250,
     loadDetail: loadDetail,
     loginAccount: loginAccount,
+    buildMagnetRelatedItems: buildMagnetRelatedItems,
+    handleGuangyaMagnetSave: handleGuangyaMagnetSave,
+    gyFilterResolvedFiles: gyFilterResolvedFiles,
+    getGuangyaConfigFromStore: getGuangyaConfigFromStore,
     WidgetMetadata: typeof WidgetMetadata !== "undefined" ? WidgetMetadata : null,
   };
 }
