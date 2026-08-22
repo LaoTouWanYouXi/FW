@@ -943,8 +943,6 @@ var GLOBAL_KEYS = [
   "dmmProbeApiKey",
   "guangya_token",
   "guangya_parent_id",
-  "magnet_filter",
-  "magnet_video_only",
   "magnet_min_video_mb",
   "magnet_block_patterns",
 ];
@@ -1047,7 +1045,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.4.0",
+  version: "4.4.1",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 分类；详情磁力 relatedItems 一键转存光鸭（含广告过滤）",
   author: "老头",
@@ -1079,6 +1077,7 @@ WidgetMetadata = {
       description: "与账号一并填写后自动登录；Token 会缓存到本地",
       value: "",
     },
+    /*
     {
       name: "apiToken",
       title: "API Token（可选）",
@@ -1100,6 +1099,7 @@ WidgetMetadata = {
       description: "Worker 开启鉴权时填写 X-Probe-Key",
       value: "",
     },
+    */
     {
       name: "guangya_token",
       title: "光鸭 refresh_token",
@@ -1113,26 +1113,6 @@ WidgetMetadata = {
       type: "input",
       description: "留空保存到根目录",
       value: "",
-    },
-    {
-      name: "magnet_filter",
-      title: "转存前过滤广告",
-      type: "enumeration",
-      enumOptions: [
-        { title: "开启", value: "1" },
-        { title: "关闭", value: "0" },
-      ],
-      value: "1",
-    },
-    {
-      name: "magnet_video_only",
-      title: "仅保留视频文件",
-      type: "enumeration",
-      enumOptions: [
-        { title: "是", value: "1" },
-        { title: "否", value: "0" },
-      ],
-      value: "1",
     },
     {
       name: "magnet_min_video_mb",
@@ -2096,8 +2076,8 @@ function getGuangyaConfigFromStore() {
   return {
     guangya_token: readStore("javdb.global.guangya_token") || "",
     guangya_parent_id: readStore("javdb.global.guangya_parent_id") || "",
-    magnet_filter: readStore("javdb.global.magnet_filter") || "1",
-    magnet_video_only: readStore("javdb.global.magnet_video_only") || "1",
+    magnet_filter: "1",
+    magnet_video_only: "1",
     magnet_min_video_mb: readStore("javdb.global.magnet_min_video_mb") || "0",
     magnet_block_patterns: readStore("javdb.global.magnet_block_patterns") || "",
   };
@@ -2133,16 +2113,29 @@ function loadMagnetEntry(hash) {
   }
 }
 
-function buildMagnetItemTitle(m) {
+function stripCodeFromMagnetName(name, code) {
+  name = safeText(name);
+  code = safeText(code).toUpperCase();
+  if (!name || !code) return name;
+  var escaped = code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  var stripped = name.replace(new RegExp("^" + escaped + "[\\s._@\\-]*", "i"), "");
+  stripped = safeText(stripped.replace(/^[@._\\-]+/, ""));
+  return stripped || name;
+}
+
+function buildMagnetItemTitle(m, code) {
   var flags = [];
   if (m.cnsub) flags.push("中字");
   if (m.hd) flags.push("HD");
   var size = formatMagnetSize(m.size);
-  var name = safeText(m.name || m.hash || "磁力");
-  var title = name;
-  if (size) title += " · " + size;
-  if (flags.length) title += " · " + flags.join("/");
-  return title;
+  var parts = [];
+  if (size) parts.push(size);
+  if (flags.length) parts.push(flags.join("/"));
+  if (!parts.length) {
+    var fallback = stripCodeFromMagnetName(safeText(m.name || m.hash || "磁力"), code);
+    if (fallback) parts.push(fallback);
+  }
+  return parts.join(" · ") || "磁力";
 }
 
 function buildMagnetRelatedItems(magnets, ctx) {
@@ -2153,6 +2146,7 @@ function buildMagnetRelatedItems(magnets, ctx) {
     var m = list[i];
     var hash = String(m.hash || "").trim().toLowerCase();
     if (!hash) continue;
+    var displayName = stripCodeFromMagnetName(safeText(m.name || hash), ctx.code);
     cacheMagnetEntry(hash, {
       magnet: buildMagnetUrl(hash),
       hash: hash,
@@ -2167,10 +2161,10 @@ function buildMagnetRelatedItems(magnets, ctx) {
       id: hash,
       type: "url",
       mediaType: "movie",
-      title: buildMagnetItemTitle(m),
+      title: buildMagnetItemTitle(m, ctx.code),
       link: MAGNET_LINK_PREFIX + hash,
       backdropPath: ctx.backdropPath || undefined,
-      description: "点击转存到光鸭云盘",
+      description: displayName ? displayName + "\n点击转存到光鸭云盘" : "点击转存到光鸭云盘",
     });
   }
   return items;
@@ -2698,12 +2692,12 @@ async function handleGuangyaMagnetSave(hash) {
   }
   try {
     var result = await saveMagnetToGuangya(entry.magnet, cfg);
-    var lines = [
-      "番号: " + (entry.code || "-"),
-      "名称: " + (entry.name || hash),
-      "保留: " + result.keptCount + " 个文件",
-      "过滤: " + result.blockedCount + " 个文件",
-    ];
+    var lines = [];
+    var sizeText = formatMagnetSize(entry.size);
+    if (sizeText) lines.push("大小: " + sizeText);
+    lines.push("保留: " + result.keptCount + " 个文件");
+    lines.push("过滤: " + result.blockedCount + " 个文件");
+    if (entry.name) lines.push("名称: " + stripCodeFromMagnetName(entry.name, entry.code));
     if (result.keptPreview) lines.push("已提交:\n" + result.keptPreview);
     if (result.blockedPreview) lines.push("已过滤:\n" + result.blockedPreview);
     return {
