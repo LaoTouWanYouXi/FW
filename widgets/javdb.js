@@ -1045,9 +1045,9 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.4.3",
+  version: "4.5.0",
   requiredVersion: "0.0.1",
-  description: "JavDB API：最近更新 / TOP250 / 分类；详情磁力 relatedItems 一键转存光鸭（含广告过滤）",
+  description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类；详情磁力 relatedItems 一键转存光鸭（含广告过滤）",
   author: "老头",
   site: API_SITE,
   detailCacheDuration: 3600,
@@ -1196,7 +1196,40 @@ WidgetMetadata = {
       cacheDuration: 3600,
       params: categoryParams("genreId", "选择片商", JAVDB_MAKER_OPTIONS),
     },
+    {
+      id: "search",
+      title: "搜索",
+      description: "按番号、演员、标签等关键词搜索",
+      functionName: "searchMovies",
+      cacheDuration: 1800,
+      params: [
+        { name: "keyword", title: "关键词", type: "input", value: "" },
+        {
+          name: "sort_by",
+          title: "排序",
+          type: "enumeration",
+          enumOptions: [
+            { title: "最近上架", value: "published" },
+            { title: "最高评分", value: "score" },
+            { title: "最多收藏", value: "fav" },
+            { title: "最近上架(有磁力)", value: "published_download" },
+            { title: "最高评分(有磁力)", value: "score_download" },
+            { title: "最多收藏(有磁力)", value: "fav_download" },
+          ],
+          value: "published",
+        },
+        { name: "page", title: "页码", type: "page", value: "1" },
+      ],
+    },
   ],
+  search: {
+    title: "全局搜索",
+    functionName: "searchGlobal",
+    params: [
+      { name: "keyword", title: "关键词", type: "input", value: "" },
+      { name: "page", title: "页码", type: "page", value: "1" },
+    ],
+  },
 };
 
 /* ========================= Storage / Params ========================= */
@@ -1937,12 +1970,15 @@ async function fetchCategoryMovies(filterBy, params) {
 
 async function fetchSearchMovies(keyword, params, magnetOnly) {
   var page = Number(params.page || params.from || 1);
+  var sortRaw = String((params && params.sort_by) || "published");
+  var magnet = !!magnetOnly || /_download$/.test(sortRaw);
+  var sortKey = magnet ? sortRaw.replace(/_download$/, "") : sortRaw;
   var query = {
     q: keyword,
     page: page,
     type: "movie",
-    movie_filter_by: magnetOnly ? "magnet" : "all",
-    movie_sort_by: SEARCH_SORT_MAP[params.sort_by || "published"] || "release",
+    movie_filter_by: magnet ? "magnet" : "all",
+    movie_sort_by: SEARCH_SORT_MAP[sortKey] || "release",
   };
   var data = await apiGet("/v2/search", query, params);
   return (data && data.movies) || [];
@@ -3669,6 +3705,26 @@ async function loadTop250(params) {
   }
 }
 
+async function searchMovies(params) {
+  try {
+    params = await ensureApiSession(params || {});
+    var keyword = safeText(params.keyword);
+    if (!keyword) {
+      return [{ id: "tip", type: "text", title: "请输入关键词开始搜索" }];
+    }
+    var movies = await fetchSearchMovies(keyword, params, false);
+    if (!movies.length) throw new Error("未找到相关影片");
+    return enrichListMovies(movies, params);
+  } catch (error) {
+    console.error("[javdb] searchMovies 失败:", error.message || error);
+    throw error;
+  }
+}
+
+async function searchGlobal(params) {
+  return searchMovies(params);
+}
+
 async function loadCategoryList(params) {
   var target = resolveCategoryTarget(params);
   params = await ensureApiSession(target.params);
@@ -3883,6 +3939,8 @@ if (typeof module !== "undefined" && module.exports) {
     loadPage: loadPage,
     loadLatest: loadLatest,
     loadTop250: loadTop250,
+    searchMovies: searchMovies,
+    searchGlobal: searchGlobal,
     loadDetail: loadDetail,
     loginAccount: loginAccount,
     buildMagnetRelatedItems: buildMagnetRelatedItems,
