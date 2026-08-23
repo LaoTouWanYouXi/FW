@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情页 DMN12 论坛磁力一键转存光鸭",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.7.0",
+  version: "1.7.2",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
   globalParams: [
@@ -1571,9 +1571,9 @@ WidgetMetadata = {
     },
     {
       name: "dmn12_cookie",
-      title: "DMN12 论坛 Cookie",
+      title: "DMN12 论坛 Cookie（可选）",
       type: "input",
-      description: "dmn12.vip 登录 Cookie；论坛有年龄验证/登录墙时需填写",
+      description: "可选；无账号留空即可，脚本自动过年龄验证并只抓公开可见磁力",
       value: "",
     },
   ],
@@ -3693,7 +3693,7 @@ async function searchMovies(params) {
 /* ========================= DMN12 论坛磁力 + 光鸭转存（对齐 javdb） ========================= */
 
 const DMN12_FORUM_BASE = "https://dmn12.vip";
-const DMN12_MAGNET_CACHE_PREFIX = "catemby.dmn12.magnets.v1.";
+const DMN12_MAGNET_CACHE_PREFIX = "catemby.dmn12.magnets.v2.";
 const DMN12_MAGNET_CACHE_MS = 60 * 60 * 1000;
 
 const GUANGYA_ACCOUNT_URL = "https://account.guangyapan.com";
@@ -3799,6 +3799,107 @@ function dmn12Headers(cookie) {
   return headers;
 }
 
+function mergeCookieParts() {
+  const map = {};
+  for (let i = 0; i < arguments.length; i++) {
+    String(arguments[i] || "")
+      .split(";")
+      .forEach((part) => {
+        const p = part.trim();
+        if (!p) return;
+        const eq = p.indexOf("=");
+        if (eq < 0) return;
+        map[p.slice(0, eq).trim()] = p.slice(eq + 1).trim();
+      });
+  }
+  return Object.keys(map)
+    .map((k) => k + "=" + map[k])
+    .join("; ");
+}
+
+function isDmn12AgeGateHtml(html) {
+  const text = String(html || "");
+  if (!text) return false;
+  if (text.indexOf("magnet:") >= 0 || /mod=viewthread|mod=forumdisplay|searchthread/i.test(text)) return false;
+  return /满18岁|enter-btn|safeid|WARNING/i.test(text);
+}
+
+function extractDmn12SafeId(html) {
+  const m = String(html || "").match(/var\s+safeid\s*=\s*['"]([^'"]+)['"]/i);
+  return m ? m[1] : "";
+}
+
+async function dmn12FetchHtml(url, cookie) {
+  cookie = safeText(cookie);
+  let html = await forumHttpGet(url, cookie);
+  if (!isDmn12AgeGateHtml(html)) return { html, cookie };
+  const safeid = extractDmn12SafeId(html);
+  if (!safeid) return { html, cookie };
+  cookie = mergeCookieParts(cookie, "safeid=" + safeid);
+  html = await forumHttpGet(url, cookie);
+  if (isDmn12AgeGateHtml(html)) {
+    cookie = mergeCookieParts(cookie, "over18=1");
+    html = await forumHttpGet(url, cookie);
+  }
+  return { html, cookie };
+}
+
+function stripForumHiddenBlocks(html) {
+  let s = String(html || "");
+  s = s.replace(/<div[^>]*class="[^"]*\blocked[^"]*"[^>]*>[\s\S]*?<\/div>/gi, " ");
+  s = s.replace(/<div[^>]*class="[^"]*\bhide[^"]*"[^>]*>[\s\S]*?<\/div>/gi, " ");
+  s = s.replace(/<div[^>]*id="postmessage_\d+"[^>]*style="display\s*:\s*none[^"]*"[^>]*>[\s\S]*?<\/div>/gi, " ");
+  s = s.replace(/\[hide(?:=[^\]]*)?\][\s\S]*?\[\/hide\]/gi, " ");
+  s = s.replace(/本帖(?:含有|隐藏)[^<\n]{0,80}隐藏[^<\n]{0,80}/gi, " ");
+  s = s.replace(/回复(?:后|可见|才能)[^<\n]{0,40}/gi, " ");
+  s = s.replace(/(?:金币|积分|VIP|购买)(?:可见|下载|后可见)[^<\n]{0,40}/gi, " ");
+  return s;
+}
+
+function isHiddenMagnetContext(context) {
+  const t = String(context || "");
+  if (!t) return false;
+  return /隐藏|回复可见|回复后|积分购买|金币购买|VIP可见|登录可见|购买可见|need reply|hidden content/i.test(t);
+}
+
+function htmlToSearchText(html) {
+  return decodeHtmlBasic(
+    stripForumHiddenBlocks(html)
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+  ).replace(/\s+/g, " ");
+}
+
+function parseDmn12SearchThreads(html, code) {
+  const threads = [];
+  const seen = {};
+  const src = String(html || "");
+  const re = /forum\.php\?mod=viewthread(?:&amp;|&)tid=(\d+)/gi;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    const tid = m[1];
+    if (seen[tid]) continue;
+    const around = src.slice(Math.max(0, m.index - 240), Math.min(src.length, m.index + 240));
+    if (code && !new RegExp(code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&"), "i").test(around)) continue;
+    seen[tid] = true;
+    threads.push(tid);
+    if (threads.length >= 5) break;
+  }
+  if (threads.length) return threads;
+  re.lastIndex = 0;
+  while ((m = re.exec(src)) !== null) {
+    const tid = m[1];
+    if (seen[tid]) continue;
+    seen[tid] = true;
+    threads.push(tid);
+    if (threads.length >= 5) break;
+  }
+  return threads;
+}
+
 function gyParseHttpPayload(resp) {
   if (!resp || resp.data === undefined || resp.data === null) return null;
   if (typeof resp.data === "string") {
@@ -3832,32 +3933,6 @@ function decodeHtmlBasic(text) {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, " ");
-}
-
-function htmlToSearchText(html) {
-  return decodeHtmlBasic(
-    String(html || "")
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/p>/gi, "\n")
-      .replace(/<[^>]+>/g, " ")
-  ).replace(/\s+/g, " ");
-}
-
-function parseDmn12SearchThreads(html) {
-  const threads = [];
-  const seen = {};
-  const re = /forum\.php\?mod=viewthread(?:&amp;|&)tid=(\d+)/gi;
-  let m;
-  while ((m = re.exec(String(html || ""))) !== null) {
-    const tid = m[1];
-    if (seen[tid]) continue;
-    seen[tid] = true;
-    threads.push(tid);
-    if (threads.length >= 5) break;
-  }
-  return threads;
 }
 
 function buildMagnetUrl(hash) {
@@ -3997,6 +4072,7 @@ function parseMagnetsFromForumHtml(html, code) {
   const seen = {};
   extractMagnetsFromText(text).forEach((entry) => {
     if (seen[entry.hash]) return;
+    if (isHiddenMagnetContext(entry.context)) return;
     seen[entry.hash] = true;
     const flags = parseMagnetFlags(entry.context + " " + entry.magnet);
     const sizeMb = parseMagnetSizeMb(entry.context) || parseMagnetSizeFromUri(entry.magnet);
@@ -4047,31 +4123,26 @@ async function fetchDmn12ForumMagnets(code, params) {
       }
     }
   } catch (e) {}
-  const cookie = readDmn12Cookie(params);
+  let cookie = readDmn12Cookie(params);
+  const enc = encodeURIComponent(code);
   const searchUrls = [
-    DMN12_FORUM_BASE +
-      "/search.php?mod=forum&searchsubmit=yes&srchtxt=" +
-      encodeURIComponent(code) +
-      "&orderby=lastpost&ascdesc=desc",
-    DMN12_FORUM_BASE +
-      "/forum.php?mod=search&searchsubmit=yes&srchtxt=" +
-      encodeURIComponent(code) +
-      "&orderby=lastpost&ascdesc=desc",
+    DMN12_FORUM_BASE + "/search.php?mod=forum&searchsubmit=yes&srchtxt=" + enc + "&orderby=lastpost&ascdesc=desc",
+    DMN12_FORUM_BASE + "/forum.php?mod=search&searchsubmit=yes&srchtxt=" + enc + "&orderby=lastpost&ascdesc=desc",
+    DMN12_FORUM_BASE + "/search.php?mod=forum&mobile=2&searchsubmit=yes&srchtxt=" + enc,
   ];
   let html = "";
   for (let i = 0; i < searchUrls.length; i++) {
     try {
-      html = await forumHttpGet(searchUrls[i], cookie);
+      const fetched = await dmn12FetchHtml(searchUrls[i], cookie);
+      html = fetched.html;
+      cookie = fetched.cookie || cookie;
       if (html && html.indexOf("magnet:") >= 0) break;
-      if (html && parseDmn12SearchThreads(html).length) break;
+      if (html && parseDmn12SearchThreads(html, code).length) break;
     } catch (e) {
-      if (i === searchUrls.length - 1) throw e;
+      if (i === searchUrls.length - 1 && !html) throw e;
     }
   }
-  if (/满18岁|enter-btn|safeid/i.test(html || "") && (html || "").indexOf("magnet:") < 0) {
-    throw new Error("DMN12 论坛需 Cookie（请在全局参数填写 dmn12_cookie）");
-  }
-  const tids = parseDmn12SearchThreads(html);
+  const tids = parseDmn12SearchThreads(html, code);
   const all = [];
   const seenHash = {};
   function pushMagnets(list) {
@@ -4085,16 +4156,19 @@ async function fetchDmn12ForumMagnets(code, params) {
   for (let i = 0; i < tids.length; i++) {
     if (all.length >= 12) break;
     try {
-      const threadHtml = await forumHttpGet(
+      const fetched = await dmn12FetchHtml(
         DMN12_FORUM_BASE + "/forum.php?mod=viewthread&tid=" + tids[i],
         cookie
       );
-      pushMagnets(parseMagnetsFromForumHtml(threadHtml, code));
+      cookie = fetched.cookie || cookie;
+      pushMagnets(parseMagnetsFromForumHtml(fetched.html, code));
     } catch (e) {}
   }
-  try {
-    Widget.storage.set(cacheKey, JSON.stringify({ savedAt: Date.now(), magnets: all }));
-  } catch (e) {}
+  if (all.length) {
+    try {
+      Widget.storage.set(cacheKey, JSON.stringify({ savedAt: Date.now(), magnets: all }));
+    } catch (e) {}
+  }
   return all;
 }
 
@@ -4143,10 +4217,10 @@ function buildMagnetRelatedItems(magnets, ctx) {
       source: m.source || "dmn12",
     });
     items.push({
-      id: hash,
+      id: "magnet:" + hash,
       type: "url",
       mediaType: "movie",
-      title: buildMagnetItemTitle(m, ctx.code),
+      title: "【磁力】" + buildMagnetItemTitle(m, ctx.code),
       link: MAGNET_LINK_PREFIX + hash,
       backdropPath: ctx.backdropPath || undefined,
       description: displayName ? displayName + "\n点击转存到光鸭云盘" : "点击转存到光鸭云盘",
@@ -4677,9 +4751,6 @@ async function loadDetail(link, params) {
     backdropPathsList = compactUniqueUrls([].concat(coverUrl ? [coverUrl] : [], stills)).filter(Boolean);
   }
   const meta = parseDetailMeta(movie);
-  const actorMovies = (movie.actor_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
-  const fallbackRelated = (movie.relative_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
-  const relatedSource = actorMovies.length ? actorMovies : fallbackRelated;
 
   const previewUrl = movie.preview_video_url || "";
   const trailers = buildTrailers(movie, posterUrl || coverUrl);
@@ -4689,7 +4760,6 @@ async function loadDetail(link, params) {
   const summary = safeText(movie.summary || "");
 
   let relatedItems = [];
-  let magnetNote = "";
   if (code) {
     try {
       const forumMagnets = await fetchDmn12ForumMagnets(code, params);
@@ -4702,24 +4772,19 @@ async function loadDetail(link, params) {
           backdropPath: coverUrl || posterUrl || "",
           limit: 3,
         });
-        magnetNote = "磁力: 见下方相似作品栏（DMN12论坛），点击即可转存光鸭云盘";
       }
     } catch (eMag) {
       console.error("[catemby] DMN12 论坛磁力失败:", eMag.message || eMag);
     }
   }
-  if (!relatedItems.length) {
-    relatedItems = relatedSource.map((item) => mapRelatedMovie(item, posterUrl || coverUrl));
-  }
 
   const descParts = [];
   if (summary) descParts.push(summary);
-  if (magnetNote) descParts.push(magnetNote);
-  else if (code && getGuangyaConfig(params).guangya_token) {
-    descParts.push("磁力: 暂无 DMN12 论坛磁链");
+  if (relatedItems.length) {
+    descParts.push("磁力: 见下方磁链栏（DMN12 论坛公开帖），点击转存光鸭云盘");
   }
 
-  return {
+  const item = {
     id: code || movie.id || movieId,
     type: "detail",
     mediaType: "movie",
@@ -4740,7 +4805,6 @@ async function loadDetail(link, params) {
     backdropPaths: backdropPathsList.length ? backdropPathsList : undefined,
     genreItems: meta.genreItems.length ? meta.genreItems : undefined,
     peoples: meta.peoples.length ? meta.peoples : undefined,
-    relatedItems,
     trailers,
     previewUrl: previewUrl || "",
     releaseDate: movie.release_date || "",
@@ -4753,6 +4817,8 @@ async function loadDetail(link, params) {
       fullVideoAvailable: false,
     },
   };
+  if (relatedItems.length) item.relatedItems = relatedItems;
+  return item;
 }
 
 function extractSearchCode(text) {
