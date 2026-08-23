@@ -1045,7 +1045,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.5.0",
+  version: "4.5.1",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类；详情磁力 relatedItems 一键转存光鸭（含广告过滤）",
   author: "老头",
@@ -1234,9 +1234,65 @@ WidgetMetadata = {
 
 /* ========================= Storage / Params ========================= */
 
+var GUANGYA_TOKEN_ALIASES = [
+  "guangya_token",
+  "GUANGYA_REFRESH_TOKEN",
+  "guangya_refresh_token",
+  "guangyaRefreshToken",
+  "refresh_token",
+];
+var GUANGYA_PARENT_ALIASES = [
+  "guangya_parent_id",
+  "GUANGYA_PARENT_ID",
+  "guangya_parent_id",
+  "guangyaParentId",
+];
+
+function normalizeStoreValue(val) {
+  if (val === undefined || val === null) return "";
+  if (typeof val === "string") return val.trim();
+  if (typeof val === "number" || typeof val === "boolean") return String(val).trim();
+  if (typeof val === "object") {
+    if (typeof val.then === "function") return "";
+    if (typeof val.value === "string") return val.value.trim();
+    if (typeof val.token === "string") return val.token.trim();
+    if (typeof val.refresh_token === "string") return val.refresh_token.trim();
+    if (typeof val.access_token === "string") return val.access_token.trim();
+  }
+  return "";
+}
+
+function scanGyRefreshToken(text) {
+  var m = String(text || "").match(/gy\.[A-Za-z0-9_\-\.~+/=]{8,}/);
+  return m ? m[0] : "";
+}
+
+function isPromiseLike(val) {
+  return !!(val && typeof val === "object" && typeof val.then === "function");
+}
+
+async function unwrapStoreValue(val) {
+  if (isPromiseLike(val)) {
+    try {
+      val = await val;
+    } catch (e) {
+      return "";
+    }
+  }
+  return normalizeStoreValue(val);
+}
+
 function readStore(key) {
   try {
-    return Widget.storage.get(key);
+    return normalizeStoreValue(Widget.storage.get(key));
+  } catch (e) {
+    return "";
+  }
+}
+
+async function readStoreAsync(key) {
+  try {
+    return await unwrapStoreValue(Widget.storage.get(key));
   } catch (e) {
     return "";
   }
@@ -1248,6 +1304,129 @@ function writeStore(key, value) {
   } catch (e) {}
 }
 
+function globalParamStorageKeys(name) {
+  var widgetId = WidgetMetadata && WidgetMetadata.id ? String(WidgetMetadata.id) : "forward.javdb";
+  return [
+    "javdb.global." + name,
+    widgetId + ".global." + name,
+    widgetId + ".globalParams." + name,
+    "forward.javdb.global." + name,
+    "forward.javdb.globalParams." + name,
+    "global." + name,
+    name,
+  ];
+}
+
+function readForwardGlobalParamsBlobValue(name) {
+  var widgetId = WidgetMetadata && WidgetMetadata.id ? String(WidgetMetadata.id) : "forward.javdb";
+  var blobKeys = [
+    widgetId + ".globalParams",
+    "forward.javdb.globalParams",
+    widgetId + ".global",
+    "javdb.globalParams",
+  ];
+  for (var i = 0; i < blobKeys.length; i++) {
+    try {
+      var raw = Widget.storage.get(blobKeys[i]);
+      if (!raw) continue;
+      if (typeof raw === "string") {
+        try {
+          raw = JSON.parse(raw);
+        } catch (e) {
+          continue;
+        }
+      }
+      if (!raw || typeof raw !== "object") continue;
+      var val = normalizeStoreValue(raw[name]);
+      if (val) return val;
+    } catch (e2) {}
+  }
+  return "";
+}
+
+function pickParamAliases(params, aliases) {
+  params = params || {};
+  for (var i = 0; i < aliases.length; i++) {
+    var key = aliases[i];
+    if (params[key] !== undefined && params[key] !== null && String(params[key]).trim() !== "") {
+      return normalizeStoreValue(params[key]);
+    }
+  }
+  if (params.global && typeof params.global === "object") {
+    for (var j = 0; j < aliases.length; j++) {
+      var gkey = aliases[j];
+      if (params.global[gkey] !== undefined && params.global[gkey] !== null && String(params.global[gkey]).trim() !== "") {
+        return normalizeStoreValue(params.global[gkey]);
+      }
+    }
+  }
+  return "";
+}
+
+function readWidgetGlobalParamsValue(name) {
+  try {
+    if (typeof Widget.getGlobalParams === "function") {
+      var all = Widget.getGlobalParams();
+      if (all && all[name] != null) return normalizeStoreValue(all[name]);
+    }
+    if (Widget.globalParams && Widget.globalParams[name] != null) {
+      return normalizeStoreValue(Widget.globalParams[name]);
+    }
+  } catch (e) {}
+  return "";
+}
+
+function resolveGlobalParamSync(name, params, aliases) {
+  aliases = aliases || [name];
+  var fromParams = pickParamAliases(params, aliases);
+  if (fromParams) return fromParams;
+
+  var fromWidget = readWidgetGlobalParamsValue(name);
+  if (fromWidget) return fromWidget;
+
+  var fromBlob = readForwardGlobalParamsBlobValue(name);
+  if (fromBlob) return fromBlob;
+
+  var keys = globalParamStorageKeys(name);
+  for (var i = 0; i < keys.length; i++) {
+    var stored = readStore(keys[i]);
+    if (stored) return stored;
+  }
+  return "";
+}
+
+async function resolveGlobalParamAsync(name, params, aliases) {
+  aliases = aliases || [name];
+  var fromParams = pickParamAliases(params, aliases);
+  if (fromParams) return fromParams;
+
+  var fromWidget = readWidgetGlobalParamsValue(name);
+  if (fromWidget) return fromWidget;
+
+  var fromBlob = readForwardGlobalParamsBlobValue(name);
+  if (fromBlob) return fromBlob;
+
+  var keys = globalParamStorageKeys(name);
+  for (var i = 0; i < keys.length; i++) {
+    var stored = await readStoreAsync(keys[i]);
+    if (stored) return stored;
+  }
+  return "";
+}
+
+function normalizeGuangyaToken(raw) {
+  var token = normalizeStoreValue(raw);
+  if (!token) return "";
+  var scanned = scanGyRefreshToken(token);
+  return scanned || token;
+}
+
+function persistGlobalParam(name, value) {
+  value = normalizeStoreValue(value);
+  if (!value) return;
+  writeStore("javdb.global." + name, value);
+}
+
 function syncParams(params) {
   params = params || {};
   var out = {};
@@ -1255,15 +1434,44 @@ function syncParams(params) {
     var key = GLOBAL_KEYS[i];
     var val = params[key];
     if (val !== undefined && val !== null && String(val).trim() !== "") {
-      out[key] = String(val).trim();
-      writeStore("javdb.global." + key, out[key]);
+      out[key] = normalizeStoreValue(val);
+      persistGlobalParam(key, out[key]);
     } else {
-      var stored = readStore("javdb.global." + key);
-      if (stored) out[key] = String(stored);
+      var stored = resolveGlobalParamSync(key, params, [key]);
+      if (stored) out[key] = stored;
     }
+  }
+  var gyToken = normalizeGuangyaToken(
+    pickParamAliases(params, GUANGYA_TOKEN_ALIASES) || out.guangya_token || resolveGlobalParamSync("guangya_token", params, GUANGYA_TOKEN_ALIASES)
+  );
+  if (gyToken) {
+    out.guangya_token = gyToken;
+    persistGlobalParam("guangya_token", gyToken);
+  }
+  var gyParent = pickParamAliases(params, GUANGYA_PARENT_ALIASES) || out.guangya_parent_id || resolveGlobalParamSync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES);
+  if (gyParent) {
+    out.guangya_parent_id = gyParent;
+    persistGlobalParam("guangya_parent_id", gyParent);
   }
   if (!out.locale) out.locale = "zh";
   return Object.assign({}, params, out);
+}
+
+async function ensureGlobalParams(params) {
+  params = syncParams(params || {});
+  var gyToken = normalizeGuangyaToken(
+    await resolveGlobalParamAsync("guangya_token", params, GUANGYA_TOKEN_ALIASES)
+  );
+  if (gyToken) {
+    params.guangya_token = gyToken;
+    persistGlobalParam("guangya_token", gyToken);
+  }
+  var gyParent = await resolveGlobalParamAsync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES);
+  if (gyParent) {
+    params.guangya_parent_id = gyParent;
+    persistGlobalParam("guangya_parent_id", gyParent);
+  }
+  return params;
 }
 
 /* ========================= CategoryPath ========================= */
@@ -1807,7 +2015,7 @@ async function loginWithPassword(params) {
 
 async function ensureApiSession(params, options) {
   options = options || {};
-  params = syncParams(params || {});
+  params = await ensureGlobalParams(params || {});
   if (params.apiToken) return params;
 
   var email = String(params.email || "").trim();
@@ -2108,14 +2316,44 @@ function ensureGuangyaDeviceId() {
   return id;
 }
 
-function getGuangyaConfigFromStore() {
+function getGuangyaConfigFromStore(params) {
+  params = syncParams(params || {});
+  var token = normalizeGuangyaToken(
+    params.guangya_token || resolveGlobalParamSync("guangya_token", params, GUANGYA_TOKEN_ALIASES)
+  );
+  var parentId =
+    params.guangya_parent_id ||
+    resolveGlobalParamSync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES) ||
+    "";
+  if (token) persistGlobalParam("guangya_token", token);
+  if (parentId) persistGlobalParam("guangya_parent_id", parentId);
   return {
-    guangya_token: readStore("javdb.global.guangya_token") || "",
-    guangya_parent_id: readStore("javdb.global.guangya_parent_id") || "",
+    guangya_token: token,
+    guangya_parent_id: parentId,
     magnet_filter: "1",
     magnet_video_only: "1",
     magnet_min_video_mb: readStore("javdb.global.magnet_min_video_mb") || "0",
     magnet_block_patterns: readStore("javdb.global.magnet_block_patterns") || "",
+  };
+}
+
+async function getGuangyaConfig(params) {
+  params = await ensureGlobalParams(params || {});
+  var token = normalizeGuangyaToken(params.guangya_token);
+  var parentId = normalizeStoreValue(params.guangya_parent_id);
+  if (token) persistGlobalParam("guangya_token", token);
+  if (parentId) persistGlobalParam("guangya_parent_id", parentId);
+  return {
+    guangya_token: token,
+    guangya_parent_id: parentId,
+    magnet_filter: "1",
+    magnet_video_only: "1",
+    magnet_min_video_mb:
+      (await readStoreAsync("javdb.global.magnet_min_video_mb")) || readStore("javdb.global.magnet_min_video_mb") || "0",
+    magnet_block_patterns:
+      (await readStoreAsync("javdb.global.magnet_block_patterns")) ||
+      readStore("javdb.global.magnet_block_patterns") ||
+      "",
   };
 }
 
@@ -3132,7 +3370,7 @@ async function saveMagnetToGuangya(magnet, cfg) {
   };
 }
 
-async function handleGuangyaMagnetSave(hash) {
+async function handleGuangyaMagnetSave(hash, params) {
   hash = String(hash || "").trim().toLowerCase();
   var entry = loadMagnetEntry(hash);
   var link = MAGNET_LINK_PREFIX + hash;
@@ -3145,7 +3383,7 @@ async function handleGuangyaMagnetSave(hash) {
       link: link,
     };
   }
-  var cfg = getGuangyaConfigFromStore();
+  var cfg = await getGuangyaConfig(params);
   if (!String(cfg.guangya_token || "").trim()) {
     return {
       id: hash,
@@ -3763,14 +4001,14 @@ async function loadPage(params) {
   }
 }
 
-async function loadDetail(link) {
+async function loadDetail(link, params) {
   try {
     var linkStr = String(link || "");
     if (linkStr.indexOf(MAGNET_LINK_PREFIX) === 0) {
-      return await handleGuangyaMagnetSave(linkStr.slice(MAGNET_LINK_PREFIX.length));
+      return await handleGuangyaMagnetSave(linkStr.slice(MAGNET_LINK_PREFIX.length), params);
     }
 
-    var params = await ensureApiSession({});
+    var params = await ensureApiSession(params || {});
     var path = normalizePath(String(link || ""));
     if (!path) return null;
 
@@ -3956,6 +4194,8 @@ if (typeof module !== "undefined" && module.exports) {
     gySanitizeFileIndexes: gySanitizeFileIndexes,
     gyIsGuangyaTaskOk: gyIsGuangyaTaskOk,
     getGuangyaConfigFromStore: getGuangyaConfigFromStore,
+    getGuangyaConfig: getGuangyaConfig,
+    normalizeGuangyaToken: normalizeGuangyaToken,
     WidgetMetadata: typeof WidgetMetadata !== "undefined" ? WidgetMetadata : null,
   };
 }
