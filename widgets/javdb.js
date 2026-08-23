@@ -1045,7 +1045,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.5.1",
+  version: "4.5.2",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类；详情磁力 relatedItems 一键转存光鸭（含广告过滤）",
   author: "老头",
@@ -2733,7 +2733,9 @@ function gyApiHeaders(token, did) {
     accept: "application/json, text/plain, */*",
     authorization: "Bearer " + token,
     "content-type": "application/json",
+    Did: did,
     did: did,
+    Dt: "4",
     dt: "4",
     origin: GUANGYA_SITE,
     referer: GUANGYA_SITE + "/",
@@ -2741,15 +2743,63 @@ function gyApiHeaders(token, did) {
   };
 }
 
+function gyIsHttpStatus400(err) {
+  return /(?:\b400\b|status code was unacceptable)/i.test(String((err && err.message) || err || ""));
+}
+
+function gyApiErrorText(data, status) {
+  if (!data) return "HTTP " + status;
+  if (typeof data === "string" && data.trim()) return data.trim().slice(0, 240);
+  return (
+    safeText(data.msg || data.message || data.error_description || data.error || data.detail) ||
+    "HTTP " + status
+  );
+}
+
+function gyRecoverHttpResponse(error) {
+  var err = error || {};
+  var candidates = [err.response, err.res, err.data, err.body, err];
+  for (var i = 0; i < candidates.length; i++) {
+    var item = candidates[i];
+    if (!item || typeof item !== "object") continue;
+    var status = Number(item.status || item.statusCode || 0);
+    if (status >= 400 && (item.data !== undefined || item.body !== undefined)) return item;
+  }
+  return null;
+}
+
 async function gyHttpPost(url, headers, bodyObj, timeoutMs) {
-  var resp = await widgetHttp("POST", url, {
-    headerFactory: function () {
-      return headers;
-    },
-    body: bodyObj || {},
+  var body = bodyObj || {};
+  var httpOpts = {
+    headers: headers,
+    allow_redirects: true,
     timeout: timeoutMs || 30000,
-  });
-  return parseApiPayload(resp);
+  };
+  var resp;
+  try {
+    if (typeof Widget.http.post === "function") {
+      resp = await Widget.http.post(url, body, httpOpts);
+    } else if (typeof Widget.http.request === "function") {
+      resp = await Widget.http.request(url, Object.assign({ method: "POST", body: body }, httpOpts));
+    } else {
+      resp = await Widget.http.get(
+        url,
+        Object.assign({}, httpOpts, {
+          method: "POST",
+          body: typeof body === "string" ? body : JSON.stringify(body),
+        })
+      );
+    }
+  } catch (error) {
+    resp = gyRecoverHttpResponse(error);
+    if (!resp) throw error;
+  }
+  var status = Number((resp && (resp.status || resp.statusCode)) || 0);
+  var data = parseApiPayload(resp);
+  if (status >= 400) {
+    throw new Error(gyApiErrorText(data, status));
+  }
+  return data;
 }
 
 function readCachedGuangyaAccess(refreshToken) {
@@ -2826,11 +2876,7 @@ function gyNormalizeResolvedEntry(obj, fallbackIndex) {
                 ? obj.file_no
                 : obj.seq != null
                   ? obj.seq
-                  : obj.id != null
-                    ? obj.id
-                    : obj.fileId != null
-                      ? obj.fileId
-                      : obj.file_id;
+                  : null;
   var index = gyToNumber(indexRaw);
   var finalIndex = index != null && index >= 0 ? index : fallbackIndex != null ? fallbackIndex : GY_AUTO_INDEX++;
   var name = gyPickName([
@@ -3303,13 +3349,31 @@ function gyIsGuangyaTaskOk(task) {
   return !!task.data;
 }
 
+function gySanitizeTaskName(name) {
+  name = safeText(name)
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!name || name === "." || name === "..") return "";
+  if (name.length > 180) name = name.slice(0, 180);
+  return name;
+}
+
+function gySanitizeParentId(parentId) {
+  parentId = safeText(parentId);
+  if (!parentId) return "";
+  if (!/^[0-9a-zA-Z_-]{4,64}$/.test(parentId)) return "";
+  return parentId;
+}
+
 async function guangyaCreateTask(accessToken, did, taskInput) {
   taskInput = taskInput || {};
   var body = {
-    url: taskInput.url,
-    parentId: taskInput.parentId || "",
-    newName: safeText(taskInput.newName) || "offline",
+    url: String(taskInput.url || "").trim(),
+    parentId: gySanitizeParentId(taskInput.parentId),
   };
+  var newName = gySanitizeTaskName(taskInput.newName);
+  if (newName) body.newName = newName;
   var indexes = gySanitizeFileIndexes(taskInput.fileIndexes);
   if (indexes && indexes.length) body.fileIndexes = indexes;
   return gyHttpPost(
@@ -3320,46 +3384,59 @@ async function guangyaCreateTask(accessToken, did, taskInput) {
   );
 }
 
-async function saveMagnetToGuangya(magnet, cfg) {
-  var did = ensureGuangyaDeviceId();
-  var accessToken = await ensureGuangyaAccessToken(cfg.guangya_token, did);
-  var resolved = await guangyaResolveResource(accessToken, did, magnet);
-  var entries = gyExtractResolvedEntries(resolved);
-  if (!entries.length) throw new Error("光鸭无法解析磁力文件列表");
-  var filtered =
-    String(cfg.magnet_filter || "1") !== "0"
-      ? gyFilterResolvedFiles(entries, cfg)
-      : { kept: entries, blocked: [] };
-  if (!filtered.kept.length) throw new Error("过滤后没有可转存文件");
+async function submitGuangyaMagnetTask(accessToken, did, magnet, cfg, filtered, resolved) {
+  var magnetUrl = String(magnet || "").trim();
+  var resolvedUrl = gyResolvedTaskUrl(resolved, magnetUrl);
+  var taskName = gyResolvedTaskName(resolved, magnetUrl);
+  var parentId = gySanitizeParentId(cfg.guangya_parent_id);
   var indexes = gySanitizeFileIndexes(
     filtered.kept.map(function (e) {
       return e.index;
     })
   );
-  var taskInput = {
-    url: gyResolvedTaskUrl(resolved, magnet),
-    parentId: cfg.guangya_parent_id,
-    newName: gyResolvedTaskName(resolved, magnet),
-    fileIndexes: indexes,
-  };
-  var task;
-  try {
-    task = await guangyaCreateTask(accessToken, did, taskInput);
-  } catch (err) {
-    if (indexes && /HTTP 400\b/i.test(String((err && err.message) || err))) {
-      task = await guangyaCreateTask(
-        accessToken,
-        did,
-        Object.assign({}, taskInput, { fileIndexes: null })
-      );
-    } else {
-      throw err;
+  var attempts = [
+    { url: resolvedUrl, parentId: parentId, newName: taskName, fileIndexes: indexes, label: "filtered" },
+    { url: resolvedUrl, parentId: parentId, newName: taskName, fileIndexes: null, label: "no-indexes" },
+    { url: magnetUrl, parentId: parentId, newName: taskName, fileIndexes: null, label: "raw-magnet" },
+    { url: resolvedUrl, parentId: "", newName: taskName, fileIndexes: null, label: "root-dir" },
+    { url: magnetUrl, parentId: "", newName: "", fileIndexes: null, label: "minimal" },
+  ];
+  var lastErr = null;
+  for (var i = 0; i < attempts.length; i++) {
+    var attempt = attempts[i];
+    try {
+      var task = await guangyaCreateTask(accessToken, did, attempt);
+      if (gyIsGuangyaTaskOk(task)) return { task: task, attempt: attempt.label };
+      lastErr = new Error(gyApiErrorText(task, 0) || "光鸭 create_task 失败");
+    } catch (err) {
+      lastErr = err;
+      if (!gyIsHttpStatus400(err)) throw err;
     }
   }
-  var ok = gyIsGuangyaTaskOk(task);
-  if (!ok) {
-    throw new Error((task && (task.msg || task.message || task.error_description)) || "光鸭 create_task 失败");
+  throw lastErr || new Error("光鸭 create_task 失败");
+}
+
+async function saveMagnetToGuangya(magnet, cfg) {
+  var did = ensureGuangyaDeviceId();
+  var accessToken = await ensureGuangyaAccessToken(cfg.guangya_token, did);
+  var resolved = null;
+  var entries = [];
+  try {
+    resolved = await guangyaResolveResource(accessToken, did, magnet);
+    entries = gyExtractResolvedEntries(resolved);
+  } catch (err) {
+    if (!gyIsHttpStatus400(err)) throw err;
   }
+  var filtered = { kept: [], blocked: [] };
+  if (entries.length) {
+    filtered =
+      String(cfg.magnet_filter || "1") !== "0"
+        ? gyFilterResolvedFiles(entries, cfg)
+        : { kept: entries, blocked: [] };
+    if (!filtered.kept.length) throw new Error("过滤后没有可转存文件");
+  }
+  var submitted = await submitGuangyaMagnetTask(accessToken, did, magnet, cfg, filtered, resolved);
+  var task = submitted.task;
   return {
     ok: true,
     keptCount: filtered.kept.length,
