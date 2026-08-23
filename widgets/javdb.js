@@ -1298,6 +1298,39 @@ async function readStoreAsync(key) {
   }
 }
 
+function readStorageRaw(key) {
+  try {
+    var val = Widget.storage.get(key);
+    if (isPromiseLike(val)) return null;
+    return val;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function readStorageRawAsync(key) {
+  try {
+    var val = Widget.storage.get(key);
+    if (isPromiseLike(val)) val = await val;
+    return val;
+  } catch (e) {
+    return null;
+  }
+}
+
+function coerceGlobalParamsBlob(raw) {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+  if (typeof raw === "object" && !isPromiseLike(raw)) return raw;
+  return null;
+}
+
 function writeStore(key, value) {
   try {
     Widget.storage.set(key, value);
@@ -1344,16 +1377,10 @@ function readForwardGlobalParamsBlobValue(name, aliases) {
   var blobKeys = forwardGlobalParamsBlobKeys();
   for (var i = 0; i < blobKeys.length; i++) {
     try {
-      var raw = readStore(blobKeys[i]);
-      if (!raw) continue;
-      if (typeof raw === "string") {
-        try {
-          raw = JSON.parse(raw);
-        } catch (e) {
-          continue;
-        }
-      }
-      var val = pickParamFromObject(raw, aliases);
+      var blob = coerceGlobalParamsBlob(readStorageRaw(blobKeys[i]));
+      if (!blob) blob = coerceGlobalParamsBlob(readStore(blobKeys[i]));
+      if (!blob) continue;
+      var val = pickParamFromObject(blob, aliases);
       if (val) return val;
     } catch (e2) {}
   }
@@ -1365,19 +1392,10 @@ async function readForwardGlobalParamsBlobValueAsync(name, aliases) {
   var blobKeys = forwardGlobalParamsBlobKeys();
   for (var i = 0; i < blobKeys.length; i++) {
     try {
-      var raw = await readStoreAsync(blobKeys[i]);
-      if (!raw) {
-        raw = await unwrapStoreValue(Widget.storage.get(blobKeys[i]));
-      }
-      if (!raw) continue;
-      if (typeof raw === "string") {
-        try {
-          raw = JSON.parse(raw);
-        } catch (e) {
-          continue;
-        }
-      }
-      var val = pickParamFromObject(raw, aliases);
+      var blob = coerceGlobalParamsBlob(await readStorageRawAsync(blobKeys[i]));
+      if (!blob) blob = coerceGlobalParamsBlob(await readStoreAsync(blobKeys[i]));
+      if (!blob) continue;
+      var val = pickParamFromObject(blob, aliases);
       if (val) return val;
     } catch (e2) {}
   }
@@ -1417,11 +1435,13 @@ async function readWidgetGlobalParamsValueAsync(name, aliases) {
   aliases = aliases || [name];
   try {
     if (typeof Widget.getGlobalParams === "function") {
-      var all = await unwrapStoreValue(Widget.getGlobalParams());
+      var all = Widget.getGlobalParams();
+      if (isPromiseLike(all)) all = await all;
       var val = pickParamFromObject(all, aliases);
       if (val) return val;
     }
-    var gp = await unwrapStoreValue(Widget.globalParams);
+    var gp = Widget.globalParams;
+    if (isPromiseLike(gp)) gp = await gp;
     var gpVal = pickParamFromObject(gp, aliases);
     if (gpVal) return gpVal;
   } catch (e) {}
@@ -1492,6 +1512,22 @@ function normalizeGuangyaToken(raw) {
   return scanned || token;
 }
 
+function resolveGuangyaTokenSync(params) {
+  params = params || {};
+  return normalizeGuangyaToken(
+    pickParamAliases(params, GUANGYA_TOKEN_ALIASES) ||
+      params.guangya_token ||
+      resolveGlobalParamSync("guangya_token", params, GUANGYA_TOKEN_ALIASES)
+  );
+}
+
+async function resolveGuangyaTokenAsync(params) {
+  params = await ensureGlobalParams(params || {});
+  return normalizeGuangyaToken(
+    params.guangya_token || (await resolveGlobalParamAsync("guangya_token", params, GUANGYA_TOKEN_ALIASES))
+  );
+}
+
 function persistGlobalParam(name, value) {
   value = normalizeStoreValue(value);
   if (!value) return;
@@ -1505,8 +1541,14 @@ function syncParams(params) {
     var key = GLOBAL_KEYS[i];
     var val = params[key];
     if (val !== undefined && val !== null && String(val).trim() !== "") {
-      out[key] = normalizeStoreValue(val);
-      persistGlobalParam(key, out[key]);
+      var normalized = normalizeStoreValue(val);
+      if (normalized) {
+        out[key] = normalized;
+        persistGlobalParam(key, out[key]);
+      } else {
+        var storedVal = resolveGlobalParamSync(key, params, [key]);
+        if (storedVal) out[key] = storedVal;
+      }
     } else {
       var stored = resolveGlobalParamSync(key, params, [key]);
       if (stored) out[key] = stored;
@@ -2389,9 +2431,7 @@ function ensureGuangyaDeviceId() {
 
 function getGuangyaConfigFromStore(params) {
   params = syncParams(params || {});
-  var token = normalizeGuangyaToken(
-    params.guangya_token || resolveGlobalParamSync("guangya_token", params, GUANGYA_TOKEN_ALIASES)
-  );
+  var token = resolveGuangyaTokenSync(params);
   var parentId =
     params.guangya_parent_id ||
     resolveGlobalParamSync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES) ||
@@ -2410,9 +2450,7 @@ function getGuangyaConfigFromStore(params) {
 
 async function getGuangyaConfig(params) {
   params = await ensureGlobalParams(params || {});
-  var token = normalizeGuangyaToken(
-    params.guangya_token || (await resolveGlobalParamAsync("guangya_token", params, GUANGYA_TOKEN_ALIASES))
-  );
+  var token = await resolveGuangyaTokenAsync(params);
   var parentId =
     normalizeStoreValue(params.guangya_parent_id) ||
     (await resolveGlobalParamAsync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES));
@@ -2822,6 +2860,59 @@ function gyIsHttpStatus400(err) {
   return /(?:\b400\b|status code was unacceptable)/i.test(String((err && err.message) || err || ""));
 }
 
+function gyExtractHttpStatus(item) {
+  if (!item || typeof item !== "object") return 0;
+  return Number(item.status || item.statusCode || item.status_code || 0) || 0;
+}
+
+function gyRecoverHttpResponse(error) {
+  var err = error || {};
+  var queue = [err];
+  var seen = {};
+  if (err.error && typeof err.error === "object") queue.push(err.error);
+  if (err.cause && typeof err.cause === "object") queue.push(err.cause);
+  while (queue.length) {
+    var node = queue.shift();
+    if (!node || typeof node !== "object") continue;
+    if (seen[node]) continue;
+    seen[node] = true;
+    var candidates = [node.response, node.res, node.result, node.httpResponse, node];
+    for (var i = 0; i < candidates.length; i++) {
+      var item = candidates[i];
+      if (!item || typeof item !== "object") continue;
+      var status = gyExtractHttpStatus(item);
+      if (status < 400) continue;
+      if (item.data !== undefined || item.body !== undefined || item.responseText !== undefined) return item;
+      if (node !== item && node.data !== undefined) {
+        return { status: status, statusCode: status, data: node.data, body: node.data };
+      }
+    }
+    if (node.error && typeof node.error === "object") queue.push(node.error);
+    if (node.cause && typeof node.cause === "object") queue.push(node.cause);
+  }
+  var msg = String(err.message || err || "");
+  var match = msg.match(/unacceptable:\s*(\d{3})/i);
+  if (match) {
+    var code = Number(match[1]);
+    var body =
+      err.data !== undefined
+        ? err.data
+        : err.body !== undefined
+          ? err.body
+          : err.response && (err.response.data !== undefined ? err.response.data : err.response.body);
+    if (body !== undefined) return { status: code, statusCode: code, data: body, body: body };
+    return { status: code, statusCode: code };
+  }
+  return null;
+}
+
+function gyParseHttpPayload(resp) {
+  var data = parseApiPayload(resp);
+  if (data !== null && data !== undefined) return data;
+  if (!resp || resp.body === undefined || resp.body === null) return data;
+  return parseApiPayload({ data: resp.body });
+}
+
 function gyApiErrorText(data, status) {
   if (!data) return "HTTP " + status;
   if (typeof data === "string" && data.trim()) return data.trim().slice(0, 240);
@@ -2831,24 +2922,17 @@ function gyApiErrorText(data, status) {
   );
 }
 
-function gyRecoverHttpResponse(error) {
-  var err = error || {};
-  var candidates = [err.response, err.res, err.data, err.body, err];
-  for (var i = 0; i < candidates.length; i++) {
-    var item = candidates[i];
-    if (!item || typeof item !== "object") continue;
-    var status = Number(item.status || item.statusCode || 0);
-    if (status >= 400 && (item.data !== undefined || item.body !== undefined)) return item;
-  }
-  return null;
-}
-
 async function gyHttpPost(url, headers, bodyObj, timeoutMs) {
   var body = bodyObj || {};
   var httpOpts = {
     headers: headers,
     allow_redirects: true,
     timeout: timeoutMs || 30000,
+    validate_status: false,
+    validateStatus: function () {
+      return true;
+    },
+    status: "all",
   };
   var resp;
   try {
@@ -2869,8 +2953,8 @@ async function gyHttpPost(url, headers, bodyObj, timeoutMs) {
     resp = gyRecoverHttpResponse(error);
     if (!resp) throw error;
   }
-  var status = Number((resp && (resp.status || resp.statusCode)) || 0);
-  var data = parseApiPayload(resp);
+  var status = gyExtractHttpStatus(resp);
+  var data = gyParseHttpPayload(resp);
   if (status >= 400) {
     throw new Error(gyApiErrorText(data, status));
   }
@@ -3536,7 +3620,12 @@ async function handleGuangyaMagnetSave(hash, params) {
     };
   }
   var cfg = await getGuangyaConfig(params);
-  if (!String(cfg.guangya_token || "").trim()) {
+  var token = normalizeGuangyaToken(cfg.guangya_token || (await resolveGuangyaTokenAsync(params)) || resolveGuangyaTokenSync(params));
+  if (token) {
+    cfg.guangya_token = token;
+    persistGlobalParam("guangya_token", token);
+  }
+  if (!token) {
     return {
       id: hash,
       type: "url",
@@ -4264,7 +4353,7 @@ async function loadDetail(link, params) {
             ? "磁力: 见下方相似作品栏（官方+短评已合并去重），点击即可转存光鸭云盘"
             : "磁力: 见下方相似作品栏，点击即可转存光鸭云盘"
       );
-    } else if (String(getGuangyaConfigFromStore().guangya_token || "").trim()) {
+    } else if (resolveGuangyaTokenSync()) {
       descParts.push("磁力: 暂无可用磁链");
     }
 
