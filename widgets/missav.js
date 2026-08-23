@@ -322,7 +322,7 @@ WidgetMetadata = {
         {
             id: "loadResource",
             title: "MissAV 播放源",
-            description: "智能提取关联上下文番号并多路自动抓取 MissAV 正片链接供给播放",
+            description: "智能提取番号并快速抓取 MissAV 最高清晰度播放链接",
             functionName: "loadResource",
             type: "stream",
             params: []
@@ -443,17 +443,21 @@ async function fetchMissavHtmlViaProxy(url) {
     return html;
 }
 
-async function fetchMissavHtmlDirect(url) {
+async function fetchMissavHtmlDirect(url, options = {}) {
     const errors = [];
     const candidates = [];
     const primary = String(url || "");
     candidates.push(primary);
-    for (const host of MISSAV_MIRROR_HOSTS) {
+    const maxMirrors = typeof options.maxMirrors === "number"
+        ? options.maxMirrors
+        : MISSAV_MIRROR_HOSTS.length;
+    for (let i = 0; i < maxMirrors && i < MISSAV_MIRROR_HOSTS.length; i++) {
+        const host = MISSAV_MIRROR_HOSTS[i];
         const rewritten = rewriteMissavHost(primary, host);
         if (rewritten && !candidates.includes(rewritten)) candidates.push(rewritten);
     }
 
-    const perTryTimeout = 10000;
+    const perTryTimeout = options.timeout ?? 10000;
     for (const candidate of candidates) {
         try {
             const res = await Widget.http.get(candidate, {
@@ -488,27 +492,50 @@ async function fetchMissavHtmlDirect(url) {
     throw new Error(errors.slice(0, 3).join(" | ") || "direct fetch failed");
 }
 
-async function fetchMissavHtml(url) {
-    // MissAV 对 Cloudflare Workers 出口常直接封禁，因此优先直连镜像，代理仅作回退。
-    try {
-        return await fetchMissavHtmlDirect(url);
-    } catch (directErr) {
-        console.error(
-            "[MissAV] direct fetch failed, try html proxy:",
-            directErr && directErr.message ? directErr.message : directErr
-        );
+const MISSAV_HTML_PROMISE_CACHE = {};
+
+async function fetchMissavHtml(url, options = {}) {
+    const key = String(url || "");
+    const cacheKey = options.fast ? `fast:${key}` : key;
+
+    if (!options.bypassCache && MISSAV_HTML_PROMISE_CACHE[cacheKey]) {
+        return MISSAV_HTML_PROMISE_CACHE[cacheKey];
     }
 
-    if (getHtmlProxyWorkerBase()) {
-        return fetchMissavHtmlViaProxy(url);
+    const directOptions = options.fast ? { timeout: 6000, maxMirrors: 1 } : {};
+
+    const promise = (async () => {
+        try {
+            return await fetchMissavHtmlDirect(url, directOptions);
+        } catch (directErr) {
+            if (options.fast) {
+                throw directErr;
+            }
+            console.error(
+                "[MissAV] direct fetch failed, try html proxy:",
+                directErr && directErr.message ? directErr.message : directErr
+            );
+        }
+
+        if (getHtmlProxyWorkerBase()) {
+            return fetchMissavHtmlViaProxy(url);
+        }
+        throw new Error("MissAV 页面获取失败");
+    })();
+
+    if (!options.bypassCache) {
+        MISSAV_HTML_PROMISE_CACHE[cacheKey] = promise;
+        promise.finally(() => delete MISSAV_HTML_PROMISE_CACHE[cacheKey]);
     }
-    throw new Error("MissAV 页面获取失败");
+    return promise;
 }
 
 const PEOPLE_AVATAR_CACHE = {};
 const RECENT_UPDATES_CATEGORY = "recent_updates";
 const RECENT_UPDATES_ENDPOINT = "dm539/cn/new";
 const VIDEO_URL_CACHE = {};
+const MISSAV_TYPE_PRIORITY = { "中文": 0, "破解无码": 1, "有码": 2 };
+const MISSAV_TYPE_ORDER = ["中文", "破解无码", "有码"];
 const MISSAV_CARD_SELECTOR = "div.group, [class*='thumbnail'][class*='group']";
 const MISSAV_TITLE_LINK_SELECTOR = "a.text-secondary, a[class*='text-secondary']";
 const MISSAV_META_ROW_SELECTOR = ".text-secondary, [class*='text-secondary']";
@@ -1109,25 +1136,88 @@ function normalizeCode(value) {
     return getText(value).toUpperCase().replace(/[\s_\-]+/g, "");
 }
 
+function formatMissavSlug(code) {
+    const raw = String(code || "").trim().toLowerCase().replace(/\s+/g, "-");
+    if (!raw) return "";
+    if (raw.includes("-")) return raw;
+    const match = raw.match(/^([a-z]+)(\d+.*)$/);
+    return match ? `${match[1]}-${match[2]}` : raw;
+}
+
+function buildGuessMissavDetailPages(code) {
+    const upper = String(code || "").trim().toUpperCase();
+    const slug = formatMissavSlug(code);
+    if (!slug) return [];
+
+    const pages = [];
+    const seen = new Set();
+    const push = (suffix, type) => {
+        const link = `${BASE_URL}/cn/${slug}${suffix}`;
+        if (seen.has(link)) return;
+        seen.add(link);
+        pages.push({ link, code: upper, type });
+    };
+
+    push("-chinese-subtitle", "中文");
+    push("-uncensored-leak", "破解无码");
+    push("", "有码");
+    return pages;
+}
+
+async function resolveMissavPlaybackFromPage(page, options = {}) {
+    const cacheKey = `${page.code.toUpperCase()}_${page.type}`;
+    const cached = VIDEO_URL_CACHE[cacheKey];
+    let playback = normalizeSurritPlayback(cached);
+    if (playback?.uuid) {
+        return { page, playback, detailLink: cached?.detailLink || page.link };
+    }
+
+    try {
+        const html = await fetchMissavHtml(page.link, { fast: options.fast });
+        if (!html || html.includes("Just a moment")) return null;
+
+        playback = extractSurritPlaybackFromHtml(html);
+        if (!playback?.uuid) return null;
+
+        VIDEO_URL_CACHE[cacheKey] = { ...playback, detailLink: page.link };
+        return { page, playback, detailLink: page.link };
+    } catch (e) {
+        return null;
+    }
+}
+
+function pickBestMissavPlaybackResult(results, pages) {
+    for (const type of MISSAV_TYPE_ORDER) {
+        const idx = pages.findIndex((page) => page.type === type);
+        if (idx < 0) continue;
+        const result = results[idx];
+        if (result?.playback?.uuid) return result;
+    }
+    return null;
+}
+
 async function findAllMissAVDetailPages(code) {
-    const searchKeys = [code, code.replace(/-/g, "")].filter(Boolean);
+    const searchKeys = [code];
+    const altKey = code.replace(/-/g, "");
+    if (altKey && altKey !== code) searchKeys.push(altKey);
+
     const targetLoose = normalizeCode(code);
     const seen = new Set();
     const pages = [];
 
-    for (const key of [...new Set(searchKeys)]) {
+    for (const key of searchKeys) {
         const url = `${BASE_URL}/cn/search/${encodeURIComponent(key)}`;
         try {
-            const html = await fetchMissavHtml(url);
+            const html = await fetchMissavHtml(url, { fast: true });
             const results = parseSearchResults(html, code);
             if (!results.length) continue;
 
-            const exactMatches = results.filter(item => normalizeCode(item.code) === targetLoose);
-            for (const item of exactMatches) {
+            for (const item of results.filter((entry) => normalizeCode(entry.code) === targetLoose)) {
                 if (seen.has(item.link)) continue;
                 seen.add(item.link);
                 pages.push({ link: item.link, code, type: classifyMissavLink(item.link) });
             }
+            if (pages.length) return pages;
         } catch (e) {
             console.warn(`[MissAV] 搜索失败：${key}`, e?.message || e);
         }
@@ -1220,35 +1310,34 @@ function buildMissavStreamHeaders(detailLink) {
     };
 }
 
-function buildMissavStreamItems(playbackOrUuid, code, detailLink, type = "有码") {
-    const playback = normalizeSurritPlayback(playbackOrUuid);
-    if (!playback) return [];
-
-    const headers = buildMissavStreamHeaders(detailLink);
+function pickBestMissavStream(playback) {
     const base = `https://${playback.host}/${playback.uuid}`;
-    const items = [];
-    const seen = new Set();
-
-    const push = (label, url) => {
-        if (!url || seen.has(url)) return;
-        seen.add(url);
-        items.push({
-            name: `MissAV ${type} ${label}`,
-            description: `番号：${code}\n类型：${type}\n来源：MissAV\n清晰度：${label}`,
-            url,
-            customHeaders: headers
-        });
-    };
-
     const url1080 = playback.urls.find((url) => /\/1080p\//i.test(url));
     const url720 = playback.urls.find((url) => /\/720p\//i.test(url)) || `${base}/720p/video.m3u8`;
     const url480 = playback.urls.find((url) => /\/480p\//i.test(url));
 
-    if (url1080) push("1080P", url1080);
-    push("720P", url720);
-    if (url480) push("480P", url480);
-    push("自适应", playback.playlistUrl);
-    return items;
+    if (url1080) return { label: "1080P", url: url1080 };
+    if (url720) return { label: "720P", url: url720 };
+    if (url480) return { label: "480P", url: url480 };
+    if (playback.playlistUrl) return { label: "自适应", url: playback.playlistUrl };
+    if (playback.urls[0]) return { label: "默认", url: playback.urls[0] };
+    return null;
+}
+
+function buildMissavStreamItems(playbackOrUuid, code, detailLink, type = "有码") {
+    const playback = normalizeSurritPlayback(playbackOrUuid);
+    if (!playback) return [];
+
+    const best = pickBestMissavStream(playback);
+    if (!best) return [];
+
+    const headers = buildMissavStreamHeaders(detailLink);
+    return [{
+        name: `MissAV ${type} ${best.label}`,
+        description: `番号：${code}\n类型：${type}\n来源：MissAV\n清晰度：${best.label}`,
+        url: best.url,
+        customHeaders: headers
+    }];
 }
 
 
@@ -2302,44 +2391,61 @@ async function loadResource(params = {}) {
         const code = extractCodeFromParams(params);
         if (!code) return [];
 
-        // 查找所有精确匹配的 MissAV 详情页（有码/中文/无码）
+        // 1. 缓存命中：直接返回
+        for (const type of MISSAV_TYPE_ORDER) {
+            const cacheKey = `${code.toUpperCase()}_${type}`;
+            const cached = VIDEO_URL_CACHE[cacheKey];
+            const playback = normalizeSurritPlayback(cached);
+            if (playback?.uuid) {
+                const link = cached?.detailLink || buildGuessMissavDetailPages(code).find((page) => page.type === type)?.link || `${BASE_URL}/cn/${formatMissavSlug(code)}`;
+                return buildMissavStreamItems(playback, code, link, type);
+            }
+        }
+
+        // 2. 快速路径：并行猜测详情页 URL，跳过搜索
+        const guessPages = buildGuessMissavDetailPages(code);
+        if (guessPages.length) {
+            const guessResults = await Promise.all(
+                guessPages.map((page) => resolveMissavPlaybackFromPage(page, { fast: true }))
+            );
+            const guessHit = pickBestMissavPlaybackResult(guessResults, guessPages);
+            if (guessHit) {
+                return buildMissavStreamItems(guessHit.playback, code, guessHit.detailLink, guessHit.page.type);
+            }
+
+            const guessSlowResults = await Promise.all(
+                guessPages.map((page) => resolveMissavPlaybackFromPage(page, { fast: false }))
+            );
+            const guessSlowHit = pickBestMissavPlaybackResult(guessSlowResults, guessPages);
+            if (guessSlowHit) {
+                return buildMissavStreamItems(guessSlowHit.playback, code, guessSlowHit.detailLink, guessSlowHit.page.type);
+            }
+        }
+
+        // 3. 搜索回退：只取优先级最高且成功的第一个
         const detailPages = await findAllMissAVDetailPages(code);
         if (!detailPages.length) {
-            // fallback：使用旧版单页查找逻辑
             return loadResourceLegacy(params, code);
         }
 
-        // 按中文 → 无码 → 有码排序
-        const typePriority = { "中文": 0, "破解无码": 1, "有码": 2 };
-        detailPages.sort((a, b) => (typePriority[a.type] ?? 99) - (typePriority[b.type] ?? 99));
-
-        const allStreams = [];
-        const seenUuids = new Set();
+        detailPages.sort((a, b) => (MISSAV_TYPE_PRIORITY[a.type] ?? 99) - (MISSAV_TYPE_PRIORITY[b.type] ?? 99));
 
         for (const page of detailPages) {
-            const cacheKey = `${code.toUpperCase()}_${page.type}`;
-            let playback = normalizeSurritPlayback(VIDEO_URL_CACHE[cacheKey]);
-
-            if (!playback) {
-                try {
-                    const html = await fetchMissavHtml(page.link);
-                    if (html.includes("Just a moment")) continue;
-
-                    playback = extractSurritPlaybackFromHtml(html);
-                    if (playback) VIDEO_URL_CACHE[cacheKey] = playback;
-                } catch (e) {
-                    continue;
-                }
+            const result = await resolveMissavPlaybackFromPage(page, { fast: true });
+            if (result?.playback?.uuid) {
+                return buildMissavStreamItems(result.playback, code, result.detailLink, result.page.type);
             }
-
-            if (!playback || !playback.uuid || seenUuids.has(playback.uuid)) continue;
-            seenUuids.add(playback.uuid);
-
-            const streams = buildMissavStreamItems(playback, code, page.link, page.type);
-            allStreams.push(...streams);
         }
 
-        return allStreams;
+        // 4. 慢速回退：代理 / 更多镜像重试
+        for (const page of detailPages) {
+            const result = await resolveMissavPlaybackFromPage(page, { fast: false });
+            if (result?.playback?.uuid) {
+                return buildMissavStreamItems(result.playback, code, result.detailLink, result.page.type);
+            }
+        }
+
+        return loadResourceLegacy(params, code);
     } catch (e) {
         return [];
     }
@@ -2456,7 +2562,8 @@ function extractSurritUuidFromDetailHtml(html) {
 function extractVideoUrlFromHtml(html) {
     const playback = extractSurritPlaybackFromHtml(html);
     if (!playback) return "";
-    return playback.urls.find((url) => /\/720p\//i.test(url)) || playback.playlistUrl || playback.urls[0] || "";
+    const best = pickBestMissavStream(playback);
+    return best ? best.url : "";
 }
 
 function extractRelatedItems($, currentLink) {
