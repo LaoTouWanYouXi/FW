@@ -2611,8 +2611,91 @@ function gyCollectObjectArrays(node, out, seen) {
   return out;
 }
 
+function gyDedupeResolvedEntries(entries) {
+  var seen = {};
+  return (entries || [])
+    .filter(function (item) {
+      if (!item) return false;
+      if (item.index >= GY_AUTO_INDEX) return true;
+      if (seen[item.index]) return false;
+      seen[item.index] = true;
+      return true;
+    })
+    .sort(function (a, b) {
+      return Number(a.index || 0) - Number(b.index || 0);
+    });
+}
+
+function gyExtractBtSubfiles(payload) {
+  var data = payload && payload.data;
+  var bt = data && data.btResInfo;
+  var subs = bt && bt.subfiles;
+  if (!Array.isArray(subs) || !subs.length) return null;
+  var entries = [];
+  for (var i = 0; i < subs.length; i++) {
+    var s = subs[i] || {};
+    var idx = gyToNumber(
+      s.fileIndex != null
+        ? s.fileIndex
+        : s.file_index != null
+          ? s.file_index
+          : s.index != null
+            ? s.index
+            : i
+    );
+    if (idx == null || idx < 0) idx = i;
+    var name = gyPickName([s.fileName, s.file_name, s.name, s.path, s.title]);
+    var size = gyToNumber(
+      s.fileSize != null ? s.fileSize : s.file_size != null ? s.file_size : s.size
+    );
+    entries.push({ index: idx, name: name, size: size == null ? 0 : size, raw: s });
+  }
+  entries = gyDedupeResolvedEntries(entries);
+  return entries.length ? entries : null;
+}
+
+function gyIsValidFileIndex(idx) {
+  var n = Number(idx);
+  return Number.isFinite(n) && n >= 0 && n < GY_AUTO_INDEX;
+}
+
+function gySanitizeFileIndexes(indexes) {
+  if (!indexes || !indexes.length) return null;
+  var out = [];
+  var seen = {};
+  for (var i = 0; i < indexes.length; i++) {
+    var n = Number(indexes[i]);
+    if (!gyIsValidFileIndex(n) || seen[n]) continue;
+    seen[n] = true;
+    out.push(n);
+  }
+  return out.length ? out : null;
+}
+
+function gyResolvedTaskUrl(resolved, magnet) {
+  var data = resolved && resolved.data;
+  var url = safeText(data && data.url);
+  return url || magnet;
+}
+
+function gyResolvedTaskName(resolved, magnet) {
+  var data = resolved && resolved.data;
+  var btName = safeText(data && data.btResInfo && data.btResInfo.fileName);
+  if (btName) return btName;
+  var dnMatch = String(magnet || "").match(/(?:^|[?&])dn=([^&]+)/i);
+  if (dnMatch) {
+    try {
+      return safeText(decodeMagnetSegment(dnMatch[1]));
+    } catch (e) {}
+  }
+  return "offline";
+}
+
 function gyExtractResolvedEntries(payload) {
   GY_AUTO_INDEX = 10000;
+  var btEntries = gyExtractBtSubfiles(payload);
+  if (btEntries && btEntries.length) return btEntries;
+
   var data = payload && payload.data;
   var directList =
     (data &&
@@ -2623,6 +2706,7 @@ function gyExtractResolvedEntries(payload) {
         data.items ||
         data.fileInfos ||
         data.file_list ||
+        data.file_list_info ||
         data.result ||
         data.details)) ||
     null;
@@ -2632,6 +2716,7 @@ function gyExtractResolvedEntries(payload) {
       var entry = gyNormalizeResolvedEntry(directList[i], i);
       if (entry) entries.push(entry);
     }
+    entries = gyDedupeResolvedEntries(entries);
     if (entries.length) return entries;
   }
   var arrays = gyCollectObjectArrays(payload, [], null);
@@ -2644,6 +2729,33 @@ function gyExtractResolvedEntries(payload) {
       var item = gyNormalizeResolvedEntry(arr[b], b);
       if (item) parsed.push(item);
     }
+    parsed = gyDedupeResolvedEntries(parsed);
+    if (!parsed.length) {
+      var positional = [];
+      for (var c = 0; c < arr.length; c++) {
+        var raw = arr[c] || {};
+        var posName = gyPickName([
+          raw.name,
+          raw.fileName,
+          raw.file_name,
+          raw.filename,
+          raw.path,
+          raw.filePath,
+          raw.file_path,
+          raw.resName,
+          raw.resourceName,
+          raw.title,
+        ]);
+        var posSize = gyToNumber(raw.fileSize || raw.file_size || raw.size) || 0;
+        if (!posName) {
+          if (posSize < 50 * 1024 * 1024) continue;
+          positional.push({ index: c, name: "", size: posSize, raw: raw });
+          continue;
+        }
+        positional.push({ index: c, name: posName, size: posSize, raw: raw });
+      }
+      if (positional.length) parsed = positional;
+    }
     if (!parsed.length) continue;
     var nameCount = parsed.filter(function (x) { return x.name; }).length;
     var score = parsed.length * 10 + nameCount * 3 + (parsed.length > 1 ? 5 : 0);
@@ -2653,6 +2765,28 @@ function gyExtractResolvedEntries(payload) {
     }
   }
   if (best.length) return best;
+  var explicitIndexes = null;
+  var explicitKeys = ["fileIndexes", "file_indexes", "indexes"];
+  for (var k = 0; k < explicitKeys.length; k++) {
+    if (data && data[explicitKeys[k]] != null) {
+      explicitIndexes = data[explicitKeys[k]];
+      break;
+    }
+    if (payload && payload[explicitKeys[k]] != null) {
+      explicitIndexes = payload[explicitKeys[k]];
+      break;
+    }
+  }
+  if (Array.isArray(explicitIndexes) && explicitIndexes.length) {
+    var fromExplicit = [];
+    for (var x = 0; x < explicitIndexes.length; x++) {
+      var ei = gyToNumber(explicitIndexes[x]);
+      if (ei == null || ei < 0) continue;
+      fromExplicit.push({ index: ei, name: "", size: 0, raw: null });
+    }
+    fromExplicit = gyDedupeResolvedEntries(fromExplicit);
+    if (fromExplicit.length) return fromExplicit;
+  }
   var total = gyToNumber(
     (data && (data.fileCount || data.file_count || data.totalCount || data.total_count || data.count || data.total)) ||
       null
@@ -2887,11 +3021,23 @@ async function guangyaResolveResource(accessToken, did, magnet) {
   return data;
 }
 
-async function guangyaCreateTask(accessToken, did, magnet, parentId, fileIndexes) {
-  var body = { url: magnet, parentId: parentId || "" };
-  if (fileIndexes && fileIndexes.length) {
-    body.fileIndexes = fileIndexes.map(function (idx) { return Number(idx); });
-  }
+function gyIsGuangyaTaskOk(task) {
+  if (!task) return false;
+  var msg = String(task.msg || "").toLowerCase();
+  if (msg === "success" || msg === "") return true;
+  if (task.code === 0) return true;
+  return !!task.data;
+}
+
+async function guangyaCreateTask(accessToken, did, taskInput) {
+  taskInput = taskInput || {};
+  var body = {
+    url: taskInput.url,
+    parentId: taskInput.parentId || "",
+    newName: safeText(taskInput.newName) || "offline",
+  };
+  var indexes = gySanitizeFileIndexes(taskInput.fileIndexes);
+  if (indexes && indexes.length) body.fileIndexes = indexes;
   return gyHttpPost(
     GUANGYA_API_BASE + "/nd.bizcloudcollection.s/v1/create_task",
     gyApiHeaders(accessToken, did),
@@ -2911,9 +3057,32 @@ async function saveMagnetToGuangya(magnet, cfg) {
       ? gyFilterResolvedFiles(entries, cfg)
       : { kept: entries, blocked: [] };
   if (!filtered.kept.length) throw new Error("过滤后没有可转存文件");
-  var indexes = filtered.kept.map(function (e) { return e.index; });
-  var task = await guangyaCreateTask(accessToken, did, magnet, cfg.guangya_parent_id, indexes);
-  var ok = !!(task && (task.msg === "success" || task.code === 0 || task.data));
+  var indexes = gySanitizeFileIndexes(
+    filtered.kept.map(function (e) {
+      return e.index;
+    })
+  );
+  var taskInput = {
+    url: gyResolvedTaskUrl(resolved, magnet),
+    parentId: cfg.guangya_parent_id,
+    newName: gyResolvedTaskName(resolved, magnet),
+    fileIndexes: indexes,
+  };
+  var task;
+  try {
+    task = await guangyaCreateTask(accessToken, did, taskInput);
+  } catch (err) {
+    if (indexes && /HTTP 400\b/i.test(String((err && err.message) || err))) {
+      task = await guangyaCreateTask(
+        accessToken,
+        did,
+        Object.assign({}, taskInput, { fileIndexes: null })
+      );
+    } else {
+      throw err;
+    }
+  }
+  var ok = gyIsGuangyaTaskOk(task);
   if (!ok) {
     throw new Error((task && (task.msg || task.message || task.error_description)) || "光鸭 create_task 失败");
   }
@@ -3725,6 +3894,9 @@ if (typeof module !== "undefined" && module.exports) {
     dedupeMagnetsByGbBucket: dedupeMagnetsByGbBucket,
     compareMagnetPriority: compareMagnetPriority,
     gyFilterResolvedFiles: gyFilterResolvedFiles,
+    gyExtractResolvedEntries: gyExtractResolvedEntries,
+    gySanitizeFileIndexes: gySanitizeFileIndexes,
+    gyIsGuangyaTaskOk: gyIsGuangyaTaskOk,
     getGuangyaConfigFromStore: getGuangyaConfigFromStore,
     WidgetMetadata: typeof WidgetMetadata !== "undefined" ? WidgetMetadata : null,
   };
