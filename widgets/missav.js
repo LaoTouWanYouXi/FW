@@ -3,7 +3,7 @@ WidgetMetadata = {
     title: "MissAV_ovo",
     author: "𝙈𝙖𝙠𝙠𝙖𝙋𝙖𝙠𝙠𝙖|CC|EL|Eric|墨白",
     description: "MissAV 视频聚合模块，支持其他模块聚合missav资源、支持高清海报、封面图、预告片、相似推荐、演员信息及头像",
-    version: "3.4",
+    version: "3.5.0",
     requiredVersion: "0.0.1",
     site: "https://missav.fans",
     modules: [
@@ -1298,6 +1298,18 @@ function normalizeSurritPlayback(value) {
             playlistUrl: value.playlistUrl || urls.find((url) => /\/playlist\.m3u8/i.test(url)) || `https://${host}/${value.uuid}/playlist.m3u8`
         };
     }
+    if (value.url) {
+        const fromUrl = parseSurritPlaybackFromUrl(value.url);
+        if (fromUrl) {
+            const urls = Array.isArray(value.urls) ? value.urls.slice() : [fromUrl.url];
+            return {
+                host: fromUrl.host,
+                uuid: fromUrl.uuid,
+                urls,
+                playlistUrl: value.playlistUrl || urls.find((url) => /\/playlist\.m3u8/i.test(url)) || `https://${fromUrl.host}/${fromUrl.uuid}/playlist.m3u8`
+            };
+        }
+    }
     return null;
 }
 
@@ -1310,21 +1322,34 @@ function buildMissavStreamHeaders(detailLink) {
     };
 }
 
+function isMissavAdaptiveStreamUrl(url) {
+    return /\/playlist\.m3u8(?:[?#]|$)/i.test(String(url || ""));
+}
+
 function pickBestMissavStream(playback) {
     const base = `https://${playback.host}/${playback.uuid}`;
-    const url1080 = playback.urls.find((url) => /\/1080p\//i.test(url));
-    const url720 = playback.urls.find((url) => /\/720p\//i.test(url)) || `${base}/720p/video.m3u8`;
-    const url480 = playback.urls.find((url) => /\/480p\//i.test(url));
+    const tiers = [
+        { label: "1080P", key: "1080p" },
+        { label: "720P", key: "720p" },
+        { label: "480P", key: "480p" }
+    ];
 
-    if (url1080) return { label: "1080P", url: url1080 };
-    if (url720) return { label: "720P", url: url720 };
-    if (url480) return { label: "480P", url: url480 };
-    if (playback.playlistUrl) return { label: "自适应", url: playback.playlistUrl };
-    if (playback.urls[0]) return { label: "默认", url: playback.urls[0] };
+    for (const tier of tiers) {
+        const matched = playback.urls.find((url) => new RegExp(`/${tier.key}/`, "i").test(url));
+        if (matched) return { label: tier.label, url: matched };
+    }
+
+    // 不回退到 playlist.m3u8 自适应主清单，直接按 CDN 规则拼接固定清晰度直链。
+    for (const tier of tiers) {
+        return { label: tier.label, url: `${base}/${tier.key}/video.m3u8` };
+    }
+
+    const fixed = playback.urls.find((url) => url && !isMissavAdaptiveStreamUrl(url));
+    if (fixed) return { label: "默认", url: fixed };
     return null;
 }
 
-function buildMissavStreamItems(playbackOrUuid, code, detailLink, type = "有码") {
+function buildMissavStreamItems(playbackOrUuid, code, detailLink) {
     const playback = normalizeSurritPlayback(playbackOrUuid);
     if (!playback) return [];
 
@@ -1332,9 +1357,10 @@ function buildMissavStreamItems(playbackOrUuid, code, detailLink, type = "有码
     if (!best) return [];
 
     const headers = buildMissavStreamHeaders(detailLink);
+    const displayCode = String(code || "").toUpperCase();
     return [{
-        name: `MissAV ${type} ${best.label}`,
-        description: `番号：${code}\n类型：${type}\n来源：MissAV\n清晰度：${best.label}`,
+        name: `MissAV ${displayCode}`,
+        description: `番号：${displayCode}\n来源：MissAV`,
         url: best.url,
         customHeaders: headers
     }];
@@ -2392,13 +2418,19 @@ async function loadResource(params = {}) {
         if (!code) return [];
 
         // 1. 缓存命中：直接返回
+        const legacyCached = VIDEO_URL_CACHE[code.toUpperCase()];
+        const legacyPlayback = normalizeSurritPlayback(legacyCached);
+        if (legacyPlayback?.uuid) {
+            return buildMissavStreamItems(legacyPlayback, code, legacyCached?.referer || `${BASE_URL}/cn/${formatMissavSlug(code)}`);
+        }
+
         for (const type of MISSAV_TYPE_ORDER) {
             const cacheKey = `${code.toUpperCase()}_${type}`;
             const cached = VIDEO_URL_CACHE[cacheKey];
             const playback = normalizeSurritPlayback(cached);
             if (playback?.uuid) {
                 const link = cached?.detailLink || buildGuessMissavDetailPages(code).find((page) => page.type === type)?.link || `${BASE_URL}/cn/${formatMissavSlug(code)}`;
-                return buildMissavStreamItems(playback, code, link, type);
+                return buildMissavStreamItems(playback, code, link);
             }
         }
 
@@ -2410,7 +2442,7 @@ async function loadResource(params = {}) {
             );
             const guessHit = pickBestMissavPlaybackResult(guessResults, guessPages);
             if (guessHit) {
-                return buildMissavStreamItems(guessHit.playback, code, guessHit.detailLink, guessHit.page.type);
+                return buildMissavStreamItems(guessHit.playback, code, guessHit.detailLink);
             }
 
             const guessSlowResults = await Promise.all(
@@ -2418,7 +2450,7 @@ async function loadResource(params = {}) {
             );
             const guessSlowHit = pickBestMissavPlaybackResult(guessSlowResults, guessPages);
             if (guessSlowHit) {
-                return buildMissavStreamItems(guessSlowHit.playback, code, guessSlowHit.detailLink, guessSlowHit.page.type);
+                return buildMissavStreamItems(guessSlowHit.playback, code, guessSlowHit.detailLink);
             }
         }
 
@@ -2433,7 +2465,7 @@ async function loadResource(params = {}) {
         for (const page of detailPages) {
             const result = await resolveMissavPlaybackFromPage(page, { fast: true });
             if (result?.playback?.uuid) {
-                return buildMissavStreamItems(result.playback, code, result.detailLink, result.page.type);
+                return buildMissavStreamItems(result.playback, code, result.detailLink);
             }
         }
 
@@ -2441,7 +2473,7 @@ async function loadResource(params = {}) {
         for (const page of detailPages) {
             const result = await resolveMissavPlaybackFromPage(page, { fast: false });
             if (result?.playback?.uuid) {
-                return buildMissavStreamItems(result.playback, code, result.detailLink, result.page.type);
+                return buildMissavStreamItems(result.playback, code, result.detailLink);
             }
         }
 
@@ -2534,17 +2566,19 @@ async function loadResourceLegacy(params, code) {
         }
 
         if (videoUrl) {
-            const playback = parseSurritPlaybackFromUrl(videoUrl);
+            const playback = normalizeSurritPlayback({ url: videoUrl });
             if (playback) {
-                return buildMissavStreamItems(playback, code, currentReferer, "有码");
+                return buildMissavStreamItems(playback, code, currentReferer);
             }
 
-            return [{
-                name: code.toUpperCase(),
-                description: "MissAV 播放源",
-                url: videoUrl,
-                customHeaders: { "Referer": currentReferer, "User-Agent": HEADERS["User-Agent"], "Origin": BASE_URL }
-            }];
+            if (!isMissavAdaptiveStreamUrl(videoUrl)) {
+                return [{
+                    name: `MissAV ${code.toUpperCase()}`,
+                    description: `番号：${code.toUpperCase()}\n来源：MissAV`,
+                    url: videoUrl,
+                    customHeaders: { "Referer": currentReferer, "User-Agent": HEADERS["User-Agent"], "Origin": BASE_URL }
+                }];
+            }
         }
         return [];
     } catch (e) {

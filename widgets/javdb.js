@@ -1045,7 +1045,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.5.2",
+  version: "4.5.3",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类；详情磁力 relatedItems 一键转存光鸭（含广告过滤）",
   author: "老头",
@@ -1317,17 +1317,34 @@ function globalParamStorageKeys(name) {
   ];
 }
 
-function readForwardGlobalParamsBlobValue(name) {
+function pickParamFromObject(obj, aliases) {
+  if (!obj || typeof obj !== "object" || isPromiseLike(obj)) return "";
+  for (var i = 0; i < aliases.length; i++) {
+    var key = aliases[i];
+    if (obj[key] !== undefined && obj[key] !== null && String(obj[key]).trim() !== "") {
+      return normalizeStoreValue(obj[key]);
+    }
+  }
+  return "";
+}
+
+function forwardGlobalParamsBlobKeys() {
   var widgetId = WidgetMetadata && WidgetMetadata.id ? String(WidgetMetadata.id) : "forward.javdb";
-  var blobKeys = [
+  return [
     widgetId + ".globalParams",
     "forward.javdb.globalParams",
     widgetId + ".global",
     "javdb.globalParams",
+    "globalParams",
   ];
+}
+
+function readForwardGlobalParamsBlobValue(name, aliases) {
+  aliases = aliases || [name];
+  var blobKeys = forwardGlobalParamsBlobKeys();
   for (var i = 0; i < blobKeys.length; i++) {
     try {
-      var raw = Widget.storage.get(blobKeys[i]);
+      var raw = readStore(blobKeys[i]);
       if (!raw) continue;
       if (typeof raw === "string") {
         try {
@@ -1336,8 +1353,31 @@ function readForwardGlobalParamsBlobValue(name) {
           continue;
         }
       }
-      if (!raw || typeof raw !== "object") continue;
-      var val = normalizeStoreValue(raw[name]);
+      var val = pickParamFromObject(raw, aliases);
+      if (val) return val;
+    } catch (e2) {}
+  }
+  return "";
+}
+
+async function readForwardGlobalParamsBlobValueAsync(name, aliases) {
+  aliases = aliases || [name];
+  var blobKeys = forwardGlobalParamsBlobKeys();
+  for (var i = 0; i < blobKeys.length; i++) {
+    try {
+      var raw = await readStoreAsync(blobKeys[i]);
+      if (!raw) {
+        raw = await unwrapStoreValue(Widget.storage.get(blobKeys[i]));
+      }
+      if (!raw) continue;
+      if (typeof raw === "string") {
+        try {
+          raw = JSON.parse(raw);
+        } catch (e) {
+          continue;
+        }
+      }
+      var val = pickParamFromObject(raw, aliases);
       if (val) return val;
     } catch (e2) {}
   }
@@ -1346,34 +1386,65 @@ function readForwardGlobalParamsBlobValue(name) {
 
 function pickParamAliases(params, aliases) {
   params = params || {};
-  for (var i = 0; i < aliases.length; i++) {
-    var key = aliases[i];
-    if (params[key] !== undefined && params[key] !== null && String(params[key]).trim() !== "") {
-      return normalizeStoreValue(params[key]);
-    }
-  }
-  if (params.global && typeof params.global === "object") {
-    for (var j = 0; j < aliases.length; j++) {
-      var gkey = aliases[j];
-      if (params.global[gkey] !== undefined && params.global[gkey] !== null && String(params.global[gkey]).trim() !== "") {
-        return normalizeStoreValue(params.global[gkey]);
-      }
-    }
-  }
+  var direct = pickParamFromObject(params, aliases);
+  if (direct) return direct;
+  direct = pickParamFromObject(params.global, aliases);
+  if (direct) return direct;
+  direct = pickParamFromObject(params.globalParams, aliases);
+  if (direct) return direct;
   return "";
 }
 
-function readWidgetGlobalParamsValue(name) {
+function readWidgetGlobalParamsValue(name, aliases) {
+  aliases = aliases || [name];
   try {
     if (typeof Widget.getGlobalParams === "function") {
       var all = Widget.getGlobalParams();
-      if (all && all[name] != null) return normalizeStoreValue(all[name]);
+      if (!isPromiseLike(all)) {
+        var val = pickParamFromObject(all, aliases);
+        if (val) return val;
+      }
     }
-    if (Widget.globalParams && Widget.globalParams[name] != null) {
-      return normalizeStoreValue(Widget.globalParams[name]);
+    if (Widget.globalParams && !isPromiseLike(Widget.globalParams)) {
+      var gpVal = pickParamFromObject(Widget.globalParams, aliases);
+      if (gpVal) return gpVal;
     }
   } catch (e) {}
   return "";
+}
+
+async function readWidgetGlobalParamsValueAsync(name, aliases) {
+  aliases = aliases || [name];
+  try {
+    if (typeof Widget.getGlobalParams === "function") {
+      var all = await unwrapStoreValue(Widget.getGlobalParams());
+      var val = pickParamFromObject(all, aliases);
+      if (val) return val;
+    }
+    var gp = await unwrapStoreValue(Widget.globalParams);
+    var gpVal = pickParamFromObject(gp, aliases);
+    if (gpVal) return gpVal;
+  } catch (e) {}
+  return "";
+}
+
+function collectGlobalParamStorageKeys(name, aliases) {
+  var keys = [];
+  var seen = {};
+  var names = [name];
+  for (var i = 0; i < (aliases || []).length; i++) {
+    if (aliases[i] && names.indexOf(aliases[i]) < 0) names.push(aliases[i]);
+  }
+  for (var j = 0; j < names.length; j++) {
+    var part = globalParamStorageKeys(names[j]);
+    for (var k = 0; k < part.length; k++) {
+      if (!seen[part[k]]) {
+        seen[part[k]] = true;
+        keys.push(part[k]);
+      }
+    }
+  }
+  return keys;
 }
 
 function resolveGlobalParamSync(name, params, aliases) {
@@ -1381,13 +1452,13 @@ function resolveGlobalParamSync(name, params, aliases) {
   var fromParams = pickParamAliases(params, aliases);
   if (fromParams) return fromParams;
 
-  var fromWidget = readWidgetGlobalParamsValue(name);
+  var fromWidget = readWidgetGlobalParamsValue(name, aliases);
   if (fromWidget) return fromWidget;
 
-  var fromBlob = readForwardGlobalParamsBlobValue(name);
+  var fromBlob = readForwardGlobalParamsBlobValue(name, aliases);
   if (fromBlob) return fromBlob;
 
-  var keys = globalParamStorageKeys(name);
+  var keys = collectGlobalParamStorageKeys(name, aliases);
   for (var i = 0; i < keys.length; i++) {
     var stored = readStore(keys[i]);
     if (stored) return stored;
@@ -1400,13 +1471,13 @@ async function resolveGlobalParamAsync(name, params, aliases) {
   var fromParams = pickParamAliases(params, aliases);
   if (fromParams) return fromParams;
 
-  var fromWidget = readWidgetGlobalParamsValue(name);
+  var fromWidget = await readWidgetGlobalParamsValueAsync(name, aliases);
   if (fromWidget) return fromWidget;
 
-  var fromBlob = readForwardGlobalParamsBlobValue(name);
+  var fromBlob = await readForwardGlobalParamsBlobValueAsync(name, aliases);
   if (fromBlob) return fromBlob;
 
-  var keys = globalParamStorageKeys(name);
+  var keys = collectGlobalParamStorageKeys(name, aliases);
   for (var i = 0; i < keys.length; i++) {
     var stored = await readStoreAsync(keys[i]);
     if (stored) return stored;
@@ -2339,8 +2410,12 @@ function getGuangyaConfigFromStore(params) {
 
 async function getGuangyaConfig(params) {
   params = await ensureGlobalParams(params || {});
-  var token = normalizeGuangyaToken(params.guangya_token);
-  var parentId = normalizeStoreValue(params.guangya_parent_id);
+  var token = normalizeGuangyaToken(
+    params.guangya_token || (await resolveGlobalParamAsync("guangya_token", params, GUANGYA_TOKEN_ALIASES))
+  );
+  var parentId =
+    normalizeStoreValue(params.guangya_parent_id) ||
+    (await resolveGlobalParamAsync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES));
   if (token) persistGlobalParam("guangya_token", token);
   if (parentId) persistGlobalParam("guangya_parent_id", parentId);
   return {
