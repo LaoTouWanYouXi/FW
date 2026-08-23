@@ -3678,34 +3678,35 @@ async function loadDetail(link) {
   const movie = detail.movie || {};
   const rawCode = safeText(movie.number || "");
   const code = isValidJavCatalogCode(rawCode) ? rawCode : "";
-  const siteCoverUrl = resolveDetailBackdropUrl(movie);
-  // DMM 高清只复用列表阶段缓存，详情不再发起探测；详情不做 resolve，有预告展示、无预告留空
+  // DMM 高清只复用列表阶段缓存，详情不再发起探测；无 DMM 高清则不赋值，不回退站点封面
   const dmmProbe = code ? getCachedDmmProbeCover(code) : null;
-  // 与列表同一套封面拼装，确保顶图继续用已探测到的高清图
-  const coverBundle = code
-    ? buildCatembyListCoverBundle(code, movie.id || movieId, dmmProbe, siteCoverUrl)
-    : buildCoverBundleFromUrls(siteCoverUrl, siteCoverUrl);
   const probeBackdrop =
     dmmProbe && dmmProbe.backdropUrl && !isInvalidCoverTarget(dmmProbe.backdropUrl)
       ? String(dmmProbe.backdropUrl).trim()
       : "";
   const probePoster =
-    dmmProbe && dmmProbe.posterUrl && !isInvalidCoverTarget(dmmProbe.posterUrl)
+    dmmProbe &&
+    dmmProbe.posterUrl &&
+    !isInvalidCoverTarget(dmmProbe.posterUrl) &&
+    !isLowResDmmPosterUrl(dmmProbe.posterUrl)
       ? String(dmmProbe.posterUrl).trim()
       : "";
-  const coverUrl = probeBackdrop || coverBundle.backdropPath || probePoster || siteCoverUrl || "";
-  const posterUrl =
-    probePoster ||
-    coverBundle.posterPath ||
-    coverBundle.detailPoster ||
-    coverUrl ||
-    resolveDetailPosterUrl(movie);
-  const galleryUrls = collectGalleryUrls(movie);
-  // 有站点剧照时只用站点图；无剧照才回退 DMM/MGS 合成剧照（不含封面，避免与顶图重复）
-  const fallbackGallery =
-    !galleryUrls.length && code
-      ? compactUniqueUrls((fetchJavTrailersMeta(code, dmmProbe).backdropPaths || [])).filter(Boolean)
-      : [];
+  const coverUrl = probeBackdrop || probePoster || "";
+  const posterUrl = probePoster || probeBackdrop || "";
+
+  let backdropPathsList = [];
+  if (coverUrl) {
+    const galleryUrls = collectGalleryUrls(movie);
+    const fallbackGallery =
+      !galleryUrls.length && code
+        ? compactUniqueUrls((fetchJavTrailersMeta(code, dmmProbe).backdropPaths || [])).filter(Boolean)
+        : [];
+    const coverKey = urlDedupeKey(coverUrl);
+    const stills = (galleryUrls.length ? galleryUrls : fallbackGallery).filter(
+      (u) => urlDedupeKey(u) !== coverKey
+    );
+    backdropPathsList = compactUniqueUrls([].concat(coverUrl ? [coverUrl] : [], stills)).filter(Boolean);
+  }
   const meta = parseDetailMeta(movie);
   const actorMovies = (movie.actor_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
   const fallbackRelated = (movie.relative_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
@@ -3718,11 +3719,6 @@ async function loadDetail(link) {
   const titleText = safeText(movie.title || code);
   const displayTitle = code && titleText.indexOf(code) !== 0 ? code + " " + titleText : titleText;
   const summary = safeText(movie.summary || "");
-
-  // 顶图/首张必须是高清封面；剧照去重后接在后面
-  const coverKey = urlDedupeKey(coverUrl);
-  const stills = (galleryUrls.length ? galleryUrls : fallbackGallery).filter((u) => urlDedupeKey(u) !== coverKey);
-  const backdropPathsList = compactUniqueUrls([].concat(coverUrl ? [coverUrl] : [], stills)).filter(Boolean);
 
   return {
     id: code || movie.id || movieId,
@@ -3738,11 +3734,11 @@ async function loadDetail(link) {
       Referer: SITE_BASE + "/movie/" + movieId,
       Origin: SITE_BASE,
     },
-    backdropPath: coverUrl,
-    posterPath: posterUrl,
-    detailPoster: posterUrl,
-    coverUrl: coverUrl || coverBundle.coverUrl || siteCoverUrl,
-    backdropPaths: backdropPathsList,
+    backdropPath: coverUrl || undefined,
+    posterPath: posterUrl || undefined,
+    detailPoster: posterUrl || undefined,
+    coverUrl: coverUrl || undefined,
+    backdropPaths: backdropPathsList.length ? backdropPathsList : undefined,
     genreItems: meta.genreItems.length ? meta.genreItems : undefined,
     peoples: meta.peoples.length ? meta.peoples : undefined,
     relatedItems,
