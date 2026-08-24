@@ -1045,7 +1045,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.5.4",
+  version: "4.5.6",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类；详情磁力 relatedItems 一键转存光鸭（含广告过滤）",
   author: "老头",
@@ -1253,11 +1253,11 @@ function normalizeStoreValue(val) {
   if (typeof val === "string") return val.trim();
   if (typeof val === "number" || typeof val === "boolean") return String(val).trim();
   if (typeof val === "object") {
+    if (typeof val.value === "string" && val.value.trim()) return val.value.trim();
+    if (typeof val.token === "string" && val.token.trim()) return val.token.trim();
+    if (typeof val.refresh_token === "string" && val.refresh_token.trim()) return val.refresh_token.trim();
+    if (typeof val.access_token === "string" && val.access_token.trim()) return val.access_token.trim();
     if (typeof val.then === "function") return "";
-    if (typeof val.value === "string") return val.value.trim();
-    if (typeof val.token === "string") return val.token.trim();
-    if (typeof val.refresh_token === "string") return val.refresh_token.trim();
-    if (typeof val.access_token === "string") return val.access_token.trim();
   }
   return "";
 }
@@ -1362,7 +1362,6 @@ function pickParamFromObject(obj, aliases) {
   for (var i = 0; i < aliases.length; i++) {
     var key = aliases[i];
     if (obj[key] === undefined || obj[key] === null) continue;
-    if (isPromiseLike(obj[key])) continue;
     var val = normalizeStoreValue(obj[key]);
     if (val) return val;
   }
@@ -1529,15 +1528,88 @@ function resolveGuangyaTokenSync(params) {
   );
 }
 
-async function resolveGuangyaTokenAsync(params) {
-  params = await ensureGlobalParams(params || {});
-  var uiToken = normalizeGuangyaToken(
-    pickParamAliases(params, GUANGYA_TOKEN_ALIASES) ||
-      (await unwrapStoreValue(params.guangya_token)) ||
-      (await resolveGlobalParamAsync("guangya_token", params, GUANGYA_TOKEN_ALIASES))
+function extractGuangyaTokenFromUnknown(val) {
+  var direct = normalizeGuangyaToken(val);
+  if (direct) return direct;
+  if (typeof val === "string") return normalizeGuangyaToken(scanGyRefreshToken(val));
+  if (!val || typeof val !== "object" || isPromiseLike(val)) return "";
+  var picked = pickParamFromObject(val, GUANGYA_TOKEN_ALIASES);
+  if (picked) return normalizeGuangyaToken(picked);
+  try {
+    return normalizeGuangyaToken(scanGyRefreshToken(JSON.stringify(val)));
+  } catch (e) {
+    return "";
+  }
+}
+
+async function discoverGuangyaTokenAsync(params) {
+  params = params || {};
+  var found = normalizeGuangyaToken(
+    pickParamAliases(params, GUANGYA_TOKEN_ALIASES) || (await unwrapStoreValue(params.guangya_token))
   );
-  var session = await readGuangyaSessionAsync();
-  return pickLiveGuangyaRefreshToken(uiToken, session);
+  if (found) return found;
+  found = extractGuangyaTokenFromUnknown(params);
+  if (found) return found;
+
+  found = normalizeGuangyaToken(await readWidgetGlobalParamsValueAsync("guangya_token", GUANGYA_TOKEN_ALIASES));
+  if (found) return found;
+  try {
+    if (typeof Widget.getGlobalParams === "function") {
+      var all = Widget.getGlobalParams();
+      if (isPromiseLike(all)) all = await all;
+      found = extractGuangyaTokenFromUnknown(all);
+      if (found) return found;
+    }
+    var gp = Widget.globalParams;
+    if (isPromiseLike(gp)) gp = await gp;
+    found = extractGuangyaTokenFromUnknown(gp);
+    if (found) return found;
+  } catch (e) {}
+
+  found = normalizeGuangyaToken(await readForwardGlobalParamsBlobValueAsync("guangya_token", GUANGYA_TOKEN_ALIASES));
+  if (found) return found;
+  var blobKeys = forwardGlobalParamsBlobKeys();
+  for (var i = 0; i < blobKeys.length; i++) {
+    found = extractGuangyaTokenFromUnknown(await readStorageRawAsync(blobKeys[i]));
+    if (found) return found;
+  }
+
+  var keys = collectGlobalParamStorageKeys("guangya_token", GUANGYA_TOKEN_ALIASES);
+  for (var j = 0; j < keys.length; j++) {
+    found = normalizeGuangyaToken(await readStoreAsync(keys[j]));
+    if (found) return found;
+  }
+  try {
+    var session = await readGuangyaSessionAsync();
+    if (session && session.refreshToken) return session.refreshToken;
+  } catch (e2) {}
+  return "";
+}
+
+async function resolveGuangyaTokenAsync(params) {
+  params = params || {};
+  if (isPromiseLike(params)) {
+    try {
+      params = await params;
+    } catch (e) {
+      params = {};
+    }
+  }
+  var uiToken = await discoverGuangyaTokenAsync(params);
+  if (!uiToken) {
+    params = await ensureGlobalParams(params);
+    uiToken = await discoverGuangyaTokenAsync(params);
+  }
+  var live = uiToken;
+  try {
+    live = pickLiveGuangyaRefreshToken(uiToken, await readGuangyaSessionAsync()) || uiToken;
+  } catch (e3) {}
+  if (live) {
+    params.guangya_token = live;
+    persistGlobalParam("guangya_token", live);
+    await persistGlobalParamAsync("guangya_token", live);
+  }
+  return live;
 }
 
 function persistGlobalParam(name, value) {
@@ -1587,19 +1659,39 @@ function syncParams(params) {
 }
 
 async function ensureGlobalParams(params) {
+  if (isPromiseLike(params)) {
+    try {
+      params = await params;
+    } catch (e) {
+      params = {};
+    }
+  }
   params = syncParams(params || {});
-  var uiToken = normalizeGuangyaToken(
-    pickParamAliases(params, GUANGYA_TOKEN_ALIASES) ||
-      (await unwrapStoreValue(params.guangya_token)) ||
-      (await resolveGlobalParamAsync("guangya_token", params, GUANGYA_TOKEN_ALIASES))
-  );
-  var session = await readGuangyaSessionAsync();
-  var gyToken = pickLiveGuangyaRefreshToken(uiToken, session);
-  if (gyToken) params.guangya_token = gyToken;
-  var gyParent = await resolveGlobalParamAsync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES);
-  if (gyParent) {
-    params.guangya_parent_id = gyParent;
-    persistGlobalParam("guangya_parent_id", gyParent);
+  for (var i = 0; i < GLOBAL_KEYS.length; i++) {
+    var key = GLOBAL_KEYS[i];
+    var aliases =
+      key === "guangya_token"
+        ? GUANGYA_TOKEN_ALIASES
+        : key === "guangya_parent_id"
+          ? GUANGYA_PARENT_ALIASES
+          : [key];
+    var current = await unwrapStoreValue(params[key]);
+    if (!current) current = await resolveGlobalParamAsync(key, params, aliases);
+    if (key === "guangya_token") {
+      current = normalizeGuangyaToken(current);
+      if (!current) {
+        try {
+          current = await discoverGuangyaTokenAsync(params);
+        } catch (e) {}
+      }
+      try {
+        current = pickLiveGuangyaRefreshToken(current, await readGuangyaSessionAsync()) || current;
+      } catch (e2) {}
+    }
+    if (current) {
+      params[key] = current;
+      persistGlobalParam(key, current);
+    }
   }
   return params;
 }
@@ -2111,9 +2203,9 @@ function extractToken(data) {
 }
 
 async function loginWithPassword(params) {
-  params = syncParams(params || {});
-  var username = String(params.email || "").trim();
-  var password = String(params.password || "").trim();
+  params = await ensureGlobalParams(params || {});
+  var username = String((await unwrapStoreValue(params.email)) || params.email || "").trim();
+  var password = String((await unwrapStoreValue(params.password)) || params.password || "").trim();
   if (!username || !password) throw new Error("请填写账号和密码");
 
   var body = Object.assign({}, DEVICE_DEFAULTS, {
@@ -2148,8 +2240,10 @@ async function ensureApiSession(params, options) {
   params = await ensureGlobalParams(params || {});
   if (params.apiToken) return params;
 
-  var email = String(params.email || "").trim();
-  var password = String(params.password || "").trim();
+  var email = String((await unwrapStoreValue(params.email)) || params.email || "").trim();
+  var password = String((await unwrapStoreValue(params.password)) || params.password || "").trim();
+  if (email) params.email = email;
+  if (password) params.password = password;
   if (!email || !password) {
     if (options.requireAuth) throw new Error("需要登录：请填写账号密码或 API Token");
     return params;
@@ -3711,9 +3805,15 @@ async function handleGuangyaMagnetSave(hash, params) {
   }
   var cfg = await getGuangyaConfig(params);
   var token = normalizeGuangyaToken(
-    cfg.guangya_token || (await resolveGuangyaTokenAsync(params)) || resolveGuangyaTokenSync(params)
+    cfg.guangya_token ||
+      (await resolveGuangyaTokenAsync(params)) ||
+      (await discoverGuangyaTokenAsync(params || {})) ||
+      resolveGuangyaTokenSync(params)
   );
-  if (token) cfg.guangya_token = token;
+  if (token) {
+    cfg.guangya_token = token;
+    persistGlobalParam("guangya_token", token);
+  }
   if (!token) {
     return {
       id: hash,
