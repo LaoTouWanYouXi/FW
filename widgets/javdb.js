@@ -1045,7 +1045,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.5.3",
+  version: "4.5.4",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类；详情磁力 relatedItems 一键转存光鸭（含广告过滤）",
   author: "老头",
@@ -1337,6 +1337,13 @@ function writeStore(key, value) {
   } catch (e) {}
 }
 
+async function writeStoreAsync(key, value) {
+  try {
+    var ret = Widget.storage.set(key, value);
+    if (isPromiseLike(ret)) await ret;
+  } catch (e) {}
+}
+
 function globalParamStorageKeys(name) {
   var widgetId = WidgetMetadata && WidgetMetadata.id ? String(WidgetMetadata.id) : "forward.javdb";
   return [
@@ -1354,9 +1361,10 @@ function pickParamFromObject(obj, aliases) {
   if (!obj || typeof obj !== "object" || isPromiseLike(obj)) return "";
   for (var i = 0; i < aliases.length; i++) {
     var key = aliases[i];
-    if (obj[key] !== undefined && obj[key] !== null && String(obj[key]).trim() !== "") {
-      return normalizeStoreValue(obj[key]);
-    }
+    if (obj[key] === undefined || obj[key] === null) continue;
+    if (isPromiseLike(obj[key])) continue;
+    var val = normalizeStoreValue(obj[key]);
+    if (val) return val;
   }
   return "";
 }
@@ -1523,15 +1531,26 @@ function resolveGuangyaTokenSync(params) {
 
 async function resolveGuangyaTokenAsync(params) {
   params = await ensureGlobalParams(params || {});
-  return normalizeGuangyaToken(
-    params.guangya_token || (await resolveGlobalParamAsync("guangya_token", params, GUANGYA_TOKEN_ALIASES))
+  var uiToken = normalizeGuangyaToken(
+    pickParamAliases(params, GUANGYA_TOKEN_ALIASES) ||
+      (await unwrapStoreValue(params.guangya_token)) ||
+      (await resolveGlobalParamAsync("guangya_token", params, GUANGYA_TOKEN_ALIASES))
   );
+  var session = await readGuangyaSessionAsync();
+  return pickLiveGuangyaRefreshToken(uiToken, session);
 }
 
 function persistGlobalParam(name, value) {
   value = normalizeStoreValue(value);
   if (!value) return;
   writeStore("javdb.global." + name, value);
+}
+
+async function persistGlobalParamAsync(name, value) {
+  value = normalizeStoreValue(value);
+  if (!value) return;
+  writeStore("javdb.global." + name, value);
+  await writeStoreAsync("javdb.global." + name, value);
 }
 
 function syncParams(params) {
@@ -1544,7 +1563,7 @@ function syncParams(params) {
       var normalized = normalizeStoreValue(val);
       if (normalized) {
         out[key] = normalized;
-        persistGlobalParam(key, out[key]);
+        if (key !== "guangya_token") persistGlobalParam(key, out[key]);
       } else {
         var storedVal = resolveGlobalParamSync(key, params, [key]);
         if (storedVal) out[key] = storedVal;
@@ -1557,10 +1576,7 @@ function syncParams(params) {
   var gyToken = normalizeGuangyaToken(
     pickParamAliases(params, GUANGYA_TOKEN_ALIASES) || out.guangya_token || resolveGlobalParamSync("guangya_token", params, GUANGYA_TOKEN_ALIASES)
   );
-  if (gyToken) {
-    out.guangya_token = gyToken;
-    persistGlobalParam("guangya_token", gyToken);
-  }
+  if (gyToken) out.guangya_token = gyToken;
   var gyParent = pickParamAliases(params, GUANGYA_PARENT_ALIASES) || out.guangya_parent_id || resolveGlobalParamSync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES);
   if (gyParent) {
     out.guangya_parent_id = gyParent;
@@ -1572,13 +1588,14 @@ function syncParams(params) {
 
 async function ensureGlobalParams(params) {
   params = syncParams(params || {});
-  var gyToken = normalizeGuangyaToken(
-    await resolveGlobalParamAsync("guangya_token", params, GUANGYA_TOKEN_ALIASES)
+  var uiToken = normalizeGuangyaToken(
+    pickParamAliases(params, GUANGYA_TOKEN_ALIASES) ||
+      (await unwrapStoreValue(params.guangya_token)) ||
+      (await resolveGlobalParamAsync("guangya_token", params, GUANGYA_TOKEN_ALIASES))
   );
-  if (gyToken) {
-    params.guangya_token = gyToken;
-    persistGlobalParam("guangya_token", gyToken);
-  }
+  var session = await readGuangyaSessionAsync();
+  var gyToken = pickLiveGuangyaRefreshToken(uiToken, session);
+  if (gyToken) params.guangya_token = gyToken;
   var gyParent = await resolveGlobalParamAsync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES);
   if (gyParent) {
     params.guangya_parent_id = gyParent;
@@ -2395,6 +2412,7 @@ var MAGNET_LINK_PREFIX = "gy:";
 var MAGNET_STORE_PREFIX = "javdb.magnet.v1.";
 var GUANGYA_ACCESS_STORE = "javdb.guangya.access.v1";
 var GUANGYA_DID_STORE = "javdb.guangya.did.v1";
+var _gyTokenRefreshInflight = null;
 var GY_VIDEO_EXTS = {
   mp4: 1,
   mkv: 1,
@@ -2421,11 +2439,14 @@ function gyRandomHex(len) {
   return out;
 }
 
-function ensureGuangyaDeviceId() {
-  var id = String(readStore(GUANGYA_DID_STORE) || "").trim().toLowerCase();
+async function ensureGuangyaDeviceId() {
+  var id = String((await readStoreAsync(GUANGYA_DID_STORE)) || readStore(GUANGYA_DID_STORE) || "")
+    .trim()
+    .toLowerCase();
   if (id) return id;
   id = gyRandomHex(16);
   writeStore(GUANGYA_DID_STORE, id);
+  await writeStoreAsync(GUANGYA_DID_STORE, id);
   return id;
 }
 
@@ -2436,7 +2457,6 @@ function getGuangyaConfigFromStore(params) {
     params.guangya_parent_id ||
     resolveGlobalParamSync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES) ||
     "";
-  if (token) persistGlobalParam("guangya_token", token);
   if (parentId) persistGlobalParam("guangya_parent_id", parentId);
   return {
     guangya_token: token,
@@ -2454,7 +2474,6 @@ async function getGuangyaConfig(params) {
   var parentId =
     normalizeStoreValue(params.guangya_parent_id) ||
     (await resolveGlobalParamAsync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES));
-  if (token) persistGlobalParam("guangya_token", token);
   if (parentId) persistGlobalParam("guangya_parent_id", parentId);
   return {
     guangya_token: token,
@@ -2922,8 +2941,67 @@ function gyApiErrorText(data, status) {
   );
 }
 
+function gyIsRotatedTokenError(err, data) {
+  var text = String((err && err.message) || err || "");
+  if (data && typeof data === "object") {
+    text += " " + String(data.error || "") + " " + String(data.error_description || data.msg || "");
+  }
+  return /invalid_grant|refreshed by other|invalid_token|expired/i.test(text);
+}
+
+function gyAuthErrorText(err, data, status) {
+  var msg = String((err && err.message) || "");
+  if (gyIsRotatedTokenError(err, data) || Number(status) === 400 || /\bHTTP\s*400\b/i.test(msg)) {
+    return "光鸭 refresh_token 已失效（每次换票都会作废旧 token）。请到 www.guangyapan.com 登录后重新复制最新 refresh_token";
+  }
+  return msg || gyApiErrorText(data, status) || "刷新光鸭 token 失败";
+}
+
+function pickLiveGuangyaRefreshToken(uiToken, session) {
+  uiToken = normalizeGuangyaToken(uiToken);
+  session = session || {};
+  var live = normalizeGuangyaToken(session.refreshToken);
+  var source = normalizeGuangyaToken(session.sourceRefreshToken);
+  if (uiToken && live && uiToken !== live && uiToken !== source) return uiToken;
+  return live || uiToken || "";
+}
+
+async function readGuangyaSessionAsync() {
+  try {
+    var raw = await readStorageRawAsync(GUANGYA_ACCESS_STORE);
+    if (raw == null || raw === "") raw = await readStoreAsync(GUANGYA_ACCESS_STORE);
+    if (!raw) {
+      raw = readStorageRaw(GUANGYA_ACCESS_STORE) || readStore(GUANGYA_ACCESS_STORE);
+    }
+    if (!raw) return null;
+    var entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!entry || typeof entry !== "object" || isPromiseLike(entry)) return null;
+    return {
+      refreshToken: normalizeGuangyaToken(entry.refreshToken),
+      sourceRefreshToken: normalizeGuangyaToken(entry.sourceRefreshToken),
+      accessToken: String(entry.accessToken || "").trim(),
+      expiresAt: Number(entry.expiresAt || 0),
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function writeGuangyaSessionAsync(session) {
+  session = session || {};
+  var payload = JSON.stringify({
+    refreshToken: normalizeGuangyaToken(session.refreshToken),
+    sourceRefreshToken: normalizeGuangyaToken(session.sourceRefreshToken || session.refreshToken),
+    accessToken: String(session.accessToken || "").trim(),
+    expiresAt: Number(session.expiresAt || 0),
+  });
+  writeStore(GUANGYA_ACCESS_STORE, payload);
+  await writeStoreAsync(GUANGYA_ACCESS_STORE, payload);
+}
+
 async function gyHttpPost(url, headers, bodyObj, timeoutMs) {
   var body = bodyObj || {};
+  var rawBody = typeof body === "string" ? body : JSON.stringify(body);
   var httpOpts = {
     headers: headers,
     allow_redirects: true,
@@ -2941,13 +3019,7 @@ async function gyHttpPost(url, headers, bodyObj, timeoutMs) {
     } else if (typeof Widget.http.request === "function") {
       resp = await Widget.http.request(url, Object.assign({ method: "POST", body: body }, httpOpts));
     } else {
-      resp = await Widget.http.get(
-        url,
-        Object.assign({}, httpOpts, {
-          method: "POST",
-          body: typeof body === "string" ? body : JSON.stringify(body),
-        })
-      );
+      resp = await Widget.http.get(url, Object.assign({}, httpOpts, { method: "POST", body: rawBody }));
     }
   } catch (error) {
     resp = gyRecoverHttpResponse(error);
@@ -2961,48 +3033,56 @@ async function gyHttpPost(url, headers, bodyObj, timeoutMs) {
   return data;
 }
 
-function readCachedGuangyaAccess(refreshToken) {
-  refreshToken = String(refreshToken || "").trim();
-  if (!refreshToken) return "";
-  try {
-    var raw = readStore(GUANGYA_ACCESS_STORE);
-    if (!raw) return "";
-    var entry = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!entry || entry.refreshToken !== refreshToken) return "";
-    if (Number(entry.expiresAt || 0) <= Date.now() + 60000) return "";
-    return String(entry.accessToken || "").trim();
-  } catch (e) {
-    return "";
-  }
-}
-
-function writeCachedGuangyaAccess(refreshToken, accessToken, expiresIn) {
-  writeStore(
-    GUANGYA_ACCESS_STORE,
-    JSON.stringify({
-      refreshToken: String(refreshToken || "").trim(),
-      accessToken: String(accessToken || "").trim(),
-      expiresAt: Date.now() + Number(expiresIn || 3600) * 1000,
-    })
-  );
-}
-
 async function ensureGuangyaAccessToken(refreshToken, did) {
-  refreshToken = String(refreshToken || "").trim();
+  refreshToken = normalizeGuangyaToken(refreshToken);
   if (!refreshToken) throw new Error("未配置光鸭 refresh_token");
-  var cached = readCachedGuangyaAccess(refreshToken);
-  if (cached) return cached;
-  var data = await gyHttpPost(
-    GUANGYA_ACCOUNT_URL + "/v1/auth/token",
-    gyAccountHeaders(did),
-    { client_id: GUANGYA_CLIENT_ID, grant_type: "refresh_token", refresh_token: refreshToken },
-    25000
-  );
-  if (!data || !data.access_token) {
-    throw new Error((data && (data.error_description || data.msg || data.message)) || "刷新光鸭 token 失败");
-  }
-  writeCachedGuangyaAccess(refreshToken, data.access_token, data.expires_in || 3600);
-  return data.access_token;
+  if (_gyTokenRefreshInflight) return _gyTokenRefreshInflight;
+
+  _gyTokenRefreshInflight = (async function () {
+    try {
+      var session = await readGuangyaSessionAsync();
+      var live = pickLiveGuangyaRefreshToken(refreshToken, session);
+      var accessValid =
+        session &&
+        session.accessToken &&
+        Number(session.expiresAt || 0) > Date.now() + 60000 &&
+        (session.refreshToken === live || session.sourceRefreshToken === refreshToken);
+      if (accessValid) return session.accessToken;
+
+      if (session && session.refreshToken && refreshToken === session.sourceRefreshToken) {
+        live = session.refreshToken;
+      }
+
+      var data = await gyHttpPost(
+        GUANGYA_ACCOUNT_URL + "/v1/auth/token",
+        gyAccountHeaders(did),
+        { client_id: GUANGYA_CLIENT_ID, grant_type: "refresh_token", refresh_token: live },
+        25000
+      );
+      if (!data || !data.access_token) {
+        throw new Error(gyAuthErrorText(null, data, 0));
+      }
+      var newRefresh = normalizeGuangyaToken(data.refresh_token) || live;
+      var source =
+        session && session.sourceRefreshToken && live === session.refreshToken
+          ? session.sourceRefreshToken
+          : refreshToken;
+      await writeGuangyaSessionAsync({
+        refreshToken: newRefresh,
+        sourceRefreshToken: source,
+        accessToken: data.access_token,
+        expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000,
+      });
+      await persistGlobalParamAsync("guangya_token", newRefresh);
+      return data.access_token;
+    } catch (err) {
+      throw new Error(gyAuthErrorText(err, null, 0));
+    } finally {
+      _gyTokenRefreshInflight = null;
+    }
+  })();
+
+  return _gyTokenRefreshInflight;
 }
 
 function gyToNumber(v) {
@@ -3576,15 +3656,20 @@ async function submitGuangyaMagnetTask(accessToken, did, magnet, cfg, filtered, 
 }
 
 async function saveMagnetToGuangya(magnet, cfg) {
-  var did = ensureGuangyaDeviceId();
-  var accessToken = await ensureGuangyaAccessToken(cfg.guangya_token, did);
+  var did = await ensureGuangyaDeviceId();
+  var accessToken;
+  try {
+    accessToken = await ensureGuangyaAccessToken(cfg.guangya_token, did);
+  } catch (err) {
+    throw new Error("换票失败: " + String((err && err.message) || err || "未知错误"));
+  }
   var resolved = null;
   var entries = [];
   try {
     resolved = await guangyaResolveResource(accessToken, did, magnet);
     entries = gyExtractResolvedEntries(resolved);
   } catch (err) {
-    if (!gyIsHttpStatus400(err)) throw err;
+    if (!gyIsHttpStatus400(err)) throw new Error("解析磁力失败: " + String((err && err.message) || err));
   }
   var filtered = { kept: [], blocked: [] };
   if (entries.length) {
@@ -3594,7 +3679,12 @@ async function saveMagnetToGuangya(magnet, cfg) {
         : { kept: entries, blocked: [] };
     if (!filtered.kept.length) throw new Error("过滤后没有可转存文件");
   }
-  var submitted = await submitGuangyaMagnetTask(accessToken, did, magnet, cfg, filtered, resolved);
+  var submitted;
+  try {
+    submitted = await submitGuangyaMagnetTask(accessToken, did, magnet, cfg, filtered, resolved);
+  } catch (err) {
+    throw new Error("提交任务失败: " + String((err && err.message) || err));
+  }
   var task = submitted.task;
   return {
     ok: true,
@@ -3620,11 +3710,10 @@ async function handleGuangyaMagnetSave(hash, params) {
     };
   }
   var cfg = await getGuangyaConfig(params);
-  var token = normalizeGuangyaToken(cfg.guangya_token || (await resolveGuangyaTokenAsync(params)) || resolveGuangyaTokenSync(params));
-  if (token) {
-    cfg.guangya_token = token;
-    persistGlobalParam("guangya_token", token);
-  }
+  var token = normalizeGuangyaToken(
+    cfg.guangya_token || (await resolveGuangyaTokenAsync(params)) || resolveGuangyaTokenSync(params)
+  );
+  if (token) cfg.guangya_token = token;
   if (!token) {
     return {
       id: hash,
