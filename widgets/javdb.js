@@ -1016,7 +1016,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.6.2",
+  version: "4.6.3",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类预填；详情磁力 relatedItems 一键转存光鸭",
   author: "老头",
@@ -1038,14 +1038,14 @@ WidgetMetadata = {
       name: "email",
       title: "账号（邮箱）",
       type: "input",
-      description: "JavDB App 账号；TOP250 需登录。浏览最近更新/分类可不登录",
+      description: "JavDB 登录账号（兼容可视化版 username）；TOP250 需登录",
       value: "",
     },
     {
       name: "password",
       title: "密码",
       type: "input",
-      description: "与账号一并填写后自动登录；Token 会缓存到本地",
+      description: "与账号一并填写后自动登录；也会写入本地凭证缓存",
       value: "",
     },
     /*
@@ -2932,6 +2932,10 @@ var GUANGYA_PARENT_ALIASES = [
   "guangya_parent_id",
   "guangyaParentId",
 ];
+/** 账号字段：本组件 metadata 用 email，可视化版用 username，需双向兼容 */
+var LOGIN_USER_ALIASES = ["email", "username", "account", "user", "javdb_username", "javdb_email"];
+var LOGIN_PASS_ALIASES = ["password", "passwd", "pass", "javdb_password"];
+var LOGIN_TOKEN_ALIASES = ["apiToken", "token", "jwt", "auth_token", "access_token"];
 
 function normalizeStoreValue(val) {
   if (val === undefined || val === null) return "";
@@ -3044,8 +3048,26 @@ function globalParamStorageKeys(name) {
 
 function pickParamFromObject(obj, aliases) {
   if (!obj || typeof obj !== "object" || isPromiseLike(obj)) return "";
-  for (var i = 0; i < aliases.length; i++) {
-    var key = aliases[i];
+  // Forward 有时返回 [{ name, value }, ...]
+  if (Array.isArray(obj)) {
+    for (var a = 0; a < aliases.length; a++) {
+      var want = String(aliases[a] || "");
+      if (!want) continue;
+      for (var i = 0; i < obj.length; i++) {
+        var item = obj[i];
+        if (!item || typeof item !== "object") continue;
+        var itemName = String(item.name || item.key || item.id || "").trim();
+        if (itemName !== want) continue;
+        var fromItem = normalizeStoreValue(
+          item.value !== undefined ? item.value : item.val !== undefined ? item.val : item.data
+        );
+        if (fromItem) return fromItem;
+      }
+    }
+    return "";
+  }
+  for (var j = 0; j < aliases.length; j++) {
+    var key = aliases[j];
     if (obj[key] === undefined || obj[key] === null) continue;
     var val = normalizeStoreValue(obj[key]);
     if (val) return val;
@@ -3315,18 +3337,37 @@ function syncParams(params) {
   var out = {};
   for (var i = 0; i < GLOBAL_KEYS.length; i++) {
     var key = GLOBAL_KEYS[i];
+    var aliases =
+      key === "guangya_token"
+        ? GUANGYA_TOKEN_ALIASES
+        : key === "guangya_parent_id"
+          ? GUANGYA_PARENT_ALIASES
+          : key === "email"
+            ? LOGIN_USER_ALIASES
+            : key === "password"
+              ? LOGIN_PASS_ALIASES
+              : key === "apiToken"
+                ? LOGIN_TOKEN_ALIASES
+                : [key];
     var val = params[key];
+    if (key === "email" && (val === undefined || val === null || String(val).trim() === "")) {
+      val = params.username;
+    }
     if (val !== undefined && val !== null && String(val).trim() !== "") {
       var normalized = normalizeStoreValue(val);
       if (normalized) {
         out[key] = normalized;
         if (key !== "guangya_token") persistGlobalParam(key, out[key]);
+        if (key === "email") {
+          out.username = normalized;
+          persistGlobalParam("username", normalized);
+        }
       } else {
-        var storedVal = resolveGlobalParamSync(key, params, [key]);
+        var storedVal = resolveGlobalParamSync(key, params, aliases);
         if (storedVal) out[key] = storedVal;
       }
     } else {
-      var stored = resolveGlobalParamSync(key, params, [key]);
+      var stored = resolveGlobalParamSync(key, params, aliases);
       if (stored) out[key] = stored;
     }
   }
@@ -3359,8 +3400,18 @@ async function ensureGlobalParams(params) {
         ? GUANGYA_TOKEN_ALIASES
         : key === "guangya_parent_id"
           ? GUANGYA_PARENT_ALIASES
-          : [key];
+          : key === "email"
+            ? LOGIN_USER_ALIASES
+            : key === "password"
+              ? LOGIN_PASS_ALIASES
+              : key === "apiToken"
+                ? LOGIN_TOKEN_ALIASES
+                : [key];
     var current = await unwrapStoreValue(params[key]);
+    // email 字段也尝试从 username 直取（可视化版参数名）
+    if (!current && key === "email") {
+      current = await unwrapStoreValue(params.username);
+    }
     if (!current) current = await resolveGlobalParamAsync(key, params, aliases);
     if (key === "guangya_token") {
       current = normalizeGuangyaToken(current);
@@ -3376,6 +3427,11 @@ async function ensureGlobalParams(params) {
     if (current) {
       params[key] = current;
       persistGlobalParam(key, current);
+      // 账号双写，保证可视化版 username 键与本组件 email 键都能读到
+      if (key === "email") {
+        params.username = current;
+        persistGlobalParam("username", current);
+      }
     }
   }
   return params;
@@ -3748,7 +3804,12 @@ function apiHeaders(params, extra) {
     "user-agent": "Mozilla/5.0",
     jdsignature: buildJdSignature(),
   };
-  var token = String(params.apiToken || readStore("javdb.global.apiToken") || "").trim();
+  var token = String(
+    params.apiToken ||
+      readStore("javdb.global.apiToken") ||
+      readStore("javdb_token") ||
+      ""
+  ).trim();
   if (token) {
     if (/^bearer\s+/i.test(token)) headers.Authorization = token;
     else headers.Authorization = "Bearer " + token;
@@ -3859,11 +3920,17 @@ async function apiPost(pathname, body, params) {
  */
 
 var JAVDB_LOGIN_TIMEOUT_MS = 6000;
+// 本组件键 + 可视化版键（读写兼容，避免两套缓存互不认）
 var TOKEN_STORE_KEY = "javdb.global.apiToken";
+var TOKEN_STORE_KEY_ALT = "javdb_token";
 var TOKEN_EXPIRES_KEY = "javdb.global.apiTokenExpires";
+var TOKEN_EXPIRES_KEY_ALT = "javdb_token_expires";
 var TOKEN_CREDENTIAL_KEY = "javdb.global.apiTokenCredential";
+var TOKEN_CREDENTIAL_KEY_ALT = "javdb_token_credential";
 var CRED_USER_KEY = "javdb.global.credUser";
+var CRED_USER_KEY_ALT = "javdb_cred_user";
 var CRED_PASS_KEY = "javdb.global.credPass";
+var CRED_PASS_KEY_ALT = "javdb_cred_pass";
 var DEVICE_UUID_KEY = "javdb.global.deviceUuid";
 var TOKEN_REFRESH_BUFFER_SECONDS = 5 * 60;
 var LOGIN_FAILURE_COOLDOWN_MS = 30 * 1000;
@@ -3932,15 +3999,37 @@ async function saveLoginCredentials(username, password, previous) {
   previous = previous || {};
   if (username && username !== previous.username) {
     await writeStoreAsync(CRED_USER_KEY, username);
+    await writeStoreAsync(CRED_USER_KEY_ALT, username);
+    await writeStoreAsync("javdb.global.email", username);
+    await writeStoreAsync("javdb.global.username", username);
   }
   if (password && password !== previous.password) {
     await writeStoreAsync(CRED_PASS_KEY, password);
+    await writeStoreAsync(CRED_PASS_KEY_ALT, password);
+    await writeStoreAsync("javdb.global.password", password);
   }
 }
 
+async function readFirstStoreAsync(keys) {
+  for (var i = 0; i < (keys || []).length; i++) {
+    var val = await readStoreAsync(keys[i]);
+    if (val) return val;
+  }
+  return "";
+}
+
 async function getStoredLoginCredentials() {
-  var username = await unwrapStoreValue(await readStoreAsync(CRED_USER_KEY));
-  var password = await unwrapStoreValue(await readStoreAsync(CRED_PASS_KEY));
+  var username = await readFirstStoreAsync([
+    CRED_USER_KEY,
+    CRED_USER_KEY_ALT,
+    "javdb.global.email",
+    "javdb.global.username",
+  ]);
+  var password = await readFirstStoreAsync([
+    CRED_PASS_KEY,
+    CRED_PASS_KEY_ALT,
+    "javdb.global.password",
+  ]);
   return {
     username: String(username || "").trim(),
     password: String(password || "").trim(),
@@ -3951,26 +4040,26 @@ async function resolveLoginCredentials(params) {
   params = params || {};
   var stored = await getStoredLoginCredentials();
   var username = String(
-    (await unwrapStoreValue(params.email)) ||
-      params.email ||
+    (await resolveGlobalParamAsync("email", params, LOGIN_USER_ALIASES)) ||
+      (await unwrapStoreValue(params.email)) ||
       (await unwrapStoreValue(params.username)) ||
-      params.username ||
       stored.username ||
       ""
   ).trim();
   var password = String(
-    (await unwrapStoreValue(params.password)) || params.password || stored.password || ""
+    (await resolveGlobalParamAsync("password", params, LOGIN_PASS_ALIASES)) ||
+      (await unwrapStoreValue(params.password)) ||
+      stored.password ||
+      ""
   ).trim();
 
   if (!username || !password) {
-    throw new Error("请填写账号和密码（设置→全局参数）");
+    throw new Error("请先设置 JavDB 账号密码（设置→全局参数）");
   }
 
-  var changed = !!(
-    (params.email || params.username) &&
-    stored.username &&
-    stored.username !== username
-  ) || !!(params.password && stored.password && stored.password !== password);
+  var changed =
+    !!(username && stored.username && stored.username !== username) ||
+    !!(password && stored.password && stored.password !== password);
 
   await saveLoginCredentials(username, password, stored);
 
@@ -3983,25 +4072,39 @@ async function resolveLoginCredentials(params) {
 }
 
 async function clearStoredToken() {
-  if (Widget.storage && typeof Widget.storage.remove === "function") {
-    await Widget.storage.remove(TOKEN_STORE_KEY);
-    await Widget.storage.remove(TOKEN_EXPIRES_KEY);
-    await Widget.storage.remove(TOKEN_CREDENTIAL_KEY);
-  } else {
-    await writeStoreAsync(TOKEN_STORE_KEY, "");
-    await writeStoreAsync(TOKEN_EXPIRES_KEY, "");
-    await writeStoreAsync(TOKEN_CREDENTIAL_KEY, "");
+  var keys = [
+    TOKEN_STORE_KEY,
+    TOKEN_STORE_KEY_ALT,
+    TOKEN_EXPIRES_KEY,
+    TOKEN_EXPIRES_KEY_ALT,
+    TOKEN_CREDENTIAL_KEY,
+    TOKEN_CREDENTIAL_KEY_ALT,
+  ];
+  for (var i = 0; i < keys.length; i++) {
+    if (Widget.storage && typeof Widget.storage.remove === "function") {
+      try {
+        await Widget.storage.remove(keys[i]);
+      } catch (e) {
+        await writeStoreAsync(keys[i], "");
+      }
+    } else {
+      await writeStoreAsync(keys[i], "");
+    }
   }
-  // 兼容旧键
-  writeStore("javdb.global.apiToken", "");
+  writeStore(TOKEN_STORE_KEY, "");
+  writeStore(TOKEN_STORE_KEY_ALT, "");
 }
 
 async function persistLoginToken(token, fingerprint) {
-  var expiresAt = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
+  var expiresAt = String(Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS);
   await writeStoreAsync(TOKEN_STORE_KEY, token);
-  await writeStoreAsync(TOKEN_EXPIRES_KEY, String(expiresAt));
+  await writeStoreAsync(TOKEN_STORE_KEY_ALT, token);
+  await writeStoreAsync(TOKEN_EXPIRES_KEY, expiresAt);
+  await writeStoreAsync(TOKEN_EXPIRES_KEY_ALT, expiresAt);
   await writeStoreAsync(TOKEN_CREDENTIAL_KEY, fingerprint);
-  writeStore("javdb.global.apiToken", token);
+  await writeStoreAsync(TOKEN_CREDENTIAL_KEY_ALT, fingerprint);
+  writeStore(TOKEN_STORE_KEY, token);
+  writeStore(TOKEN_STORE_KEY_ALT, token);
 }
 
 /**
@@ -4111,8 +4214,8 @@ async function loginWithLock(credentials, forceRefresh) {
  */
 async function getLoginTokenForCredentials(credentials, forceRefresh, preferredToken) {
   if (forceRefresh && preferredToken) {
-    var cachedForced = await unwrapStoreValue(await readStoreAsync(TOKEN_STORE_KEY));
-    var cachedCred = await unwrapStoreValue(await readStoreAsync(TOKEN_CREDENTIAL_KEY));
+    var cachedForced = await readFirstStoreAsync([TOKEN_STORE_KEY, TOKEN_STORE_KEY_ALT]);
+    var cachedCred = await readFirstStoreAsync([TOKEN_CREDENTIAL_KEY, TOKEN_CREDENTIAL_KEY_ALT]);
     if (
       cachedForced &&
       String(cachedForced) !== String(preferredToken) &&
@@ -4122,31 +4225,21 @@ async function getLoginTokenForCredentials(credentials, forceRefresh, preferredT
     }
   }
 
-  var token = String(
-    (await unwrapStoreValue(await readStoreAsync(TOKEN_STORE_KEY))) ||
-      readStore(TOKEN_STORE_KEY) ||
-      ""
-  ).trim();
-  var expires = String(
-    (await unwrapStoreValue(await readStoreAsync(TOKEN_EXPIRES_KEY))) ||
-      readStore(TOKEN_EXPIRES_KEY) ||
-      ""
-  ).trim();
-  var credKey = String(
-    (await unwrapStoreValue(await readStoreAsync(TOKEN_CREDENTIAL_KEY))) ||
-      readStore(TOKEN_CREDENTIAL_KEY) ||
-      ""
-  ).trim();
+  var token = await readFirstStoreAsync([TOKEN_STORE_KEY, TOKEN_STORE_KEY_ALT]);
+  var expires = await readFirstStoreAsync([TOKEN_EXPIRES_KEY, TOKEN_EXPIRES_KEY_ALT]);
+  var credKey = await readFirstStoreAsync([TOKEN_CREDENTIAL_KEY, TOKEN_CREDENTIAL_KEY_ALT]);
 
   if (!forceRefresh && token && expires && !credentials.changed) {
     var nowSec = Math.floor(Date.now() / 1000);
     var matched = credKey === credentials.fingerprint;
     if (!credKey) {
       await writeStoreAsync(TOKEN_CREDENTIAL_KEY, credentials.fingerprint);
+      await writeStoreAsync(TOKEN_CREDENTIAL_KEY_ALT, credentials.fingerprint);
       matched = true;
     }
     if (matched && nowSec + TOKEN_REFRESH_BUFFER_SECONDS < Number(expires)) {
-      writeStore("javdb.global.apiToken", token);
+      writeStore(TOKEN_STORE_KEY, token);
+      writeStore(TOKEN_STORE_KEY_ALT, token);
       return token;
     }
   }
@@ -4160,52 +4253,69 @@ async function loginWithPassword(params) {
   var token = await getLoginTokenForCredentials(credentials, true, "");
   params.apiToken = token;
   params.email = credentials.username;
+  params.username = credentials.username;
   params.password = credentials.password;
-  writeStore("javdb.global.email", credentials.username);
+  persistGlobalParam("email", credentials.username);
+  persistGlobalParam("username", credentials.username);
   return { token: token, data: { token: token } };
 }
 
+/**
+ * 对齐可视化 createJavdbRequestContext：
+ * 始终从全局参数 / 本地凭证解析账号密码，再取（或刷新）Token。
+ * 不再仅凭同步 readStore 里残留的 apiToken 提前返回——那会造成「已填密码仍提示去填」的假象。
+ */
 async function ensureApiSession(params, options) {
   options = options || {};
   params = await ensureGlobalParams(params || {});
 
-  // 已有有效 Token（参数或存储）且未强制要求刷新
-  var existing = String(params.apiToken || readStore(TOKEN_STORE_KEY) || "").trim();
-  if (existing && !options.forceRefresh) {
-    var expires = Number(readStore(TOKEN_EXPIRES_KEY) || 0);
-    var nowSec = Math.floor(Date.now() / 1000);
-    if (!expires || nowSec + TOKEN_REFRESH_BUFFER_SECONDS < expires) {
-      params.apiToken = existing;
-      return syncParams(params);
-    }
-  }
+  var preferredToken = String(
+    (await resolveGlobalParamAsync("apiToken", params, LOGIN_TOKEN_ALIASES)) ||
+      (await unwrapStoreValue(params.apiToken)) ||
+      ""
+  ).trim();
 
-  var email = String(
-    (await unwrapStoreValue(params.email)) ||
-      params.email ||
+  var username = String(
+    (await resolveGlobalParamAsync("email", params, LOGIN_USER_ALIASES)) ||
+      (await unwrapStoreValue(params.email)) ||
       (await unwrapStoreValue(params.username)) ||
-      params.username ||
       ""
   ).trim();
   var password = String(
-    (await unwrapStoreValue(params.password)) || params.password || ""
+    (await resolveGlobalParamAsync("password", params, LOGIN_PASS_ALIASES)) ||
+      (await unwrapStoreValue(params.password)) ||
+      ""
   ).trim();
 
-  // 尝试从本地凭证补齐
-  if (!email || !password) {
+  if (!username || !password) {
     try {
       var stored = await getStoredLoginCredentials();
-      if (!email) email = stored.username;
+      if (!username) username = stored.username;
       if (!password) password = stored.password;
     } catch (e) {}
   }
 
-  if (email) params.email = email;
+  if (username) {
+    params.email = username;
+    params.username = username;
+  }
   if (password) params.password = password;
 
-  if (!email || !password) {
-    if (options.requireAuth) throw new Error("需要登录：请填写账号密码或 API Token");
-    return params;
+  // 仅有 Token、无账号密码：允许匿名浏览带 Token；requireAuth 时也可用
+  if (!username || !password) {
+    if (preferredToken) {
+      params.apiToken = preferredToken;
+      return syncParams(params);
+    }
+    var cachedOnly = await readFirstStoreAsync([TOKEN_STORE_KEY, TOKEN_STORE_KEY_ALT]);
+    if (cachedOnly && !options.requireAuth) {
+      params.apiToken = cachedOnly;
+      return syncParams(params);
+    }
+    if (options.requireAuth) {
+      throw new Error("请先设置 JavDB 账号密码（设置→全局参数）");
+    }
+    return syncParams(params);
   }
 
   try {
@@ -4213,10 +4323,11 @@ async function ensureApiSession(params, options) {
     var token = await getLoginTokenForCredentials(
       credentials,
       !!options.forceRefresh,
-      params.apiToken || ""
+      preferredToken
     );
     params.apiToken = token;
     params.email = credentials.username;
+    params.username = credentials.username;
     params.password = credentials.password;
   } catch (err) {
     if (options.requireAuth) throw err;
@@ -6380,8 +6491,11 @@ async function loadTop250(params) {
     return enrichListMovies(movies, params);
   } catch (error) {
     var msg = String((error && error.message) || error || "");
-    if (/請登錄|请登录|JWT|登录|帳號|账号/i.test(msg)) {
-      throw new Error("TOP250 需要登录：请在全局参数填写账号密码或 API Token");
+    if (/请先设置 JavDB 账号密码|请填写账号|请在全局参数填写/i.test(msg)) {
+      throw new Error("TOP250 需要登录：请在设置→全局参数填写账号和密码后重试");
+    }
+    if (/請登錄|请登录|JWT|登录失败|帳號|账号密码/i.test(msg)) {
+      throw new Error("TOP250 登录失败：" + msg);
     }
     console.error("[javdb] TOP250 失败:", msg);
     throw error;
