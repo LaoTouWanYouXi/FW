@@ -13,7 +13,7 @@
  * 登录：POST /v1/sessions（账号密码 → JWT）
  * 列表：DMM Probe Worker 批量探测高清竖/横封面
  * 详情：顶图复用列表探测缓存；简介含剧情+短评；trailers 预告片模块
- * 磁力：relatedItems 展示 API 磁链；无磁链时从短评解析 magnet: 链接并提取大小/标签
+ * 磁力：relatedItems 合并 JavDB API / 短评 / Sukebei；展示体积·特征·来源，简介含文件名与转存说明
  */
 
 /* ===== module: 01-category-options.js ===== */
@@ -1018,7 +1018,7 @@ WidgetMetadata = {
   title: "JavDB",
   version: "4.6.3",
   requiredVersion: "0.0.1",
-  description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类预填；详情磁力 relatedItems 一键转存光鸭",
+  description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类预填；详情磁力合并 JavDB/短评/Sukebei，一键转存光鸭",
   author: "老头",
   site: API_SITE,
   detailCacheDuration: 3600,
@@ -4349,14 +4349,22 @@ function movieLink(id) {
 }
 
 function pickCover(movie) {
-  var cover = safeText(movie && (movie.cover_url || movie.thumb_url));
+  movie = movie || {};
+  var cover = sanitizeCoverUrl(movie.cover_url);
   if (cover) return cover;
-  var code = safeText(movie && movie.number);
+  var thumb = sanitizeCoverUrl(movie.thumb_url);
+  if (thumb) return thumb;
+  var cdnCover = buildJavdbCdnCoverUrl(movie.id);
+  if (cdnCover) return cdnCover;
+  var cdnThumb = buildJavdbCdnThumbUrl(movie.id);
+  if (cdnThumb) return cdnThumb;
+  var code = safeText(movie.number);
   if (!code) return "";
   var m = code.toUpperCase().match(/^([A-Z0-9]+)-(\d+)$/);
   if (!m) return "";
   var id = m[1].toLowerCase() + ("00000" + m[2]).slice(-5);
-  return "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id + "/" + id + "pl.jpg";
+  var guessed = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id + "/" + id + "pl.jpg";
+  return sanitizeCoverUrl(guessed) || guessed;
 }
 
 function buildListDescription(movie) {
@@ -4375,6 +4383,8 @@ function mapListMovie(movie) {
   var siteCover = pickCover(movie);
   // 对齐 catemby：横卡用 backdropPath/coverUrl，方格用 posterPath（DMM Probe 缓存）
   var covers = buildListCoverBundle(code, siteCover, code ? lookupDmmProbeCover(code) : null);
+  var backdrop = sanitizeCoverUrl(covers.backdropPath) || siteCover || "";
+  var poster = sanitizeCoverUrl(covers.posterPath) || siteCover || "";
   return {
     id: code || movie.id,
     type: "url",
@@ -4384,11 +4394,11 @@ function mapListMovie(movie) {
     releaseDate: movie.release_date || "",
     rating: Number(movie.score || 0) || 0,
     description: buildListDescription(movie),
-    backdropPath: covers.backdropPath || siteCover || undefined,
-    posterPath: covers.posterPath || undefined,
-    detailPoster: covers.detailPoster || undefined,
-    coverUrl: covers.coverUrl || covers.backdropPath || siteCover || undefined,
-    image: covers.image || covers.backdropPath || siteCover || undefined,
+    backdropPath: backdrop || undefined,
+    posterPath: poster || undefined,
+    detailPoster: sanitizeCoverUrl(covers.detailPoster) || poster || undefined,
+    coverUrl: sanitizeCoverUrl(covers.coverUrl) || backdrop || undefined,
+    image: sanitizeCoverUrl(covers.image) || backdrop || undefined,
     videoId: movie.id,
   };
 }
@@ -4465,15 +4475,16 @@ function mapCategoryEntity(kind, item) {
   if (item.category) extra.push(item.category);
   if (item.other_name) extra.push(safeText(item.other_name));
   var link = path.indexOf("?") >= 0 ? path : joinIdTitle(path, name);
+  var avatar = sanitizeCoverUrl(item.avatar_url) || "";
   return {
     id: path,
     type: "url",
     mediaType: kind === "actors" ? "person" : "movie",
     title: name,
     link: link,
-    posterPath: item.avatar_url || undefined,
-    backdropPath: item.avatar_url || undefined,
-    coverUrl: item.avatar_url || undefined,
+    posterPath: avatar || undefined,
+    backdropPath: avatar || undefined,
+    coverUrl: avatar || undefined,
     description: extra.join(" · ") || categoryKindLabel(kind),
   };
 }
@@ -4574,7 +4585,7 @@ function parseDetailMeta(movie) {
     peoples.push({
       id: categoryIdFromPath("/actors/" + (actor.id || actor.name), actor.name),
       title: actor.name,
-      avatar: actor.avatar_url || "",
+      avatar: sanitizeCoverUrl(actor.avatar_url) || "",
       role: "演员",
     });
   });
@@ -4616,13 +4627,19 @@ function mapMagnets(magnets) {
   for (var i = 0; i < list.length && i < 12; i++) {
     var m = list[i];
     var flags = [];
+    if (m.uncensored) flags.push("破解");
     if (m.cnsub) flags.push("中字");
-    if (m.hd) flags.push("HD");
-    var size = formatMagnetSize(m.size);
+    if (m.uhd) flags.push("4K");
+    else if (m.hd) flags.push("HD");
+    var size = formatMagnetSize(m.size) || safeText(m.sizeText || "");
+    var source =
+      m.source === "sukebei" ? "Sukebei" : m.source === "review" ? "短评" : m.source === "mixed" ? "多源" : "JavDB";
     lines.push(
       (m.name || m.hash || "magnet") +
         (size ? " · " + size : "") +
         (flags.length ? " · " + flags.join("/") : "") +
+        " · " +
+        source +
         (m.hash ? "\nmagnet:?xt=urn:btih:" + m.hash : "")
     );
   }
@@ -4663,6 +4680,9 @@ var GY_DEFAULT_BLOCK_PATTERNS = [
   "\\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent)$",
 ];
 var GY_AUTO_INDEX = 10000;
+var SUKEBEI_BASE = "https://sukebei.nyaa.si";
+var SUKEBEI_TIMEOUT_MS = 8000;
+var SUKEBEI_MAX_RESULTS = 12;
 
 function gyRandomHex(len) {
   var out = "";
@@ -4779,16 +4799,16 @@ function extractMagnetHash(magnet) {
 }
 
 function parseMagnetSizeMb(text) {
-  text = String(text || "");
-  var m = text.match(/(\d+(?:\.\d+)?)\s*(TB|GB|G|MB|M|KB|K)\b/i);
+  text = String(text || "").replace(/,/g, "");
+  var m = text.match(/(\d+(?:\.\d+)?)\s*(TiB|TB|GiB|GB|G|MiB|MB|M|KiB|KB|K)\b/i);
   if (!m) return 0;
   var n = Number(m[1]);
   if (!Number.isFinite(n) || n <= 0) return 0;
   var unit = m[2].toUpperCase();
-  if (unit === "TB") return n * 1024 * 1024;
-  if (unit === "GB" || unit === "G") return n * 1024;
-  if (unit === "MB" || unit === "M") return n;
-  if (unit === "KB" || unit === "K") return n / 1024;
+  if (unit === "TB" || unit === "TIB") return n * 1024 * 1024;
+  if (unit === "GB" || unit === "GIB" || unit === "G") return n * 1024;
+  if (unit === "MB" || unit === "MIB" || unit === "M") return n;
+  if (unit === "KB" || unit === "KIB" || unit === "K") return n / 1024;
   return 0;
 }
 
@@ -4802,11 +4822,38 @@ function parseMagnetSizeFromUri(magnet) {
 
 function parseMagnetFlags(text) {
   text = String(text || "");
+  var uhd = /4k\d*|\b2160\b|\buhd\b/i.test(text);
   return {
-    cnsub: /字幕|中字|中文|cnsub|chs|subbed/i.test(text),
-    hd: /\bHD\b|1080|720p|2160|4K|4k/i.test(text),
+    cnsub: /字幕|中字|中文|cnsub|chs|subbed|[-_.]C(?:H)?(?:[-_.]|$)/i.test(text),
+    hd: uhd || /\bHD\b|\bFHD\b|1080|720p/i.test(text),
+    uhd: uhd,
     uncensored: /破解|流出|无码|uncensored|uncen|-uc\b|leak/i.test(text),
   };
+}
+
+function magnetTitleMatchesCode(title, code) {
+  var t = String(title || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  var c = String(code || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  if (!c) return true;
+  return t.indexOf(c) !== -1;
+}
+
+function scoreSukebeiCandidate(item) {
+  var score = 0;
+  if (!item) return 0;
+  if (item.cnsub) score += 100;
+  if (item.uhd) score += 40;
+  else if (item.hd) score += 20;
+  if (item.uncensored) score += 30;
+  var gb = Number(item.size || 0) / 1024;
+  if (gb >= 0.3 && gb <= 20) score += 20;
+  if (gb > 30) score -= 40;
+  score += Math.min(Number(item.seeders || 0), 100) / 5;
+  return score;
 }
 
 function trimMagnetUri(raw) {
@@ -4882,13 +4929,128 @@ function magnetsFromReviews(reviews, code) {
         size: sizeMb,
         cnsub: flags.cnsub,
         hd: flags.hd,
+        uhd: flags.uhd,
         uncensored: flags.uncensored,
         source: "review",
+        sources: ["review"],
         magnet: entry.magnet,
       });
     });
   });
   return out;
+}
+
+/* ========================= Sukebei 磁力补充 ========================= */
+
+function parseSukebeiHtmlRows(html, code) {
+  var out = [];
+  var seen = {};
+  if (!html) return out;
+  try {
+    if (typeof Widget !== "undefined" && Widget.html && typeof Widget.html.load === "function") {
+      var $ = Widget.html.load(String(html));
+      $("tr.default, tr.success").each(function () {
+        var $row = $(this);
+        var $title = $row.find("td:nth-child(2) > a:nth-child(1)");
+        var $magnet = $row.find("td:nth-child(3) > a:last-child");
+        var sizeText = safeText($row.find("td:nth-child(4)").text());
+        var dateText = safeText($row.find("td:nth-child(5)").text());
+        var seeders = Number(safeText($row.find("td:nth-child(6)").text()).replace(/[^\d]/g, "")) || 0;
+        var title = safeText($title.attr("title") || $title.text());
+        var magnet = trimMagnetUri(String($magnet.attr("href") || ""));
+        if (!title || !/^magnet:\?/i.test(magnet)) return;
+        if (!magnetTitleMatchesCode(title, code)) return;
+        var hash = extractMagnetHash(magnet);
+        if (!hash || seen[hash]) return;
+        seen[hash] = true;
+        var flags = parseMagnetFlags(title + " " + magnet);
+        out.push({
+          hash: hash,
+          name: title,
+          size: parseMagnetSizeMb(sizeText) || parseMagnetSizeFromUri(magnet),
+          sizeText: sizeText,
+          date: dateText,
+          seeders: seeders,
+          cnsub: flags.cnsub,
+          hd: flags.hd,
+          uhd: flags.uhd,
+          uncensored: flags.uncensored,
+          source: "sukebei",
+          sources: ["sukebei"],
+          magnet: magnet,
+        });
+      });
+    }
+  } catch (eCheerio) {
+    console.warn("[javdb/sukebei] cheerio parse failed:", (eCheerio && eCheerio.message) || eCheerio);
+  }
+  if (out.length) return out;
+
+  // 兜底：正则从 HTML 抽 magnet + 邻近标题/体积
+  var src = String(html || "");
+  var re = /magnet:\?[^\s"'<>]+/gi;
+  var match;
+  while ((match = re.exec(src)) !== null) {
+    var magnet = trimMagnetUri(match[0]);
+    if (!/^magnet:\?/i.test(magnet)) continue;
+    var hash = extractMagnetHash(magnet);
+    if (!hash || seen[hash]) continue;
+    var start = Math.max(0, match.index - 400);
+    var end = Math.min(src.length, match.index + magnet.length + 200);
+    var context = src.slice(start, end).replace(/<[^>]+>/g, " ");
+    var titleGuess = safeText(
+      context
+        .replace(/magnet:\?[^\s]+/gi, " ")
+        .replace(/\s+/g, " ")
+        .slice(0, 160)
+    );
+    if (titleGuess && !magnetTitleMatchesCode(titleGuess, code) && !magnetTitleMatchesCode(context, code)) {
+      continue;
+    }
+    seen[hash] = true;
+    var flags = parseMagnetFlags(titleGuess + " " + magnet + " " + context);
+    out.push({
+      hash: hash,
+      name: titleGuess || "Sukebei " + hash.slice(0, 8),
+      size: parseMagnetSizeMb(context) || parseMagnetSizeFromUri(magnet),
+      sizeText: "",
+      date: "",
+      seeders: 0,
+      cnsub: flags.cnsub,
+      hd: flags.hd,
+      uhd: flags.uhd,
+      uncensored: flags.uncensored,
+      source: "sukebei",
+      sources: ["sukebei"],
+      magnet: magnet,
+    });
+  }
+  return out;
+}
+
+async function searchMagnetSukebei(code) {
+  code = safeText(code);
+  if (!code) return [];
+  var url = SUKEBEI_BASE + "/?f=0&c=0_0&q=" + encodeURIComponent(code);
+  try {
+    console.log("[javdb/sukebei] search:", code);
+    var resp = await Widget.http.get(url, { timeout: SUKEBEI_TIMEOUT_MS });
+    var html = resp && (resp.data || resp.body || "");
+    if (!html) {
+      console.log("[javdb/sukebei] empty response");
+      return [];
+    }
+    var list = parseSukebeiHtmlRows(html, code);
+    list.sort(function (a, b) {
+      return scoreSukebeiCandidate(b) - scoreSukebeiCandidate(a);
+    });
+    if (list.length > SUKEBEI_MAX_RESULTS) list = list.slice(0, SUKEBEI_MAX_RESULTS);
+    console.log("[javdb/sukebei] result count:", list.length);
+    return list;
+  } catch (err) {
+    console.warn("[javdb/sukebei] failed:", (err && err.message) || err);
+    return [];
+  }
 }
 
 async function fetchMovieReviews(movieId, params, options) {
@@ -4912,24 +5074,104 @@ async function fetchMovieReviews(movieId, params, options) {
   return all;
 }
 
+function collectMagnetSourceKeys(magnets) {
+  var seen = {};
+  (magnets || []).forEach(function (m) {
+    var list = Array.isArray(m && m.sources) && m.sources.length ? m.sources : [m && m.source];
+    for (var i = 0; i < list.length; i++) {
+      var key = String(list[i] || "").toLowerCase();
+      if (key === "api" || key === "javdb") seen.api = true;
+      else if (key === "review") seen.review = true;
+      else if (key === "sukebei") seen.sukebei = true;
+    }
+  });
+  return seen;
+}
+
+function summarizeMagnetSourceLabel(magnets, fallback) {
+  var seen = collectMagnetSourceKeys(magnets);
+  var labels = [];
+  if (seen.api) labels.push("JavDB官方");
+  if (seen.review) labels.push("短评");
+  if (seen.sukebei) labels.push("Sukebei");
+  if (labels.length > 1) return "mixed";
+  if (labels.length === 1) {
+    if (seen.api) return "api";
+    if (seen.review) return "review";
+    if (seen.sukebei) return "sukebei";
+  }
+  return fallback || "";
+}
+
+function formatMagnetSourceTip(source) {
+  if (source === "review") return "磁力: 见下方相似作品栏（来自短评分享），点击即可转存光鸭云盘";
+  if (source === "sukebei") return "磁力: 见下方相似作品栏（来自 Sukebei），点击即可转存光鸭云盘";
+  if (source === "mixed") return "磁力: 见下方相似作品栏（多源已合并去重），点击即可转存光鸭云盘";
+  if (source === "api") return "磁力: 见下方相似作品栏（JavDB官方），点击即可转存光鸭云盘";
+  return "磁力: 见下方相似作品栏，点击即可转存光鸭云盘";
+}
+
 async function fetchDetailMagnets(movieId, params, code) {
   var apiMagnets = [];
   var reviewMagnets = [];
+  var sukebeiMagnets = [];
   var reviews = [];
-  try {
-    var magnetData = await apiGet("/v1/movies/" + movieId + "/magnets", null, params);
-    apiMagnets = (magnetData && magnetData.magnets) || [];
-  } catch (eMag) {}
-  try {
-    reviews = await fetchMovieReviews(movieId, params, { page: 1, limit: 20, maxPages: 5 });
-    reviewMagnets = magnetsFromReviews(reviews, code);
-  } catch (eRev) {}
-  var merged = mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code);
-  var source = "";
-  if (apiMagnets.length && reviewMagnets.length) source = "mixed";
-  else if (apiMagnets.length) source = "api";
-  else if (reviewMagnets.length) source = "review";
-  return { magnets: merged, source: source, reviews: reviews || [] };
+
+  var magnetPromise = Promise.resolve()
+    .then(function () {
+      return apiGet("/v1/movies/" + movieId + "/magnets", null, params);
+    })
+    .then(function (magnetData) {
+      return (magnetData && magnetData.magnets) || [];
+    })
+    ["catch"](function () {
+      return [];
+    });
+
+  var reviewPromise = Promise.resolve()
+    .then(function () {
+      return fetchMovieReviews(movieId, params, { page: 1, limit: 20, maxPages: 5 });
+    })
+    .then(function (list) {
+      reviews = list || [];
+      return magnetsFromReviews(reviews, code);
+    })
+    ["catch"](function () {
+      return [];
+    });
+
+  var sukebeiPromise = code
+    ? searchMagnetSukebei(code)
+    : Promise.resolve([]);
+
+  var settled = await Promise.all([magnetPromise, reviewPromise, sukebeiPromise]);
+  apiMagnets = settled[0] || [];
+  reviewMagnets = settled[1] || [];
+  sukebeiMagnets = settled[2] || [];
+
+  var merged = mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code, sukebeiMagnets);
+  var source = summarizeMagnetSourceLabel(merged, "");
+  if (!source) {
+    var hit = 0;
+    if (apiMagnets.length) hit++;
+    if (reviewMagnets.length) hit++;
+    if (sukebeiMagnets.length) hit++;
+    if (hit > 1) source = "mixed";
+    else if (apiMagnets.length) source = "api";
+    else if (reviewMagnets.length) source = "review";
+    else if (sukebeiMagnets.length) source = "sukebei";
+  }
+  return {
+    magnets: merged,
+    source: source,
+    reviews: reviews || [],
+    counts: {
+      api: apiMagnets.length,
+      review: reviewMagnets.length,
+      sukebei: sukebeiMagnets.length,
+      merged: merged.length,
+    },
+  };
 }
 
 /** 短评写入详情简介（对齐可视化：按点赞排序取前 15） */
@@ -4951,25 +5193,67 @@ function formatDetailReviewsForDescription(reviews) {
   return parts.length > 1 ? parts.join("\n\n") : "";
 }
 
+function normalizeMagnetSourceKey(source) {
+  var key = String(source || "api").toLowerCase();
+  if (key === "javdb") return "api";
+  if (key === "api" || key === "review" || key === "sukebei" || key === "mixed") return key;
+  return "api";
+}
+
+function magnetSourceLabel(m) {
+  var keys = [];
+  var raw = Array.isArray(m && m.sources) && m.sources.length ? m.sources : [m && m.source];
+  for (var i = 0; i < raw.length; i++) {
+    var key = normalizeMagnetSourceKey(raw[i]);
+    if (key === "mixed") continue;
+    if (keys.indexOf(key) === -1) keys.push(key);
+  }
+  if (!keys.length) keys.push("api");
+  var labels = keys.map(function (key) {
+    if (key === "review") return "短评";
+    if (key === "sukebei") return "Sukebei";
+    return "JavDB官方";
+  });
+  return labels.join("＋");
+}
+
+function magnetSourceShort(m) {
+  var label = magnetSourceLabel(m);
+  if (label.indexOf("＋") >= 0) return "多源";
+  if (label === "JavDB官方") return "JavDB";
+  return label;
+}
+
 function normalizeMagnetEntry(raw, code, source) {
   raw = raw || {};
-  var magnet = raw.magnet || (raw.hash ? buildMagnetUrl(raw.hash) : "");
+  var magnet = raw.magnet || raw.maglink || (raw.hash ? buildMagnetUrl(raw.hash) : "");
   var hash = String(raw.hash || extractMagnetHash(magnet) || "").trim().toLowerCase();
   if (!hash) return null;
   var name = safeText(raw.name || raw.title || hash);
-  var text = name + " " + safeText(raw.description || "");
+  var text = name + " " + safeText(raw.description || "") + " " + safeText(raw.sizeText || "");
   var flags = parseMagnetFlags(text + " " + magnet);
   var sizeMb = Number(raw.size || 0);
   if (!Number.isFinite(sizeMb) || sizeMb <= 0) sizeMb = parseMagnetSizeFromUri(magnet);
   if (!sizeMb) sizeMb = parseMagnetSizeMb(text);
+  var src = normalizeMagnetSourceKey(source || raw.source || "api");
+  var sources = Array.isArray(raw.sources) && raw.sources.length
+    ? raw.sources.map(normalizeMagnetSourceKey)
+    : [src];
+  if (sources.indexOf(src) === -1) sources.push(src);
   return {
     hash: hash,
     name: name,
     size: sizeMb,
+    sizeText: safeText(raw.sizeText || ""),
+    date: safeText(raw.date || raw.release_date || ""),
+    seeders: Number(raw.seeders || 0) || 0,
+    files_count: Number(raw.files_count || raw.files || 0) || 0,
     cnsub: !!(raw.cnsub || flags.cnsub),
-    hd: !!(raw.hd || flags.hd),
+    hd: !!(raw.hd || flags.hd || raw.uhd || flags.uhd),
+    uhd: !!(raw.uhd || flags.uhd),
     uncensored: !!(raw.uncensored || flags.uncensored),
-    source: source || raw.source || "api",
+    source: src,
+    sources: sources,
     magnet: magnet || buildMagnetUrl(hash),
   };
 }
@@ -4978,7 +5262,9 @@ function magnetTagScore(m) {
   var score = 0;
   if (m && m.uncensored) score += 1000;
   if (m && m.cnsub) score += 100;
-  if (m && m.hd) score += 10;
+  if (m && m.uhd) score += 30;
+  else if (m && m.hd) score += 10;
+  score += Math.min(Number(m && m.seeders || 0), 80) / 10;
   return score;
 }
 
@@ -4996,24 +5282,58 @@ function magnetGbBucket(sizeMb) {
   return String(Math.floor(gb));
 }
 
+function mergeMagnetCandidateMeta(preferred, other) {
+  if (!preferred) return other;
+  if (!other) return preferred;
+  var sources = [];
+  var seen = {};
+  []
+    .concat(preferred.sources || [preferred.source], other.sources || [other.source])
+    .forEach(function (key) {
+      key = normalizeMagnetSourceKey(key);
+      if (!seen[key]) {
+        seen[key] = true;
+        sources.push(key);
+      }
+    });
+  preferred.sources = sources;
+  preferred.source = sources.length > 1 ? "mixed" : sources[0] || preferred.source;
+  if (!preferred.name || preferred.name === preferred.hash) preferred.name = other.name || preferred.name;
+  if (!(Number(preferred.size) > 0) && Number(other.size) > 0) preferred.size = other.size;
+  if (!preferred.sizeText && other.sizeText) preferred.sizeText = other.sizeText;
+  if (!preferred.date && other.date) preferred.date = other.date;
+  if (!(Number(preferred.seeders) > 0) && Number(other.seeders) > 0) preferred.seeders = other.seeders;
+  if (!(Number(preferred.files_count) > 0) && Number(other.files_count) > 0) {
+    preferred.files_count = other.files_count;
+  }
+  preferred.cnsub = !!(preferred.cnsub || other.cnsub);
+  preferred.hd = !!(preferred.hd || other.hd || preferred.uhd || other.uhd);
+  preferred.uhd = !!(preferred.uhd || other.uhd);
+  preferred.uncensored = !!(preferred.uncensored || other.uncensored);
+  if ((!preferred.magnet || preferred.magnet.length < 20) && other.magnet) preferred.magnet = other.magnet;
+  return preferred;
+}
+
 function pickBetterMagnet(current, candidate) {
   if (!current) return candidate;
   if (!candidate) return current;
-  return compareMagnetPriority(candidate, current) > 0 ? candidate : current;
+  var better = compareMagnetPriority(candidate, current) > 0 ? candidate : current;
+  var other = better === candidate ? current : candidate;
+  return mergeMagnetCandidateMeta(better, other);
 }
 
-function mergeMagnetLists(apiMagnets, reviewMagnets, code) {
+function mergeMagnetLists(apiMagnets, reviewMagnets, code, sukebeiMagnets) {
   var map = {};
-  (apiMagnets || []).forEach(function (raw) {
-    var item = normalizeMagnetEntry(raw, code, "api");
-    if (!item) return;
-    map[item.hash] = pickBetterMagnet(map[item.hash], item);
-  });
-  (reviewMagnets || []).forEach(function (raw) {
-    var item = normalizeMagnetEntry(raw, code, "review");
-    if (!item) return;
-    map[item.hash] = pickBetterMagnet(map[item.hash], item);
-  });
+  function ingest(list, source) {
+    (list || []).forEach(function (raw) {
+      var item = normalizeMagnetEntry(raw, code, source);
+      if (!item) return;
+      map[item.hash] = pickBetterMagnet(map[item.hash], item);
+    });
+  }
+  ingest(apiMagnets, "api");
+  ingest(reviewMagnets, "review");
+  ingest(sukebeiMagnets, "sukebei");
   return Object.keys(map).map(function (hash) {
     return map[hash];
   });
@@ -5034,25 +5354,63 @@ function dedupeMagnetsByGbBucket(magnets) {
     });
 }
 
-function mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code) {
-  var merged = mergeMagnetLists(apiMagnets, reviewMagnets, code);
+function mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code, sukebeiMagnets) {
+  var merged = mergeMagnetLists(apiMagnets, reviewMagnets, code, sukebeiMagnets);
   return dedupeMagnetsByGbBucket(merged);
 }
 
-function buildMagnetItemTitle(m, code) {
+function buildMagnetTraitFlags(m) {
   var flags = [];
-  if (m.uncensored) flags.push("破解");
-  if (m.cnsub) flags.push("中字");
-  if (m.hd) flags.push("HD");
-  var size = formatMagnetSize(m.size);
+  if (m && m.uncensored) flags.push("破解");
+  if (m && m.cnsub) flags.push("中字");
+  if (m && m.uhd) flags.push("4K");
+  else if (m && m.hd) flags.push("HD");
+  return flags;
+}
+
+function buildMagnetItemTitle(m, code) {
+  var flags = buildMagnetTraitFlags(m);
+  var size = formatMagnetSize(m.size) || safeText(m.sizeText || "");
   var parts = [];
   if (size) parts.push(size);
   if (flags.length) parts.push(flags.join("/"));
+  var src = magnetSourceShort(m);
+  if (src) parts.push(src);
   if (!parts.length) {
     var fallback = stripCodeFromMagnetName(safeText(m.name || m.hash || "磁力"), code);
     if (fallback) parts.push(fallback);
   }
   return parts.join(" · ") || "磁力";
+}
+
+function buildMagnetItemDescription(m, code) {
+  var lines = [];
+  var displayName = stripCodeFromMagnetName(safeText(m.name || ""), code);
+  if (displayName && displayName.toUpperCase() !== safeText(code).toUpperCase()) {
+    lines.push(displayName);
+  } else if (safeText(m.name || "") && safeText(m.name) !== m.hash) {
+    lines.push(safeText(m.name));
+  }
+
+  var meta = [];
+  var size = formatMagnetSize(m.size) || safeText(m.sizeText || "");
+  if (size) meta.push("体积 " + size);
+  if (Number(m.files_count) > 0) meta.push(Number(m.files_count) + " 个文件");
+  if (Number(m.seeders) > 0) meta.push("做种 " + Number(m.seeders));
+  if (safeText(m.date || "")) meta.push(safeText(m.date));
+  if (meta.length) lines.push(meta.join(" · "));
+
+  var traits = [];
+  if (m.uncensored) traits.push("破解/无码");
+  if (m.cnsub) traits.push("中文字幕");
+  if (m.uhd) traits.push("4K/UHD");
+  else if (m.hd) traits.push("高清");
+  if (traits.length) lines.push("特征: " + traits.join(" · "));
+
+  lines.push("来源: " + magnetSourceLabel(m));
+  if (m.hash) lines.push("Hash: " + String(m.hash).slice(0, 8) + "…");
+  lines.push("点击转存到光鸭云盘");
+  return lines.join("\n");
 }
 
 function buildMagnetRelatedItems(magnets, ctx) {
@@ -5063,26 +5421,34 @@ function buildMagnetRelatedItems(magnets, ctx) {
     var m = list[i];
     var hash = String(m.hash || "").trim().toLowerCase();
     if (!hash) continue;
-    var displayName = stripCodeFromMagnetName(safeText(m.name || hash), ctx.code);
     cacheMagnetEntry(hash, {
       magnet: m.magnet || buildMagnetUrl(hash),
       hash: hash,
       name: safeText(m.name || hash),
       size: m.size || 0,
+      sizeText: m.sizeText || "",
+      date: m.date || "",
+      seeders: m.seeders || 0,
+      files_count: m.files_count || 0,
+      cnsub: !!m.cnsub,
+      hd: !!m.hd,
+      uhd: !!m.uhd,
+      uncensored: !!m.uncensored,
       movieId: ctx.movieId || "",
       code: ctx.code || "",
       title: ctx.title || "",
       backdropPath: ctx.backdropPath || "",
       source: m.source || "api",
+      sources: Array.isArray(m.sources) ? m.sources.slice() : [m.source || "api"],
     });
     items.push({
       id: hash,
       type: "url",
-      mediaType: "movie",
+      // 不设 mediaType:movie，避免被当成可播线路/按需解析占位
       title: buildMagnetItemTitle(m, ctx.code),
       link: MAGNET_LINK_PREFIX + hash,
       backdropPath: ctx.backdropPath || undefined,
-      description: displayName ? displayName + "\n点击转存到光鸭云盘" : "点击转存到光鸭云盘",
+      description: buildMagnetItemDescription(m, ctx.code),
     });
   }
   return items;
@@ -6099,11 +6465,14 @@ function loadDmmProbeFromStorage(code) {
     var ttl = entry.ok ? DMM_PROBE_STORAGE_TTL_OK_MS : DMM_PROBE_STORAGE_TTL_FAIL_MS;
     if (Date.now() - Number(entry.savedAt) > ttl) return undefined;
     if (!entry.ok) return null;
-    return {
-      contentId: String(entry.contentId || ""),
-      posterUrl: String(entry.posterUrl || ""),
-      backdropUrl: String(entry.backdropUrl || ""),
-    };
+    var probe = normalizeProbeBest({
+      contentId: entry.contentId || "",
+      posterUrl: entry.posterUrl || "",
+      backdropUrl: entry.backdropUrl || "",
+    });
+    // 旧缓存可能存了空 URL 的“成功”结果，当作未命中重新探测
+    if (!probe) return undefined;
+    return probe;
   } catch (err) {
     return undefined;
   }
@@ -6141,12 +6510,10 @@ function getDmmProbeWorkerHeaders(params) {
 
 function normalizeProbeBest(best) {
   if (!best || typeof best !== "object") return null;
-  var posterUrl = String(best.posterUrl || "").trim();
-  var backdropUrl = String(best.backdropUrl || "").trim();
-  if (posterUrl && (isInvalidCoverTarget(posterUrl) || isLowResDmmPosterUrl(posterUrl))) {
-    posterUrl = "";
-  }
-  if (backdropUrl && isInvalidCoverTarget(backdropUrl)) backdropUrl = "";
+  var posterUrl = sanitizeCoverUrl(best.posterUrl || "");
+  var backdropUrl = sanitizeCoverUrl(best.backdropUrl || "");
+  if (posterUrl && isLowResDmmPosterUrl(posterUrl)) posterUrl = "";
+  if (!posterUrl && !backdropUrl) return null;
   return {
     contentId: String(best.contentId || ""),
     posterUrl: posterUrl,
@@ -6365,11 +6732,19 @@ async function prefetchDmmProbeCovers(codes, params) {
 }
 
 function isInvalidCoverTarget(url) {
-  var u = String(url || "").toLowerCase();
+  var u = String(url || "")
+    .toLowerCase()
+    .trim();
   if (!u) return true;
+  if (/^data:/i.test(u)) return true;
   if (u.indexOf("now_printing") >= 0) return true;
   if (u.indexOf("noimage") >= 0) return true;
+  if (u.indexOf("no_image") >= 0) return true;
+  if (u.indexOf("no-image") >= 0) return true;
+  if (u.indexOf("placeholder") >= 0) return true;
+  if (u.indexOf("blank") >= 0) return true;
   if (/adult_pl\.jpg(\?|$)/i.test(u)) return true;
+  if (/(?:^|[\/_-])(?:pixel|spacer|transparent)(?:[\/_.-]|$)/i.test(u)) return true;
   return false;
 }
 
@@ -6382,10 +6757,43 @@ function isLowResDmmPosterUrl(url) {
   return false;
 }
 
+var JAVDB_CDN_BASE = "https://tp.cmastd.com/rhe951l4q";
+
+function isJdbstaticUrl(url) {
+  return /jdbstatic\.com/i.test(String(url || ""));
+}
+
+/** jdbstatic 常返回空白图；统一改写到 cmastd CDN */
+function normalizeJavdbCdnUrl(url) {
+  var u = String(url || "").trim();
+  if (!u) return "";
+  u = u.replace(/^https?:\/\/(?:c\d+\.)?jdbstatic\.com/i, JAVDB_CDN_BASE);
+  u = u.replace(/^https?:\/\/tp-iu\.cmastd\.com\/rhe951l4q/i, JAVDB_CDN_BASE);
+  return u;
+}
+
+function buildJavdbCdnCoverUrl(movieId) {
+  var id = String(movieId || "").trim();
+  if (!id || id.length < 2) return "";
+  return JAVDB_CDN_BASE + "/covers/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+}
+
+function buildJavdbCdnThumbUrl(movieId) {
+  var id = String(movieId || "").trim();
+  if (!id || id.length < 2) return "";
+  return JAVDB_CDN_BASE + "/thumbs/" + id.slice(0, 2).toLowerCase() + "/" + id + ".jpg";
+}
+
+function sanitizeCoverUrl(url) {
+  var u = normalizeJavdbCdnUrl(url);
+  if (!u || isInvalidCoverTarget(u)) return "";
+  return u;
+}
+
 function buildDetailTrailers(previewUrl, cover) {
   var url = String(previewUrl || "").trim();
   if (!url) return [];
-  var tc = String(cover || "").trim();
+  var tc = sanitizeCoverUrl(cover) || String(cover || "").trim();
   return [
     {
       coverUrl: tc || undefined,
@@ -6399,19 +6807,22 @@ function buildDetailTrailers(previewUrl, cover) {
 
 /* ----- list cover resolve ----- */
 function resolveListCoverUrl(code, siteFallback, dmmProbe, field) {
-  var fallback = String(siteFallback || "").trim();
+  var fallback = sanitizeCoverUrl(siteFallback);
   if (!code) return fallback;
   var probe = dmmProbe !== undefined ? dmmProbe : getCachedDmmProbeCover(code);
   if (!probe) return fallback;
-  var url = String(field === "poster" ? probe.posterUrl : probe.backdropUrl || "").trim();
-  if (!url || isInvalidCoverTarget(url)) return fallback;
+  var url = sanitizeCoverUrl(field === "poster" ? probe.posterUrl : probe.backdropUrl || "");
+  if (!url) return fallback;
   if (field === "poster" && isLowResDmmPosterUrl(url)) return fallback;
   return url;
 }
 
 function buildListCoverBundle(code, siteFallback, dmmProbe) {
-  var fallback = String(siteFallback || "").trim();
+  var fallback = sanitizeCoverUrl(siteFallback);
   var probe = dmmProbe !== undefined ? dmmProbe : code ? getCachedDmmProbeCover(code) : null;
+  if (probe && !sanitizeCoverUrl(probe.posterUrl) && !sanitizeCoverUrl(probe.backdropUrl)) {
+    probe = null;
+  }
   var hdPoster = resolveListCoverUrl(code, fallback, probe, "poster") || fallback || "";
   var hdBackdrop = resolveListCoverUrl(code, fallback, probe, "backdrop") || fallback || "";
   return {
@@ -6636,27 +7047,25 @@ async function loadDetail(link, params) {
     var title = safeText(movie.title || code || movieId);
     if (code && title.indexOf(code) !== 0) title = code + " " + title;
 
-    // 顶图仅用列表阶段 DMM 探测缓存；无高清则不赋值，不做站点图兜底
+    // 优先 DMM 高清；没有则回退站点/CDN 封面，避免空白占位
     var dmmProbe = code ? getCachedDmmProbeCover(code) : null;
+    var siteCover = pickCover(movie);
     var posterUrl = "";
     var coverUrl = "";
     if (dmmProbe) {
-      var probePoster = String(dmmProbe.posterUrl || "").trim();
-      var probeBackdrop = String(dmmProbe.backdropUrl || "").trim();
-      if (probePoster && !isInvalidCoverTarget(probePoster) && !isLowResDmmPosterUrl(probePoster)) {
-        posterUrl = probePoster;
-      }
-      if (probeBackdrop && !isInvalidCoverTarget(probeBackdrop)) {
-        coverUrl = probeBackdrop;
-      }
+      var probePoster = sanitizeCoverUrl(dmmProbe.posterUrl || "");
+      var probeBackdrop = sanitizeCoverUrl(dmmProbe.backdropUrl || "");
+      if (probePoster && !isLowResDmmPosterUrl(probePoster)) posterUrl = probePoster;
+      if (probeBackdrop) coverUrl = probeBackdrop;
     }
+    if (!coverUrl && siteCover) coverUrl = siteCover;
+    if (!posterUrl && siteCover) posterUrl = siteCover;
 
     var galleryUrls = [];
     (movie.preview_images || []).forEach(function (img) {
-      var u = safeText((img && (img.large_url || img.thumb_url)) || "");
+      var u = sanitizeCoverUrl((img && (img.large_url || img.thumb_url)) || "");
       if (u) galleryUrls.push(u);
     });
-    // 顶图有 DMM 高清才放首位；无高清不拿站点封面顶上
     var backdropPaths = compactUniqueUrls(
       [].concat(coverUrl ? [coverUrl] : [], galleryUrls || [])
     ).filter(Boolean);
@@ -6696,13 +7105,7 @@ async function loadDetail(link, params) {
     var shortReviewBlock = formatDetailReviewsForDescription(detailReviews);
     if (shortReviewBlock) descParts.push(shortReviewBlock);
     if (relatedItems.length) {
-      descParts.push(
-        magnetSource === "review"
-          ? "磁力: 见下方相似作品栏（来自短评分享），点击即可转存光鸭云盘"
-          : magnetSource === "mixed"
-            ? "磁力: 见下方相似作品栏（官方+短评已合并去重），点击即可转存光鸭云盘"
-            : "磁力: 见下方相似作品栏，点击即可转存光鸭云盘"
-      );
+      descParts.push(formatMagnetSourceTip(magnetSource));
     } else if (resolveGuangyaTokenSync()) {
       descParts.push("磁力: 暂无可用磁链");
     }
@@ -6720,10 +7123,14 @@ async function loadDetail(link, params) {
       genreItems: meta.genreItems,
       peoples: meta.peoples,
       description: descParts.join("\n\n"),
-      // 预告片只走底部 trailers 模块，不进入播放资源
+      // 预告只走底部 trailers；不写 videoUrl/previewUrl，并关闭播放资源占位
       trailers: trailers,
-      previewUrl: previewUrl || "",
       videoId: movie.id || movieId,
+      extra: {
+        videoMode: "none",
+        previewVideoUrl: previewUrl || "",
+        fullVideoAvailable: false,
+      },
     };
     if (relatedItems.length) item.relatedItems = relatedItems;
     if (coverUrl) {
@@ -6784,6 +7191,9 @@ if (typeof module !== "undefined" && module.exports) {
     mapCategoryEntity: mapCategoryEntity,
     fetchDetailMagnets: fetchDetailMagnets,
     mergeAndDedupeMagnets: mergeAndDedupeMagnets,
+    searchMagnetSukebei: searchMagnetSukebei,
+    buildMagnetItemDescription: buildMagnetItemDescription,
+    formatMagnetSourceTip: formatMagnetSourceTip,
     dedupeMagnetsByGbBucket: dedupeMagnetsByGbBucket,
     compareMagnetPriority: compareMagnetPriority,
     gyFilterResolvedFiles: gyFilterResolvedFiles,
@@ -14897,16 +15307,10 @@ function mapStaticRankingEntry(entry, extraDesc) {
   var javdbId = safeText(entry.javdbId || "");
   var titleBase = safeText(entry.originalTitle || entry.title || code);
   var title = code && titleBase.indexOf(code) !== 0 ? code + " " + titleBase : titleBase || code;
-  var siteCover = "";
-  if (javdbId) {
-    siteCover =
-      "https://tp.cmastd.com/rhe951l4q/covers/" +
-      javdbId.substring(0, 2).toLowerCase() +
-      "/" +
-      javdbId +
-      ".jpg";
-  }
+  var siteCover = sanitizeCoverUrl(buildJavdbCdnCoverUrl(javdbId));
   var covers = buildListCoverBundle(code, siteCover, code ? lookupDmmProbeCover(code) : null);
+  var backdrop = sanitizeCoverUrl(covers.backdropPath) || siteCover || "";
+  var poster = sanitizeCoverUrl(covers.posterPath) || siteCover || "";
   var desc = [];
   if (entry.rank) desc.push("排名: " + entry.rank);
   if (entry.actress) desc.push("演员: " + entry.actress);
@@ -14919,11 +15323,11 @@ function mapStaticRankingEntry(entry, extraDesc) {
     link: movieLink(javdbId || code),
     releaseDate: entry.releaseDate || "",
     description: desc.join(" | "),
-    posterPath: covers.posterPath || undefined,
-    backdropPath: covers.backdropPath || siteCover || undefined,
-    detailPoster: covers.detailPoster || undefined,
-    coverUrl: covers.coverUrl || covers.backdropPath || siteCover || undefined,
-    image: covers.image || covers.backdropPath || siteCover || undefined,
+    posterPath: poster || undefined,
+    backdropPath: backdrop || undefined,
+    detailPoster: sanitizeCoverUrl(covers.detailPoster) || poster || undefined,
+    coverUrl: sanitizeCoverUrl(covers.coverUrl) || backdrop || undefined,
+    image: sanitizeCoverUrl(covers.image) || backdrop || undefined,
     videoId: javdbId || code,
   };
 }

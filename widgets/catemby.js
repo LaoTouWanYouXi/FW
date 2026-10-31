@@ -1548,12 +1548,42 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "catemby_legacy",
   title: "Catemby遗产",
-  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合",
+  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(API/短评/Sukebei)一键转存光鸭",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.7.3",
+  version: "1.9.1",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
+  globalParams: [
+    {
+      name: "guangya_token",
+      title: "光鸭 refresh_token",
+      type: "input",
+      description: "gy.- 开头；填写后详情页磁力栏点击可直转光鸭",
+      value: "",
+    },
+    {
+      name: "guangya_parent_id",
+      title: "光鸭保存目录 ID",
+      type: "input",
+      description: "留空保存到根目录",
+      value: "",
+    },
+    {
+      name: "magnet_min_video_mb",
+      title: "最小保留视频 MB",
+      type: "input",
+      description: "0=仅按相对体积判断小广告片",
+      value: "0",
+    },
+    {
+      name: "magnet_block_patterns",
+      title: "拦截正则（可选）",
+      type: "input",
+      description: "分号分隔；留空用内置规则",
+      value: "",
+    },
+  ],
   modules: [
     {
       id: "latest",
@@ -2136,7 +2166,7 @@ const DMM_PROBE_WORKER_CACHE = {};
 const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
 const DMM_PROBE_BATCH_SIZE = 20;
 const DMM_PROBE_BATCH_TIMEOUT_MS = 60000;
-const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v1.";
+const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v2.";
 const DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
 const DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
 const DMM_CONTENT_ID_OVERRIDES = {};
@@ -3370,12 +3400,13 @@ function mapListMovie(movie, params) {
 
 function buildListDescription(movie) {
   const parts = [];
-  if (movie.number) parts.push("番号: " + movie.number);
-  if (movie.can_play) parts.push("可播放");
-  if (movie.has_preview_video) parts.push("预告");
-  if (movie.has_cnsub) parts.push("中文字幕");
-  if ((movie.magnets_count || 0) > 0) parts.push("磁链");
-  return parts.join(" | ");
+  if (movie.release_date) parts.push(String(movie.release_date).slice(0, 10));
+  if (movie.score) parts.push(Number(movie.score).toFixed(1) + "分");
+  if (movie.can_play) parts.push("可播");
+  if (movie.has_cnsub) parts.push("中字");
+  if ((movie.magnets_count || 0) > 0) parts.push("磁链×" + movie.magnets_count);
+  else if (movie.has_preview_video) parts.push("预告");
+  return parts.join(" · ");
 }
 
 function mapRelatedMovie(item, fallbackCover) {
@@ -3385,16 +3416,22 @@ function mapRelatedMovie(item, fallbackCover) {
     buildCatembyCdnCoverUrl(item.id) ||
     fallbackCover ||
     "";
-  const code = safeText(item.number || item.id);
-  const title = safeText(item.title || code);
+  const code = safeText(item.number || "");
+  const title = safeText(item.title || code || item.id);
+  const displayTitle = code
+    ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "")
+    : title;
+  const meta = [];
+  if (item.release_date) meta.push(String(item.release_date).slice(0, 10));
+  if (item.score) meta.push(Number(item.score).toFixed(1) + "分");
   return {
     id: code || item.id,
     type: "url",
     mediaType: "movie",
-    title: code || title,
+    title: safeText(displayTitle),
     backdropPath: cover || undefined,
     link: movieLink(item.id),
-    description: code ? "番号: " + code : undefined,
+    description: meta.length ? meta.join(" · ") : undefined,
     videoId: item.id,
   };
 }
@@ -3671,62 +3708,2369 @@ async function searchGlobal(params) {
   return searchMovies(params);
 }
 
-async function loadDetail(link) {
+
+/* ========================= Guangya storage / params ========================= */
+
+var GUANGYA_TOKEN_ALIASES = [
+  "guangya_token",
+  "GUANGYA_REFRESH_TOKEN",
+  "guangya_refresh_token",
+  "guangyaRefreshToken",
+  "refresh_token",
+];
+var GUANGYA_PARENT_ALIASES = [
+  "guangya_parent_id",
+  "GUANGYA_PARENT_ID",
+  "guangyaParentId",
+];
+var CATEMBY_GY_GLOBAL_KEYS = [
+  "guangya_token",
+  "guangya_parent_id",
+  "magnet_min_video_mb",
+  "magnet_block_patterns",
+];
+
+function normalizeStoreValue(val) {
+  if (val === undefined || val === null) return "";
+  if (typeof val === "string") return val.trim();
+  if (typeof val === "number" || typeof val === "boolean") return String(val).trim();
+  if (typeof val === "object") {
+    if (typeof val.value === "string" && val.value.trim()) return val.value.trim();
+    if (typeof val.token === "string" && val.token.trim()) return val.token.trim();
+    if (typeof val.refresh_token === "string" && val.refresh_token.trim()) return val.refresh_token.trim();
+    if (typeof val.access_token === "string" && val.access_token.trim()) return val.access_token.trim();
+    if (typeof val.then === "function") return "";
+  }
+  return "";
+}
+
+function scanGyRefreshToken(text) {
+  var m = String(text || "").match(/gy\.[A-Za-z0-9_\-\.~+/=]{8,}/);
+  return m ? m[0] : "";
+}
+
+function isPromiseLike(val) {
+  return !!(val && typeof val === "object" && typeof val.then === "function");
+}
+
+async function unwrapStoreValue(val) {
+  if (isPromiseLike(val)) {
+    try {
+      val = await val;
+    } catch (e) {
+      return "";
+    }
+  }
+  return normalizeStoreValue(val);
+}
+
+function readStore(key) {
+  try {
+    return normalizeStoreValue(Widget.storage.get(key));
+  } catch (e) {
+    return "";
+  }
+}
+
+async function readStoreAsync(key) {
+  try {
+    return await unwrapStoreValue(Widget.storage.get(key));
+  } catch (e) {
+    return "";
+  }
+}
+
+function readStorageRaw(key) {
+  try {
+    var val = Widget.storage.get(key);
+    if (isPromiseLike(val)) return null;
+    return val;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function readStorageRawAsync(key) {
+  try {
+    var val = Widget.storage.get(key);
+    if (isPromiseLike(val)) val = await val;
+    return val;
+  } catch (e) {
+    return null;
+  }
+}
+
+function coerceGlobalParamsBlob(raw) {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+  if (typeof raw === "object" && !isPromiseLike(raw)) return raw;
+  return null;
+}
+
+function writeStore(key, value) {
+  try {
+    Widget.storage.set(key, value);
+  } catch (e) {}
+}
+
+async function writeStoreAsync(key, value) {
+  try {
+    var ret = Widget.storage.set(key, value);
+    if (isPromiseLike(ret)) await ret;
+  } catch (e) {}
+}
+
+function globalParamStorageKeys(name) {
+  var widgetId = WidgetMetadata && WidgetMetadata.id ? String(WidgetMetadata.id) : "catemby_legacy";
+  return [
+    "catemby.global." + name,
+    "javdb.global." + name,
+    widgetId + ".global." + name,
+    widgetId + ".globalParams." + name,
+    "forward.javdb.global." + name,
+    "global." + name,
+    name,
+  ];
+}
+
+function pickParamFromObject(obj, aliases) {
+  if (!obj || typeof obj !== "object" || isPromiseLike(obj)) return "";
+  if (Array.isArray(obj)) {
+    for (var a = 0; a < aliases.length; a++) {
+      var want = String(aliases[a] || "");
+      if (!want) continue;
+      for (var i = 0; i < obj.length; i++) {
+        var item = obj[i];
+        if (!item || typeof item !== "object") continue;
+        var itemName = String(item.name || item.key || item.id || "").trim();
+        if (itemName !== want) continue;
+        var fromItem = normalizeStoreValue(
+          item.value !== undefined ? item.value : item.val !== undefined ? item.val : item.data
+        );
+        if (fromItem) return fromItem;
+      }
+    }
+    return "";
+  }
+  for (var j = 0; j < aliases.length; j++) {
+    var key = aliases[j];
+    if (obj[key] === undefined || obj[key] === null) continue;
+    var val = normalizeStoreValue(obj[key]);
+    if (val) return val;
+  }
+  return "";
+}
+
+function forwardGlobalParamsBlobKeys() {
+  var widgetId = WidgetMetadata && WidgetMetadata.id ? String(WidgetMetadata.id) : "catemby_legacy";
+  return [
+    widgetId + ".globalParams",
+    "forward.javdb.globalParams",
+    widgetId + ".global",
+    "javdb.globalParams",
+    "catemby.globalParams",
+    "globalParams",
+  ];
+}
+
+function readForwardGlobalParamsBlobValue(name, aliases) {
+  aliases = aliases || [name];
+  var blobKeys = forwardGlobalParamsBlobKeys();
+  for (var i = 0; i < blobKeys.length; i++) {
+    try {
+      var blob = coerceGlobalParamsBlob(readStorageRaw(blobKeys[i]));
+      if (!blob) blob = coerceGlobalParamsBlob(readStore(blobKeys[i]));
+      if (!blob) continue;
+      var val = pickParamFromObject(blob, aliases);
+      if (val) return val;
+    } catch (e2) {}
+  }
+  return "";
+}
+
+async function readForwardGlobalParamsBlobValueAsync(name, aliases) {
+  aliases = aliases || [name];
+  var blobKeys = forwardGlobalParamsBlobKeys();
+  for (var i = 0; i < blobKeys.length; i++) {
+    try {
+      var blob = coerceGlobalParamsBlob(await readStorageRawAsync(blobKeys[i]));
+      if (!blob) blob = coerceGlobalParamsBlob(await readStoreAsync(blobKeys[i]));
+      if (!blob) continue;
+      var val = pickParamFromObject(blob, aliases);
+      if (val) return val;
+    } catch (e2) {}
+  }
+  return "";
+}
+
+function pickParamAliases(params, aliases) {
+  params = params || {};
+  var direct = pickParamFromObject(params, aliases);
+  if (direct) return direct;
+  direct = pickParamFromObject(params.global, aliases);
+  if (direct) return direct;
+  direct = pickParamFromObject(params.globalParams, aliases);
+  if (direct) return direct;
+  return "";
+}
+
+function readWidgetGlobalParamsValue(name, aliases) {
+  aliases = aliases || [name];
+  try {
+    if (typeof Widget.getGlobalParams === "function") {
+      var all = Widget.getGlobalParams();
+      if (!isPromiseLike(all)) {
+        var val = pickParamFromObject(all, aliases);
+        if (val) return val;
+      }
+    }
+    if (Widget.globalParams && !isPromiseLike(Widget.globalParams)) {
+      var gpVal = pickParamFromObject(Widget.globalParams, aliases);
+      if (gpVal) return gpVal;
+    }
+  } catch (e) {}
+  return "";
+}
+
+async function readWidgetGlobalParamsValueAsync(name, aliases) {
+  aliases = aliases || [name];
+  try {
+    if (typeof Widget.getGlobalParams === "function") {
+      var all = Widget.getGlobalParams();
+      if (isPromiseLike(all)) all = await all;
+      var val = pickParamFromObject(all, aliases);
+      if (val) return val;
+    }
+    var gp = Widget.globalParams;
+    if (isPromiseLike(gp)) gp = await gp;
+    var gpVal = pickParamFromObject(gp, aliases);
+    if (gpVal) return gpVal;
+  } catch (e) {}
+  return "";
+}
+
+function collectGlobalParamStorageKeys(name, aliases) {
+  var keys = [];
+  var seen = {};
+  var names = [name];
+  for (var i = 0; i < (aliases || []).length; i++) {
+    if (aliases[i] && names.indexOf(aliases[i]) < 0) names.push(aliases[i]);
+  }
+  for (var j = 0; j < names.length; j++) {
+    var part = globalParamStorageKeys(names[j]);
+    for (var k = 0; k < part.length; k++) {
+      if (!seen[part[k]]) {
+        seen[part[k]] = true;
+        keys.push(part[k]);
+      }
+    }
+  }
+  return keys;
+}
+
+function resolveGlobalParamSync(name, params, aliases) {
+  aliases = aliases || [name];
+  var fromParams = pickParamAliases(params, aliases);
+  if (fromParams) return fromParams;
+  var fromWidget = readWidgetGlobalParamsValue(name, aliases);
+  if (fromWidget) return fromWidget;
+  var fromBlob = readForwardGlobalParamsBlobValue(name, aliases);
+  if (fromBlob) return fromBlob;
+  var keys = collectGlobalParamStorageKeys(name, aliases);
+  for (var i = 0; i < keys.length; i++) {
+    var stored = readStore(keys[i]);
+    if (stored) return stored;
+  }
+  return "";
+}
+
+async function resolveGlobalParamAsync(name, params, aliases) {
+  aliases = aliases || [name];
+  var fromParams = pickParamAliases(params, aliases);
+  if (fromParams) return fromParams;
+  var fromWidget = await readWidgetGlobalParamsValueAsync(name, aliases);
+  if (fromWidget) return fromWidget;
+  var fromBlob = await readForwardGlobalParamsBlobValueAsync(name, aliases);
+  if (fromBlob) return fromBlob;
+  var keys = collectGlobalParamStorageKeys(name, aliases);
+  for (var i = 0; i < keys.length; i++) {
+    var stored = await readStoreAsync(keys[i]);
+    if (stored) return stored;
+  }
+  return "";
+}
+
+function normalizeGuangyaToken(raw) {
+  var token = normalizeStoreValue(raw);
+  if (!token) return "";
+  var scanned = scanGyRefreshToken(token);
+  return scanned || token;
+}
+
+function resolveGuangyaTokenSync(params) {
+  params = params || {};
+  return normalizeGuangyaToken(
+    pickParamAliases(params, GUANGYA_TOKEN_ALIASES) ||
+      params.guangya_token ||
+      resolveGlobalParamSync("guangya_token", params, GUANGYA_TOKEN_ALIASES)
+  );
+}
+
+function extractGuangyaTokenFromUnknown(val) {
+  var direct = normalizeGuangyaToken(val);
+  if (direct) return direct;
+  if (typeof val === "string") return normalizeGuangyaToken(scanGyRefreshToken(val));
+  if (!val || typeof val !== "object" || isPromiseLike(val)) return "";
+  var picked = pickParamFromObject(val, GUANGYA_TOKEN_ALIASES);
+  if (picked) return normalizeGuangyaToken(picked);
+  try {
+    return normalizeGuangyaToken(scanGyRefreshToken(JSON.stringify(val)));
+  } catch (e) {
+    return "";
+  }
+}
+
+async function discoverGuangyaTokenAsync(params) {
+  params = params || {};
+  var found = normalizeGuangyaToken(
+    pickParamAliases(params, GUANGYA_TOKEN_ALIASES) || (await unwrapStoreValue(params.guangya_token))
+  );
+  if (found) return found;
+  found = extractGuangyaTokenFromUnknown(params);
+  if (found) return found;
+  found = normalizeGuangyaToken(await readWidgetGlobalParamsValueAsync("guangya_token", GUANGYA_TOKEN_ALIASES));
+  if (found) return found;
+  try {
+    if (typeof Widget.getGlobalParams === "function") {
+      var all = Widget.getGlobalParams();
+      if (isPromiseLike(all)) all = await all;
+      found = extractGuangyaTokenFromUnknown(all);
+      if (found) return found;
+    }
+    var gp = Widget.globalParams;
+    if (isPromiseLike(gp)) gp = await gp;
+    found = extractGuangyaTokenFromUnknown(gp);
+    if (found) return found;
+  } catch (e) {}
+  found = normalizeGuangyaToken(await readForwardGlobalParamsBlobValueAsync("guangya_token", GUANGYA_TOKEN_ALIASES));
+  if (found) return found;
+  var blobKeys = forwardGlobalParamsBlobKeys();
+  for (var i = 0; i < blobKeys.length; i++) {
+    found = extractGuangyaTokenFromUnknown(await readStorageRawAsync(blobKeys[i]));
+    if (found) return found;
+  }
+  var keys = collectGlobalParamStorageKeys("guangya_token", GUANGYA_TOKEN_ALIASES);
+  for (var j = 0; j < keys.length; j++) {
+    found = normalizeGuangyaToken(await readStoreAsync(keys[j]));
+    if (found) return found;
+  }
+  try {
+    var session = await readGuangyaSessionAsync();
+    if (session && session.refreshToken) return session.refreshToken;
+  } catch (e2) {}
+  return "";
+}
+
+async function resolveGuangyaTokenAsync(params) {
+  params = params || {};
+  if (isPromiseLike(params)) {
+    try {
+      params = await params;
+    } catch (e) {
+      params = {};
+    }
+  }
+  var uiToken = await discoverGuangyaTokenAsync(params);
+  if (!uiToken) {
+    params = await ensureGlobalParams(params);
+    uiToken = await discoverGuangyaTokenAsync(params);
+  }
+  var live = uiToken;
+  try {
+    live = pickLiveGuangyaRefreshToken(uiToken, await readGuangyaSessionAsync()) || uiToken;
+  } catch (e3) {}
+  if (live) {
+    params.guangya_token = live;
+    persistGlobalParam("guangya_token", live);
+    await persistGlobalParamAsync("guangya_token", live);
+  }
+  return live;
+}
+
+function persistGlobalParam(name, value) {
+  value = normalizeStoreValue(value);
+  if (!value) return;
+  writeStore("catemby.global." + name, value);
+  writeStore("javdb.global." + name, value);
+}
+
+async function persistGlobalParamAsync(name, value) {
+  value = normalizeStoreValue(value);
+  if (!value) return;
+  writeStore("catemby.global." + name, value);
+  writeStore("javdb.global." + name, value);
+  await writeStoreAsync("catemby.global." + name, value);
+  await writeStoreAsync("javdb.global." + name, value);
+}
+
+function syncParams(params) {
+  params = params || {};
+  var out = {};
+  for (var i = 0; i < CATEMBY_GY_GLOBAL_KEYS.length; i++) {
+    var key = CATEMBY_GY_GLOBAL_KEYS[i];
+    var aliases =
+      key === "guangya_token"
+        ? GUANGYA_TOKEN_ALIASES
+        : key === "guangya_parent_id"
+          ? GUANGYA_PARENT_ALIASES
+          : [key];
+    var val = params[key];
+    if (val !== undefined && val !== null && String(val).trim() !== "") {
+      var normalized = normalizeStoreValue(val);
+      if (normalized) {
+        out[key] = key === "guangya_token" ? normalizeGuangyaToken(normalized) : normalized;
+        if (key !== "guangya_token") persistGlobalParam(key, out[key]);
+      } else {
+        var storedVal = resolveGlobalParamSync(key, params, aliases);
+        if (storedVal) out[key] = storedVal;
+      }
+    } else {
+      var stored = resolveGlobalParamSync(key, params, aliases);
+      if (stored) out[key] = stored;
+    }
+  }
+  var gyToken = normalizeGuangyaToken(
+    pickParamAliases(params, GUANGYA_TOKEN_ALIASES) ||
+      out.guangya_token ||
+      resolveGlobalParamSync("guangya_token", params, GUANGYA_TOKEN_ALIASES)
+  );
+  if (gyToken) out.guangya_token = gyToken;
+  var gyParent =
+    pickParamAliases(params, GUANGYA_PARENT_ALIASES) ||
+    out.guangya_parent_id ||
+    resolveGlobalParamSync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES);
+  if (gyParent) {
+    out.guangya_parent_id = gyParent;
+    persistGlobalParam("guangya_parent_id", gyParent);
+  }
+  return Object.assign({}, params, out);
+}
+
+async function ensureGlobalParams(params) {
+  if (isPromiseLike(params)) {
+    try {
+      params = await params;
+    } catch (e) {
+      params = {};
+    }
+  }
+  params = syncParams(params || {});
+  for (var i = 0; i < CATEMBY_GY_GLOBAL_KEYS.length; i++) {
+    var key = CATEMBY_GY_GLOBAL_KEYS[i];
+    var aliases =
+      key === "guangya_token"
+        ? GUANGYA_TOKEN_ALIASES
+        : key === "guangya_parent_id"
+          ? GUANGYA_PARENT_ALIASES
+          : [key];
+    var current = await unwrapStoreValue(params[key]);
+    if (!current) current = await resolveGlobalParamAsync(key, params, aliases);
+    if (key === "guangya_token") {
+      current = normalizeGuangyaToken(current);
+      if (!current) {
+        try {
+          current = await discoverGuangyaTokenAsync(params);
+        } catch (e) {}
+      }
+      try {
+        current = pickLiveGuangyaRefreshToken(current, await readGuangyaSessionAsync()) || current;
+      } catch (e2) {}
+    }
+    if (current) {
+      params[key] = current;
+      persistGlobalParam(key, current);
+    }
+  }
+  return params;
+}
+
+function parseApiPayload(resp) {
+  if (!resp || resp.data === undefined || resp.data === null) return null;
+  if (typeof resp.data === "string") {
+    var text = resp.data.trim();
+    if (!text) return null;
+    return JSON.parse(text);
+  }
+  return resp.data;
+}
+
+function formatMagnetSize(mb) {
+  var n = Number(mb || 0);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n >= 1024) {
+    var gb = n / 1024;
+    return gb.toFixed(gb >= 10 ? 1 : 2) + " GB";
+  }
+  if (n >= 10) return Math.round(n) + " MB";
+  return (Math.round(n * 10) / 10) + " MB";
+}
+
+/* ========================= 光鸭磁力转存 ========================= */
+
+var GUANGYA_ACCOUNT_URL = "https://account.guangyapan.com";
+var GUANGYA_API_BASE = "https://api.guangyapan.com";
+var GUANGYA_SITE = "https://www.guangyapan.com";
+var GUANGYA_CLIENT_ID = "aMe-8VSlkrbQXpUR";
+var GUANGYA_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
+var MAGNET_LINK_PREFIX = "gy:";
+var MAGNET_STORE_PREFIX = "catemby.magnet.v1.";
+var GUANGYA_ACCESS_STORE = "javdb.guangya.access.v1";
+var GUANGYA_DID_STORE = "javdb.guangya.did.v1";
+var _gyTokenRefreshInflight = null;
+var GY_VIDEO_EXTS = {
+  mp4: 1,
+  mkv: 1,
+  avi: 1,
+  wmv: 1,
+  mov: 1,
+  m4v: 1,
+  ts: 1,
+  flv: 1,
+  rmvb: 1,
+  webm: 1,
+  "3gp": 1,
+};
+var GY_DEFAULT_BLOCK_PATTERNS = [
+  "广告|推广|宣传|加群|更多资源|最新地址|影视大站|草榴|91porn|91\\.tv|1024\\.org|1024la|直播|社[區区]|情[報报]|信誉|uu美少女",
+  "(?:^|[/\\\\_.\\-\\s])(?:sample|preview|trailer|预告|预览|样片|精彩花絮)(?:[/\\\\_.\\-\\s]|\\.|$)",
+  "\\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent)$",
+];
+var GY_AUTO_INDEX = 10000;
+
+function gyRandomHex(len) {
+  var out = "";
+  for (var i = 0; i < len; i++) out += ((Math.random() * 16) | 0).toString(16);
+  return out;
+}
+
+async function ensureGuangyaDeviceId() {
+  var id = String((await readStoreAsync(GUANGYA_DID_STORE)) || readStore(GUANGYA_DID_STORE) || "")
+    .trim()
+    .toLowerCase();
+  if (id) return id;
+  id = gyRandomHex(16);
+  writeStore(GUANGYA_DID_STORE, id);
+  await writeStoreAsync(GUANGYA_DID_STORE, id);
+  return id;
+}
+
+function getGuangyaConfigFromStore(params) {
+  params = syncParams(params || {});
+  var token = resolveGuangyaTokenSync(params);
+  var parentId =
+    params.guangya_parent_id ||
+    resolveGlobalParamSync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES) ||
+    "";
+  if (parentId) persistGlobalParam("guangya_parent_id", parentId);
+  return {
+    guangya_token: token,
+    guangya_parent_id: parentId,
+    magnet_filter: "1",
+    magnet_video_only: "1",
+    magnet_min_video_mb: readStore("catemby.global.magnet_min_video_mb") || readStore("javdb.global.magnet_min_video_mb") || "0",
+    magnet_block_patterns: readStore("catemby.global.magnet_block_patterns") || readStore("javdb.global.magnet_block_patterns") || "",
+  };
+}
+
+async function getGuangyaConfig(params) {
+  params = await ensureGlobalParams(params || {});
+  var token = await resolveGuangyaTokenAsync(params);
+  var parentId =
+    normalizeStoreValue(params.guangya_parent_id) ||
+    (await resolveGlobalParamAsync("guangya_parent_id", params, GUANGYA_PARENT_ALIASES));
+  if (parentId) persistGlobalParam("guangya_parent_id", parentId);
+  return {
+    guangya_token: token,
+    guangya_parent_id: parentId,
+    magnet_filter: "1",
+    magnet_video_only: "1",
+    magnet_min_video_mb:
+      (await readStoreAsync("catemby.global.magnet_min_video_mb")) || readStore("catemby.global.magnet_min_video_mb") || readStore("javdb.global.magnet_min_video_mb") || "0",
+    magnet_block_patterns:
+      (await readStoreAsync("catemby.global.magnet_block_patterns")) ||
+      readStore("catemby.global.magnet_block_patterns") || readStore("javdb.global.magnet_block_patterns") ||
+      "",
+  };
+}
+
+function buildMagnetUrl(hash) {
+  hash = String(hash || "").trim();
+  if (!hash) return "";
+  return "magnet:?xt=urn:btih:" + hash;
+}
+
+function magnetStoreKey(hash) {
+  return MAGNET_STORE_PREFIX + String(hash || "").trim().toLowerCase();
+}
+
+function cacheMagnetEntry(hash, data) {
+  hash = String(hash || "").trim().toLowerCase();
+  if (!hash) return;
+  try {
+    writeStore(magnetStoreKey(hash), JSON.stringify(Object.assign({ savedAt: Date.now() }, data || {})));
+  } catch (e) {}
+}
+
+function loadMagnetEntry(hash) {
+  hash = String(hash || "").trim().toLowerCase();
+  if (!hash) return null;
+  try {
+    var raw = readStore(magnetStoreKey(hash));
+    if (!raw) return null;
+    return typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (e) {
+    return null;
+  }
+}
+
+function stripCodeFromMagnetName(name, code) {
+  name = safeText(name);
+  code = safeText(code).toUpperCase();
+  if (!name || !code) return name;
+  var escaped = code.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  var stripped = name.replace(new RegExp("^" + escaped + "[\\s._@\\-]*", "i"), "");
+  stripped = safeText(stripped.replace(/^[@._\\-]+/, ""));
+  return stripped || name;
+}
+
+/* ========================= 短评磁力解析 ========================= */
+
+function decodeMagnetSegment(raw) {
+  try {
+    return decodeURIComponent(String(raw || "").replace(/\+/g, " "));
+  } catch (e) {
+    return String(raw || "");
+  }
+}
+
+function extractMagnetHash(magnet) {
+  var text = decodeMagnetSegment(String(magnet || ""));
+  var m = text.match(/(?:^|[?&])xt=urn:btih:([0-9a-fA-F]{40}|[0-9a-zA-Z]{32,40})/i);
+  if (m) return m[1].toLowerCase();
+  m = text.match(/btih:([0-9a-fA-F]{40}|[0-9a-zA-Z]{32,40})/i);
+  return m ? m[1].toLowerCase() : "";
+}
+
+function parseMagnetSizeMb(text) {
+  text = String(text || "");
+  var m = text.match(/(\d+(?:\.\d+)?)\s*(TB|GB|G|MB|M|KB|K)\b/i);
+  if (!m) return 0;
+  var n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  var unit = m[2].toUpperCase();
+  if (unit === "TB") return n * 1024 * 1024;
+  if (unit === "GB" || unit === "G") return n * 1024;
+  if (unit === "MB" || unit === "M") return n;
+  if (unit === "KB" || unit === "K") return n / 1024;
+  return 0;
+}
+
+function parseMagnetSizeFromUri(magnet) {
+  var m = String(magnet || "").match(/(?:^|[?&])xl=(\d+)/i);
+  if (!m) return 0;
+  var bytes = Number(m[1]);
+  if (!Number.isFinite(bytes) || bytes <= 0) return 0;
+  return bytes / (1024 * 1024);
+}
+
+function parseMagnetFlags(text) {
+  text = String(text || "");
+  return {
+    cnsub: /字幕|中字|中文|cnsub|chs|subbed/i.test(text),
+    hd: /\bHD\b|1080|720p|2160|4K|4k|UHD/i.test(text),
+    uhd: /\b4K\b|2160|UHD/i.test(text),
+    uncensored: /破解|流出|无码|uncensored|uncen|-uc\b|leak/i.test(text),
+  };
+}
+
+function trimMagnetUri(raw) {
+  return String(raw || "")
+    .replace(/[)\]}>,.;。，、！!？?]+$/g, "")
+    .replace(/\\+$/, "")
+    .trim();
+}
+
+function extractMagnetsFromText(text) {
+  var results = [];
+  var src = String(text || "");
+  if (!src || src.toLowerCase().indexOf("magnet:") < 0) return results;
+  var re = /magnet:\?[^\s<>"'\u0000-\u001f]+/gi;
+  var match;
+  while ((match = re.exec(src)) !== null) {
+    var magnet = trimMagnetUri(match[0]);
+    if (!/^magnet:\?/i.test(magnet)) continue;
+    var hash = extractMagnetHash(magnet);
+    if (!hash) continue;
+    var start = Math.max(0, match.index - 160);
+    var end = Math.min(src.length, match.index + magnet.length + 160);
+    results.push({
+      magnet: magnet,
+      hash: hash,
+      context: src.slice(start, end),
+    });
+  }
+  return results;
+}
+
+function reviewTextFromItem(item) {
+  if (!item || typeof item !== "object") return "";
+  var keys = ["body", "content", "text", "review", "comment", "message", "description"];
+  for (var i = 0; i < keys.length; i++) {
+    var val = item[keys[i]];
+    if (typeof val === "string" && val.trim()) return val;
+  }
+  return "";
+}
+
+function parseMagnetDisplayName(magnet, context, code) {
+  var dnMatch = String(magnet || "").match(/(?:^|[?&])dn=([^&]+)/i);
+  if (dnMatch) {
+    var dn = safeText(decodeMagnetSegment(dnMatch[1]));
+    var cleaned = stripCodeFromMagnetName(dn, code);
+    if (cleaned && cleaned.toUpperCase() !== safeText(code).toUpperCase()) return cleaned;
+    if (dn && (!code || dn.toUpperCase() !== safeText(code).toUpperCase())) return dn;
+  }
+  var ctx = safeText(
+    String(context || "")
+      .replace(magnet, "")
+      .replace(/magnet:\?[^\s<>"']+/gi, " ")
+      .replace(/\s+/g, " ")
+  );
+  ctx = stripCodeFromMagnetName(ctx, code);
+  if (ctx && ctx.length <= 80 && ctx.toUpperCase() !== safeText(code).toUpperCase()) return ctx;
+  return "短评分享";
+}
+
+function magnetsFromReviews(reviews, code) {
+  var out = [];
+  var seen = {};
+  (reviews || []).forEach(function (review) {
+    extractMagnetsFromText(reviewTextFromItem(review)).forEach(function (entry) {
+      if (seen[entry.hash]) return;
+      seen[entry.hash] = true;
+      var flags = parseMagnetFlags(entry.context + " " + entry.magnet);
+      var sizeMb = parseMagnetSizeMb(entry.context) || parseMagnetSizeFromUri(entry.magnet);
+      out.push({
+        hash: entry.hash,
+        name: parseMagnetDisplayName(entry.magnet, entry.context, code),
+        size: sizeMb,
+        cnsub: flags.cnsub,
+        hd: flags.hd,
+        uncensored: flags.uncensored,
+        source: "review",
+        magnet: entry.magnet,
+      });
+    });
+  });
+  return out;
+}
+
+async function fetchMovieReviews(movieId, params, options) {
+  options = options || {};
+  var page = Number(options.page || 1) || 1;
+  var limit = Number(options.limit || 20) || 20;
+  var maxPages = Number(options.maxPages || 5) || 5;
+  var all = [];
+  for (var p = page; p < page + maxPages; p++) {
+    var data;
+    try {
+      data = await apiGet("/v1/movies/" + movieId + "/reviews", { page: p, limit: limit }, params);
+    } catch (e) {
+      break;
+    }
+    var list = (data && (data.reviews || data.comments || data.list || data.items)) || [];
+    if (!Array.isArray(list) || !list.length) break;
+    all = all.concat(list);
+    if (list.length < limit) break;
+  }
+  return all;
+}
+
+/* ========================= Sukebei 磁力（对齐可视化版） ========================= */
+
+var SUKEBEI_BASE = "https://sukebei.nyaa.si";
+var SUKEBEI_CACHE_TTL = 3600 * 1000;
+var SUKEBEI_CACHE_PREFIX = "catemby.sukebei.v1.";
+var SUKEBEI_MAX_RESULTS = 12;
+
+function extractSukebeiInfoHash(href) {
+  var m = String(href || "").match(/btih:([a-fA-F0-9]{40}|[a-zA-Z0-9]{32})/i);
+  return m ? m[1].toLowerCase() : "";
+}
+
+function simpleSukebeiHash(text) {
+  var h = 0;
+  var s = String(text || "");
+  for (var i = 0; i < s.length; i++) {
+    h = (h << 5) - h + s.charCodeAt(i);
+    h |= 0;
+  }
+  return "h" + Math.abs(h).toString(36);
+}
+
+function extractSukebeiTags(title) {
+  var text = String(title || "");
+  var tags = [];
+  if (/(?:[^A-Za-z]|^)FHDC|[-_]CH?(?:[^A-Za-z]|$)|中字|中文|字幕/i.test(text)) tags.push("cnsub");
+  if (/\bHD\b|1080|720p|2160/i.test(text)) tags.push("hd");
+  if (/\b4K\b/i.test(text)) tags.push("4k");
+  if (/破解|流出|无码|uncensored|uncen|-uc\b|leak/i.test(text)) tags.push("uncensored");
+  return tags;
+}
+
+function parseSukebeiSizeBytes(text) {
+  var m = String(text || "")
+    .replace(/,/g, "")
+    .match(/([\d.]+)\s*(GiB|MiB|KiB|GB|MB|KB|B)?/i);
+  if (!m) return 0;
+  var n = parseFloat(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  var unit = String(m[2] || "B").toUpperCase();
+  var map = { GIB: 1 << 30, MIB: 1 << 20, KIB: 1 << 10, GB: 1 << 30, MB: 1 << 20, KB: 1 << 10, B: 1 };
+  return n * (map[unit] || 1);
+}
+
+function scoreSukebeiCandidate(item) {
+  var score = 0;
+  var tags = (item && item.tags) || [];
+  if (tags.indexOf("cnsub") >= 0) score += 100;
+  if (tags.indexOf("hd") >= 0) score += 20;
+  if (tags.indexOf("4k") >= 0) score += 10;
+  if (tags.indexOf("uncensored") >= 0) score += 30;
+  if (item && item.sizeBytes) {
+    var gb = item.sizeBytes / (1 << 30);
+    if (gb >= 0.3 && gb <= 15) score += 20;
+    if (gb > 30) score -= 50;
+  }
+  return score;
+}
+
+function sukebeiCacheKey(keyword) {
+  return SUKEBEI_CACHE_PREFIX + String(keyword || "").trim().toLowerCase();
+}
+
+function loadSukebeiCache(keyword) {
+  try {
+    var raw = readStore(sukebeiCacheKey(keyword));
+    if (!raw) return null;
+    var entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!entry || !entry.time || !Array.isArray(entry.items)) return null;
+    if (Date.now() - Number(entry.time) > SUKEBEI_CACHE_TTL) return null;
+    return entry.items;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveSukebeiCache(keyword, items) {
+  if (!items || !items.length) return;
+  try {
+    writeStore(
+      sukebeiCacheKey(keyword),
+      JSON.stringify({ time: Date.now(), items: items })
+    );
+  } catch (e) {}
+}
+
+function parseSukebeiHtmlWithWidget(html) {
+  var out = [];
+  if (!Widget.html || typeof Widget.html.load !== "function") return out;
+  try {
+    var $ = Widget.html.load(html);
+    $("tr.default, tr.success").each(function () {
+      var titleEl = $(this).find("td:nth-child(2) > a:nth-child(1)");
+      var magnetEl = $(this).find("td:nth-child(3) > a:last-child");
+      var sizeEl = $(this).find("td:nth-child(4)");
+      var title = String(titleEl.attr("title") || titleEl.text() || "").trim();
+      var maglink = String(magnetEl.attr("href") || "").trim();
+      var sizeText = String(sizeEl.text() || "").trim();
+      if (!title || !maglink) return;
+      if (!/^magnet:/i.test(maglink)) return;
+      var infoHash = extractSukebeiInfoHash(maglink) || simpleSukebeiHash(maglink);
+      var tags = extractSukebeiTags(title);
+      out.push({
+        title: title,
+        maglink: maglink,
+        size: sizeText,
+        sizeBytes: parseSukebeiSizeBytes(sizeText),
+        infoHash: infoHash,
+        source: "sukebei",
+        tags: tags,
+      });
+    });
+  } catch (e) {}
+  return out;
+}
+
+function parseSukebeiHtmlFallback(html) {
+  var out = [];
+  var src = String(html || "");
+  if (!src) return out;
+  var rowRe = /<tr[^>]*class="[^"]*(?:default|success)[^"]*"[^>]*>([\s\S]*?)<\/tr>/gi;
+  var row;
+  while ((row = rowRe.exec(src)) !== null) {
+    var block = row[1] || "";
+    var titleMatch =
+      block.match(/<a[^>]*title="([^"]+)"[^>]*>/i) ||
+      block.match(/<td[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i);
+    var magnetMatch = block.match(/href="(magnet:\?[^"]+)"/i);
+    var sizeMatch = block.match(/<td[^>]*>\s*([\d.,]+\s*(?:GiB|MiB|KiB|GB|MB|KB|B)?)\s*<\/td>/i);
+    var title = safeText(titleMatch ? titleMatch[1] : "");
+    var maglink = magnetMatch ? trimMagnetUri(magnetMatch[1]) : "";
+    if (!title || !maglink) continue;
+    var infoHash = extractSukebeiInfoHash(maglink) || simpleSukebeiHash(maglink);
+    var sizeText = sizeMatch ? String(sizeMatch[1]).trim() : "";
+    var tags = extractSukebeiTags(title);
+    out.push({
+      title: title,
+      maglink: maglink,
+      size: sizeText,
+      sizeBytes: parseSukebeiSizeBytes(sizeText),
+      infoHash: infoHash,
+      source: "sukebei",
+      tags: tags,
+    });
+  }
+  return out;
+}
+
+async function searchMagnetSukebei(keyword) {
+  var q = String(keyword || "").trim();
+  if (!q) return [];
+  var cached = loadSukebeiCache(q);
+  if (cached) return cached;
+
+  var url = SUKEBEI_BASE + "/?f=0&c=0_0&q=" + encodeURIComponent(q);
+  var resp;
+  try {
+    resp = await Widget.http.get(url, {
+      timeout: 8000,
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "User-Agent": UA,
+      },
+    });
+  } catch (e) {
+    console.log("[magnet:sukebei] request failed:", (e && e.message) || e);
+    return [];
+  }
+  if (!resp || resp.data === undefined || resp.data === null) {
+    console.log("[magnet:sukebei] no response");
+    return [];
+  }
+  var html = typeof resp.data === "string" ? resp.data : String(resp.data);
+  var list = parseSukebeiHtmlWithWidget(html);
+  if (!list.length) list = parseSukebeiHtmlFallback(html);
+  list.sort(function (a, b) {
+    return scoreSukebeiCandidate(b) - scoreSukebeiCandidate(a);
+  });
+  if (list.length > SUKEBEI_MAX_RESULTS) list = list.slice(0, SUKEBEI_MAX_RESULTS);
+  console.log("[magnet:sukebei] result count:", list.length);
+  saveSukebeiCache(q, list);
+  return list;
+}
+
+function magnetsFromSukebei(candidates, code) {
+  var out = [];
+  var seen = {};
+  (candidates || []).forEach(function (item) {
+    if (!item) return;
+    var magnet = String(item.maglink || item.magnet || "").trim();
+    if (!/^magnet:/i.test(magnet)) return;
+    var hash = String(item.infoHash || extractSukebeiInfoHash(magnet) || "").trim().toLowerCase();
+    if (!hash || seen[hash]) return;
+    seen[hash] = true;
+    var tags = item.tags || extractSukebeiTags(item.title || "");
+    var sizeMb = 0;
+    if (item.sizeBytes > 0) sizeMb = item.sizeBytes / (1024 * 1024);
+    else sizeMb = parseMagnetSizeMb(item.size || "") || parseMagnetSizeFromUri(magnet);
+    out.push({
+      hash: hash,
+      name: safeText(item.title || code || hash),
+      size: sizeMb,
+      sizeText: safeText(item.size || ""),
+      cnsub: tags.indexOf("cnsub") >= 0,
+      hd: tags.indexOf("hd") >= 0 || tags.indexOf("4k") >= 0,
+      uhd: tags.indexOf("4k") >= 0,
+      uncensored: tags.indexOf("uncensored") >= 0,
+      source: "sukebei",
+      sources: ["sukebei"],
+      magnet: magnet,
+    });
+  });
+  return out;
+}
+
+function formatMagnetSourceHint(source) {
+  if (source === "review") return "磁力: 见下方相似作品栏（短评），点击转存光鸭";
+  if (source === "sukebei") return "磁力: 见下方相似作品栏（Sukebei），点击转存光鸭";
+  if (source === "mixed") return "磁力: 见下方相似作品栏（多源已合并），点击转存光鸭";
+  if (source === "api") return "磁力: 见下方相似作品栏（JavDB），点击转存光鸭";
+  return "磁力: 见下方相似作品栏，点击转存光鸭";
+}
+
+async function fetchDetailMagnets(movieId, params, code) {
+  var apiMagnets = [];
+  var reviewMagnets = [];
+  var sukebeiMagnets = [];
+  var reviews = [];
+  try {
+    var magnetData = await apiGet("/v1/movies/" + movieId + "/magnets", null, params);
+    apiMagnets = (magnetData && magnetData.magnets) || [];
+  } catch (eMag) {}
+  try {
+    reviews = await fetchMovieReviews(movieId, params, { page: 1, limit: 20, maxPages: 5 });
+    reviewMagnets = magnetsFromReviews(reviews, code);
+  } catch (eRev) {}
+  try {
+    if (code) {
+      var sukebeiRaw = await searchMagnetSukebei(code);
+      sukebeiMagnets = magnetsFromSukebei(sukebeiRaw, code);
+    }
+  } catch (eSuk) {
+    console.log("[magnet:sukebei] merge failed:", (eSuk && eSuk.message) || eSuk);
+  }
+  var merged = mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code, sukebeiMagnets);
+  var source = "";
+  var parts = [];
+  if (apiMagnets.length) parts.push("api");
+  if (reviewMagnets.length) parts.push("review");
+  if (sukebeiMagnets.length) parts.push("sukebei");
+  if (parts.length > 1) source = "mixed";
+  else if (parts[0] === "api") source = "api";
+  else if (parts[0] === "review") source = "review";
+  else if (parts[0] === "sukebei") source = "sukebei";
+  return { magnets: merged, source: source, reviews: reviews || [] };
+}
+
+/** 短评写入详情简介（对齐可视化：按点赞排序取前 15） */
+function formatDetailReviewsForDescription(reviews) {
+  var list = (reviews || [])
+    .filter(function (item) {
+      return item && (item.content || reviewTextFromItem(item));
+    })
+    .sort(function (a, b) {
+      return (Number(b.likes_count) || 0) - (Number(a.likes_count) || 0);
+    })
+    .slice(0, 15);
+  if (!list.length) return "";
+  var parts = ["── 短评 ──"];
+  for (var i = 0; i < list.length; i++) {
+    var text = safeText(list[i].content || reviewTextFromItem(list[i]));
+    if (text) parts.push(text);
+  }
+  return parts.length > 1 ? parts.join("\n\n") : "";
+}
+
+function normalizeMagnetSourceKey(source) {
+  var key = String(source || "api").toLowerCase();
+  if (key === "javdb") return "api";
+  if (key === "api" || key === "review" || key === "sukebei" || key === "mixed") return key;
+  return "api";
+}
+
+function normalizeMagnetEntry(raw, code, source) {
+  raw = raw || {};
+  var magnet = raw.magnet || raw.maglink || (raw.hash ? buildMagnetUrl(raw.hash) : "");
+  var hash = String(raw.hash || extractMagnetHash(magnet) || "").trim().toLowerCase();
+  if (!hash) return null;
+  var name = safeText(raw.name || raw.title || hash);
+  var text = name + " " + safeText(raw.description || "") + " " + safeText(raw.sizeText || "");
+  var flags = parseMagnetFlags(text + " " + magnet);
+  var sizeMb = Number(raw.size || 0);
+  if (!Number.isFinite(sizeMb) || sizeMb <= 0) sizeMb = parseMagnetSizeFromUri(magnet);
+  if (!sizeMb) sizeMb = parseMagnetSizeMb(text);
+  var src = normalizeMagnetSourceKey(source || raw.source || "api");
+  var sources =
+    Array.isArray(raw.sources) && raw.sources.length
+      ? raw.sources.map(normalizeMagnetSourceKey)
+      : [src];
+  if (sources.indexOf(src) === -1) sources.push(src);
+  return {
+    hash: hash,
+    name: name,
+    size: sizeMb,
+    sizeText: safeText(raw.sizeText || ""),
+    date: safeText(raw.date || raw.release_date || ""),
+    seeders: Number(raw.seeders || 0) || 0,
+    files_count: Number(raw.files_count || raw.files || 0) || 0,
+    cnsub: !!(raw.cnsub || flags.cnsub),
+    hd: !!(raw.hd || flags.hd || raw.uhd || flags.uhd),
+    uhd: !!(raw.uhd || flags.uhd),
+    uncensored: !!(raw.uncensored || flags.uncensored),
+    source: src,
+    sources: sources,
+    magnet: magnet || buildMagnetUrl(hash),
+  };
+}
+
+function magnetTagScore(m) {
+  var score = 0;
+  if (m && m.uncensored) score += 1000;
+  if (m && m.cnsub) score += 100;
+  if (m && m.uhd) score += 30;
+  else if (m && m.hd) score += 10;
+  score += Math.min(Number((m && m.seeders) || 0), 80) / 10;
+  return score;
+}
+
+function compareMagnetPriority(a, b) {
+  var tagDiff = magnetTagScore(a) - magnetTagScore(b);
+  if (tagDiff !== 0) return tagDiff;
+  return Number(a.size || 0) - Number(b.size || 0);
+}
+
+function magnetGbBucket(sizeMb) {
+  var mb = Number(sizeMb || 0);
+  if (!Number.isFinite(mb) || mb <= 0) return "unknown";
+  var gb = mb / 1024;
+  if (gb < 1) return "0";
+  return String(Math.floor(gb));
+}
+
+function mergeMagnetCandidateMeta(preferred, other) {
+  if (!preferred) return other;
+  if (!other) return preferred;
+  var sources = [];
+  var seen = {};
+  []
+    .concat(preferred.sources || [preferred.source], other.sources || [other.source])
+    .forEach(function (key) {
+      key = normalizeMagnetSourceKey(key);
+      if (!seen[key]) {
+        seen[key] = true;
+        sources.push(key);
+      }
+    });
+  preferred.sources = sources;
+  preferred.source = sources.length > 1 ? "mixed" : sources[0] || preferred.source;
+  if (!preferred.name || preferred.name === preferred.hash) preferred.name = other.name || preferred.name;
+  if (!(Number(preferred.size) > 0) && Number(other.size) > 0) preferred.size = other.size;
+  if (!preferred.sizeText && other.sizeText) preferred.sizeText = other.sizeText;
+  if (!preferred.date && other.date) preferred.date = other.date;
+  if (!(Number(preferred.seeders) > 0) && Number(other.seeders) > 0) preferred.seeders = other.seeders;
+  if (!(Number(preferred.files_count) > 0) && Number(other.files_count) > 0) {
+    preferred.files_count = other.files_count;
+  }
+  preferred.cnsub = !!(preferred.cnsub || other.cnsub);
+  preferred.hd = !!(preferred.hd || other.hd || preferred.uhd || other.uhd);
+  preferred.uhd = !!(preferred.uhd || other.uhd);
+  preferred.uncensored = !!(preferred.uncensored || other.uncensored);
+  if ((!preferred.magnet || preferred.magnet.length < 20) && other.magnet) preferred.magnet = other.magnet;
+  return preferred;
+}
+
+function pickBetterMagnet(current, candidate) {
+  if (!current) return candidate;
+  if (!candidate) return current;
+  var better = compareMagnetPriority(candidate, current) > 0 ? candidate : current;
+  var other = better === candidate ? current : candidate;
+  return mergeMagnetCandidateMeta(better, other);
+}
+
+function mergeMagnetLists(apiMagnets, reviewMagnets, code, sukebeiMagnets) {
+  var map = {};
+  function ingest(list, source) {
+    (list || []).forEach(function (raw) {
+      var item = normalizeMagnetEntry(raw, code, source);
+      if (!item) return;
+      map[item.hash] = pickBetterMagnet(map[item.hash], item);
+    });
+  }
+  ingest(apiMagnets, "api");
+  ingest(reviewMagnets, "review");
+  ingest(sukebeiMagnets, "sukebei");
+  return Object.keys(map).map(function (hash) {
+    return map[hash];
+  });
+}
+
+function dedupeMagnetsByGbBucket(magnets) {
+  var buckets = {};
+  (magnets || []).forEach(function (m) {
+    var key = magnetGbBucket(m.size);
+    buckets[key] = pickBetterMagnet(buckets[key], m);
+  });
+  return Object.keys(buckets)
+    .map(function (key) {
+      return buckets[key];
+    })
+    .sort(function (a, b) {
+      return Number(b.size || 0) - Number(a.size || 0);
+    });
+}
+
+function mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code, sukebeiMagnets) {
+  var merged = mergeMagnetLists(apiMagnets, reviewMagnets, code, sukebeiMagnets);
+  return dedupeMagnetsByGbBucket(merged);
+}
+
+function magnetSourceLabel(m) {
+  var keys = [];
+  var raw = Array.isArray(m && m.sources) && m.sources.length ? m.sources : [m && m.source];
+  for (var i = 0; i < raw.length; i++) {
+    var key = normalizeMagnetSourceKey(raw[i]);
+    if (key === "mixed") continue;
+    if (keys.indexOf(key) === -1) keys.push(key);
+  }
+  if (!keys.length) keys.push("api");
+  return keys
+    .map(function (key) {
+      if (key === "review") return "短评";
+      if (key === "sukebei") return "Sukebei";
+      return "JavDB";
+    })
+    .join("＋");
+}
+
+function magnetSourceShort(m) {
+  var label = magnetSourceLabel(m);
+  if (label.indexOf("＋") >= 0) return "多源";
+  return label;
+}
+
+function buildMagnetTraitFlags(m) {
+  var flags = [];
+  if (m && m.uncensored) flags.push("破解");
+  if (m && m.cnsub) flags.push("中字");
+  if (m && m.uhd) flags.push("4K");
+  else if (m && m.hd) flags.push("HD");
+  return flags;
+}
+
+function buildMagnetItemTitle(m, code) {
+  var flags = buildMagnetTraitFlags(m);
+  var size = formatMagnetSize(m.size) || safeText(m.sizeText || "");
+  var parts = [];
+  if (size) parts.push(size);
+  if (flags.length) parts.push(flags.join("/"));
+  var src = magnetSourceShort(m);
+  if (src) parts.push(src);
+  if (!parts.length) {
+    var fallback = stripCodeFromMagnetName(safeText(m.name || m.hash || "磁力"), code);
+    if (fallback) parts.push(fallback);
+  }
+  return parts.join(" · ") || "磁力";
+}
+
+function buildMagnetItemDescription(m, code) {
+  var lines = [];
+  var displayName = stripCodeFromMagnetName(safeText(m.name || ""), code);
+  if (displayName && displayName.toUpperCase() !== safeText(code).toUpperCase()) {
+    lines.push(displayName);
+  } else if (safeText(m.name || "") && safeText(m.name) !== m.hash) {
+    lines.push(safeText(m.name));
+  }
+
+  var meta = [];
+  var size = formatMagnetSize(m.size) || safeText(m.sizeText || "");
+  if (size) meta.push(size);
+  if (Number(m.files_count) > 0) meta.push(Number(m.files_count) + " 文件");
+  if (Number(m.seeders) > 0) meta.push("做种 " + Number(m.seeders));
+  if (safeText(m.date || "")) meta.push(safeText(m.date));
+  if (meta.length) lines.push(meta.join(" · "));
+
+  var traits = buildMagnetTraitFlags(m);
+  if (traits.length) lines.push(traits.join(" · "));
+
+  lines.push("来源 " + magnetSourceLabel(m) + " · 点击转存光鸭");
+  return lines.join("\n");
+}
+
+function buildMagnetRelatedItems(magnets, ctx) {
+  ctx = ctx || {};
+  var items = [];
+  var list = magnets || [];
+  for (var i = 0; i < list.length && i < 12; i++) {
+    var m = list[i];
+    var hash = String(m.hash || "").trim().toLowerCase();
+    if (!hash) continue;
+    cacheMagnetEntry(hash, {
+      magnet: m.magnet || buildMagnetUrl(hash),
+      hash: hash,
+      name: safeText(m.name || hash),
+      size: m.size || 0,
+      sizeText: m.sizeText || "",
+      date: m.date || "",
+      seeders: m.seeders || 0,
+      files_count: m.files_count || 0,
+      cnsub: !!m.cnsub,
+      hd: !!m.hd,
+      uhd: !!m.uhd,
+      uncensored: !!m.uncensored,
+      movieId: ctx.movieId || "",
+      code: ctx.code || "",
+      title: ctx.title || "",
+      backdropPath: ctx.backdropPath || "",
+      source: m.source || "api",
+      sources: Array.isArray(m.sources) ? m.sources.slice() : [m.source || "api"],
+    });
+    items.push({
+      id: hash,
+      type: "url",
+      mediaType: "movie",
+      title: buildMagnetItemTitle(m, ctx.code),
+      link: MAGNET_LINK_PREFIX + hash,
+      backdropPath: ctx.backdropPath || undefined,
+      description: buildMagnetItemDescription(m, ctx.code),
+    });
+  }
+  return items;
+}
+
+function gyAccountHeaders(did) {
+  return {
+    accept: "*/*",
+    "content-type": "application/json",
+    origin: GUANGYA_SITE,
+    referer: GUANGYA_SITE + "/",
+    "user-agent": GUANGYA_UA,
+    "x-client-id": GUANGYA_CLIENT_ID,
+    "x-client-version": "0.0.1",
+    "x-device-id": did,
+    "x-device-model": "iphone%2F18.0",
+    "x-device-name": "iPhone",
+    "x-device-sign": "wdi10." + did + gyRandomHex(32),
+    "x-net-work-type": "NONE",
+    "x-os-version": "iPhone OS 18.0",
+    "x-platform-version": "1",
+    "x-protocol-version": "301",
+    "x-provider-name": "NONE",
+    "x-sdk-version": "9.0.2",
+    "x-action": "401",
+  };
+}
+
+function gyApiHeaders(token, did) {
+  return {
+    accept: "application/json, text/plain, */*",
+    authorization: "Bearer " + token,
+    "content-type": "application/json",
+    Did: did,
+    did: did,
+    Dt: "4",
+    dt: "4",
+    origin: GUANGYA_SITE,
+    referer: GUANGYA_SITE + "/",
+    "user-agent": GUANGYA_UA,
+  };
+}
+
+function gyIsHttpStatus400(err) {
+  return /(?:\b400\b|status code was unacceptable)/i.test(String((err && err.message) || err || ""));
+}
+
+function gyExtractHttpStatus(item) {
+  if (!item || typeof item !== "object") return 0;
+  return Number(item.status || item.statusCode || item.status_code || 0) || 0;
+}
+
+function gyRecoverHttpResponse(error) {
+  var err = error || {};
+  var queue = [err];
+  var seen = {};
+  if (err.error && typeof err.error === "object") queue.push(err.error);
+  if (err.cause && typeof err.cause === "object") queue.push(err.cause);
+  while (queue.length) {
+    var node = queue.shift();
+    if (!node || typeof node !== "object") continue;
+    if (seen[node]) continue;
+    seen[node] = true;
+    var candidates = [node.response, node.res, node.result, node.httpResponse, node];
+    for (var i = 0; i < candidates.length; i++) {
+      var item = candidates[i];
+      if (!item || typeof item !== "object") continue;
+      var status = gyExtractHttpStatus(item);
+      if (status < 400) continue;
+      if (item.data !== undefined || item.body !== undefined || item.responseText !== undefined) return item;
+      if (node !== item && node.data !== undefined) {
+        return { status: status, statusCode: status, data: node.data, body: node.data };
+      }
+    }
+    if (node.error && typeof node.error === "object") queue.push(node.error);
+    if (node.cause && typeof node.cause === "object") queue.push(node.cause);
+  }
+  var msg = String(err.message || err || "");
+  var match = msg.match(/unacceptable:\s*(\d{3})/i);
+  if (match) {
+    var code = Number(match[1]);
+    var body =
+      err.data !== undefined
+        ? err.data
+        : err.body !== undefined
+          ? err.body
+          : err.response && (err.response.data !== undefined ? err.response.data : err.response.body);
+    if (body !== undefined) return { status: code, statusCode: code, data: body, body: body };
+    return { status: code, statusCode: code };
+  }
+  return null;
+}
+
+function gyParseHttpPayload(resp) {
+  var data = parseApiPayload(resp);
+  if (data !== null && data !== undefined) return data;
+  if (!resp || resp.body === undefined || resp.body === null) return data;
+  return parseApiPayload({ data: resp.body });
+}
+
+function gyApiErrorText(data, status) {
+  if (!data) return "HTTP " + status;
+  if (typeof data === "string" && data.trim()) return data.trim().slice(0, 240);
+  return (
+    safeText(data.msg || data.message || data.error_description || data.error || data.detail) ||
+    "HTTP " + status
+  );
+}
+
+function gyIsRotatedTokenError(err, data) {
+  var text = String((err && err.message) || err || "");
+  if (data && typeof data === "object") {
+    text += " " + String(data.error || "") + " " + String(data.error_description || data.msg || "");
+  }
+  return /invalid_grant|refreshed by other|invalid_token|expired/i.test(text);
+}
+
+function gyAuthErrorText(err, data, status) {
+  var msg = String((err && err.message) || "");
+  if (gyIsRotatedTokenError(err, data) || Number(status) === 400 || /\bHTTP\s*400\b/i.test(msg)) {
+    return "光鸭 refresh_token 已失效（每次换票都会作废旧 token）。请到 www.guangyapan.com 登录后重新复制最新 refresh_token";
+  }
+  return msg || gyApiErrorText(data, status) || "刷新光鸭 token 失败";
+}
+
+function pickLiveGuangyaRefreshToken(uiToken, session) {
+  uiToken = normalizeGuangyaToken(uiToken);
+  session = session || {};
+  var live = normalizeGuangyaToken(session.refreshToken);
+  var source = normalizeGuangyaToken(session.sourceRefreshToken);
+  if (uiToken && live && uiToken !== live && uiToken !== source) return uiToken;
+  return live || uiToken || "";
+}
+
+async function readGuangyaSessionAsync() {
+  try {
+    var raw = await readStorageRawAsync(GUANGYA_ACCESS_STORE);
+    if (raw == null || raw === "") raw = await readStoreAsync(GUANGYA_ACCESS_STORE);
+    if (!raw) {
+      raw = readStorageRaw(GUANGYA_ACCESS_STORE) || readStore(GUANGYA_ACCESS_STORE);
+    }
+    if (!raw) return null;
+    var entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!entry || typeof entry !== "object" || isPromiseLike(entry)) return null;
+    return {
+      refreshToken: normalizeGuangyaToken(entry.refreshToken),
+      sourceRefreshToken: normalizeGuangyaToken(entry.sourceRefreshToken),
+      accessToken: String(entry.accessToken || "").trim(),
+      expiresAt: Number(entry.expiresAt || 0),
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function writeGuangyaSessionAsync(session) {
+  session = session || {};
+  var payload = JSON.stringify({
+    refreshToken: normalizeGuangyaToken(session.refreshToken),
+    sourceRefreshToken: normalizeGuangyaToken(session.sourceRefreshToken || session.refreshToken),
+    accessToken: String(session.accessToken || "").trim(),
+    expiresAt: Number(session.expiresAt || 0),
+  });
+  writeStore(GUANGYA_ACCESS_STORE, payload);
+  await writeStoreAsync(GUANGYA_ACCESS_STORE, payload);
+}
+
+async function gyHttpPost(url, headers, bodyObj, timeoutMs) {
+  var body = bodyObj || {};
+  var rawBody = typeof body === "string" ? body : JSON.stringify(body);
+  var httpOpts = {
+    headers: headers,
+    allow_redirects: true,
+    timeout: timeoutMs || 30000,
+    validate_status: false,
+    validateStatus: function () {
+      return true;
+    },
+    status: "all",
+  };
+  var resp;
+  try {
+    if (typeof Widget.http.post === "function") {
+      resp = await Widget.http.post(url, body, httpOpts);
+    } else if (typeof Widget.http.request === "function") {
+      resp = await Widget.http.request(url, Object.assign({ method: "POST", body: body }, httpOpts));
+    } else {
+      resp = await Widget.http.get(url, Object.assign({}, httpOpts, { method: "POST", body: rawBody }));
+    }
+  } catch (error) {
+    resp = gyRecoverHttpResponse(error);
+    if (!resp) throw error;
+  }
+  var status = gyExtractHttpStatus(resp);
+  var data = gyParseHttpPayload(resp);
+  if (status >= 400) {
+    throw new Error(gyApiErrorText(data, status));
+  }
+  return data;
+}
+
+async function ensureGuangyaAccessToken(refreshToken, did) {
+  refreshToken = normalizeGuangyaToken(refreshToken);
+  if (!refreshToken) throw new Error("未配置光鸭 refresh_token");
+  if (_gyTokenRefreshInflight) return _gyTokenRefreshInflight;
+
+  _gyTokenRefreshInflight = (async function () {
+    try {
+      var session = await readGuangyaSessionAsync();
+      var live = pickLiveGuangyaRefreshToken(refreshToken, session);
+      var accessValid =
+        session &&
+        session.accessToken &&
+        Number(session.expiresAt || 0) > Date.now() + 60000 &&
+        (session.refreshToken === live || session.sourceRefreshToken === refreshToken);
+      if (accessValid) return session.accessToken;
+
+      if (session && session.refreshToken && refreshToken === session.sourceRefreshToken) {
+        live = session.refreshToken;
+      }
+
+      var data = await gyHttpPost(
+        GUANGYA_ACCOUNT_URL + "/v1/auth/token",
+        gyAccountHeaders(did),
+        { client_id: GUANGYA_CLIENT_ID, grant_type: "refresh_token", refresh_token: live },
+        25000
+      );
+      if (!data || !data.access_token) {
+        throw new Error(gyAuthErrorText(null, data, 0));
+      }
+      var newRefresh = normalizeGuangyaToken(data.refresh_token) || live;
+      var source =
+        session && session.sourceRefreshToken && live === session.refreshToken
+          ? session.sourceRefreshToken
+          : refreshToken;
+      await writeGuangyaSessionAsync({
+        refreshToken: newRefresh,
+        sourceRefreshToken: source,
+        accessToken: data.access_token,
+        expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000,
+      });
+      await persistGlobalParamAsync("guangya_token", newRefresh);
+      return data.access_token;
+    } catch (err) {
+      throw new Error(gyAuthErrorText(err, null, 0));
+    } finally {
+      _gyTokenRefreshInflight = null;
+    }
+  })();
+
+  return _gyTokenRefreshInflight;
+}
+
+function gyToNumber(v) {
+  var n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function gyPickName(values) {
+  for (var i = 0; i < values.length; i++) {
+    var s = String(values[i] || "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function gyNormalizeResolvedEntry(obj, fallbackIndex) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  var indexRaw =
+    obj.fileIndex != null
+      ? obj.fileIndex
+      : obj.file_index != null
+        ? obj.file_index
+        : obj.index != null
+          ? obj.index
+          : obj.idx != null
+            ? obj.idx
+            : obj.fileNo != null
+              ? obj.fileNo
+              : obj.file_no != null
+                ? obj.file_no
+                : obj.seq != null
+                  ? obj.seq
+                  : null;
+  var index = gyToNumber(indexRaw);
+  var finalIndex = index != null && index >= 0 ? index : fallbackIndex != null ? fallbackIndex : GY_AUTO_INDEX++;
+  var name = gyPickName([
+    obj.name,
+    obj.fileName,
+    obj.file_name,
+    obj.filename,
+    obj.path,
+    obj.filePath,
+    obj.file_path,
+    obj.fullPath,
+    obj.full_path,
+    obj.relativePath,
+    obj.relative_path,
+    obj.resName,
+    obj.resourceName,
+    obj.title,
+    obj.label,
+    obj.displayName,
+  ]);
+  var size = gyToNumber(
+    obj.fileSize != null
+      ? obj.fileSize
+      : obj.file_size != null
+        ? obj.file_size
+        : obj.filesize != null
+          ? obj.filesize
+          : obj.size != null
+            ? obj.size
+            : obj.length != null
+              ? obj.length
+              : obj.bytes
+  );
+  return { index: finalIndex, name: name, size: size == null ? 0 : size, raw: obj };
+}
+
+function gyCollectObjectArrays(node, out, seen) {
+  out = out || [];
+  seen = seen || null;
+  if (!node || typeof node !== "object") return out;
+  if (seen && seen.has && seen.has(node)) return out;
+  if (seen && seen.add) seen.add(node);
+  if (Array.isArray(node)) {
+    if (node.length && node.every(function (item) { return item && typeof item === "object" && !Array.isArray(item); })) {
+      out.push(node);
+    }
+    for (var i = 0; i < node.length; i++) gyCollectObjectArrays(node[i], out, seen);
+    return out;
+  }
+  var keys = Object.keys(node);
+  for (var j = 0; j < keys.length; j++) gyCollectObjectArrays(node[keys[j]], out, seen);
+  return out;
+}
+
+function gyDedupeResolvedEntries(entries) {
+  var seen = {};
+  return (entries || [])
+    .filter(function (item) {
+      if (!item) return false;
+      if (item.index >= GY_AUTO_INDEX) return true;
+      if (seen[item.index]) return false;
+      seen[item.index] = true;
+      return true;
+    })
+    .sort(function (a, b) {
+      return Number(a.index || 0) - Number(b.index || 0);
+    });
+}
+
+function gyExtractBtSubfiles(payload) {
+  var data = payload && payload.data;
+  var bt = data && data.btResInfo;
+  var subs = bt && bt.subfiles;
+  if (!Array.isArray(subs) || !subs.length) return null;
+  var entries = [];
+  for (var i = 0; i < subs.length; i++) {
+    var s = subs[i] || {};
+    var idx = gyToNumber(
+      s.fileIndex != null
+        ? s.fileIndex
+        : s.file_index != null
+          ? s.file_index
+          : s.index != null
+            ? s.index
+            : i
+    );
+    if (idx == null || idx < 0) idx = i;
+    var name = gyPickName([s.fileName, s.file_name, s.name, s.path, s.title]);
+    var size = gyToNumber(
+      s.fileSize != null ? s.fileSize : s.file_size != null ? s.file_size : s.size
+    );
+    entries.push({ index: idx, name: name, size: size == null ? 0 : size, raw: s });
+  }
+  entries = gyDedupeResolvedEntries(entries);
+  return entries.length ? entries : null;
+}
+
+function gyIsValidFileIndex(idx) {
+  var n = Number(idx);
+  return Number.isFinite(n) && n >= 0 && n < GY_AUTO_INDEX;
+}
+
+function gySanitizeFileIndexes(indexes) {
+  if (!indexes || !indexes.length) return null;
+  var out = [];
+  var seen = {};
+  for (var i = 0; i < indexes.length; i++) {
+    var n = Number(indexes[i]);
+    if (!gyIsValidFileIndex(n) || seen[n]) continue;
+    seen[n] = true;
+    out.push(n);
+  }
+  return out.length ? out : null;
+}
+
+function gyResolvedTaskUrl(resolved, magnet) {
+  var data = resolved && resolved.data;
+  var url = safeText(data && data.url);
+  return url || magnet;
+}
+
+function gyResolvedTaskName(resolved, magnet) {
+  var data = resolved && resolved.data;
+  var btName = safeText(data && data.btResInfo && data.btResInfo.fileName);
+  if (btName) return btName;
+  var dnMatch = String(magnet || "").match(/(?:^|[?&])dn=([^&]+)/i);
+  if (dnMatch) {
+    try {
+      return safeText(decodeMagnetSegment(dnMatch[1]));
+    } catch (e) {}
+  }
+  return "offline";
+}
+
+function gyExtractResolvedEntries(payload) {
+  GY_AUTO_INDEX = 10000;
+  var btEntries = gyExtractBtSubfiles(payload);
+  if (btEntries && btEntries.length) return btEntries;
+
+  var data = payload && payload.data;
+  var directList =
+    (data &&
+      (data.list ||
+        data.files ||
+        data.fileList ||
+        data.resList ||
+        data.items ||
+        data.fileInfos ||
+        data.file_list ||
+        data.file_list_info ||
+        data.result ||
+        data.details)) ||
+    null;
+  if (Array.isArray(directList) && directList.length) {
+    var entries = [];
+    for (var i = 0; i < directList.length; i++) {
+      var entry = gyNormalizeResolvedEntry(directList[i], i);
+      if (entry) entries.push(entry);
+    }
+    entries = gyDedupeResolvedEntries(entries);
+    if (entries.length) return entries;
+  }
+  var arrays = gyCollectObjectArrays(payload, [], null);
+  var best = [];
+  var bestScore = -1;
+  for (var a = 0; a < arrays.length; a++) {
+    var arr = arrays[a];
+    var parsed = [];
+    for (var b = 0; b < arr.length; b++) {
+      var item = gyNormalizeResolvedEntry(arr[b], b);
+      if (item) parsed.push(item);
+    }
+    parsed = gyDedupeResolvedEntries(parsed);
+    if (!parsed.length) {
+      var positional = [];
+      for (var c = 0; c < arr.length; c++) {
+        var raw = arr[c] || {};
+        var posName = gyPickName([
+          raw.name,
+          raw.fileName,
+          raw.file_name,
+          raw.filename,
+          raw.path,
+          raw.filePath,
+          raw.file_path,
+          raw.resName,
+          raw.resourceName,
+          raw.title,
+        ]);
+        var posSize = gyToNumber(raw.fileSize || raw.file_size || raw.size) || 0;
+        if (!posName) {
+          if (posSize < 50 * 1024 * 1024) continue;
+          positional.push({ index: c, name: "", size: posSize, raw: raw });
+          continue;
+        }
+        positional.push({ index: c, name: posName, size: posSize, raw: raw });
+      }
+      if (positional.length) parsed = positional;
+    }
+    if (!parsed.length) continue;
+    var nameCount = parsed.filter(function (x) { return x.name; }).length;
+    var score = parsed.length * 10 + nameCount * 3 + (parsed.length > 1 ? 5 : 0);
+    if (score > bestScore) {
+      best = parsed;
+      bestScore = score;
+    }
+  }
+  if (best.length) return best;
+  var explicitIndexes = null;
+  var explicitKeys = ["fileIndexes", "file_indexes", "indexes"];
+  for (var k = 0; k < explicitKeys.length; k++) {
+    if (data && data[explicitKeys[k]] != null) {
+      explicitIndexes = data[explicitKeys[k]];
+      break;
+    }
+    if (payload && payload[explicitKeys[k]] != null) {
+      explicitIndexes = payload[explicitKeys[k]];
+      break;
+    }
+  }
+  if (Array.isArray(explicitIndexes) && explicitIndexes.length) {
+    var fromExplicit = [];
+    for (var x = 0; x < explicitIndexes.length; x++) {
+      var ei = gyToNumber(explicitIndexes[x]);
+      if (ei == null || ei < 0) continue;
+      fromExplicit.push({ index: ei, name: "", size: 0, raw: null });
+    }
+    fromExplicit = gyDedupeResolvedEntries(fromExplicit);
+    if (fromExplicit.length) return fromExplicit;
+  }
+  var total = gyToNumber(
+    (data && (data.fileCount || data.file_count || data.totalCount || data.total_count || data.count || data.total)) ||
+      null
+  );
+  if (total != null && total > 0) {
+    var out = [];
+    for (var t = 0; t < total; t++) out.push({ index: t, name: "", size: 0, raw: null });
+    return out;
+  }
+  return [];
+}
+
+function gyParseRegexSource(raw) {
+  var s = String(raw || "").trim();
+  if (!s) return null;
+  if (s.charAt(0) === "/") {
+    var last = s.lastIndexOf("/");
+    if (last > 0) {
+      try {
+        return new RegExp(s.slice(1, last), s.slice(last + 1) || "i");
+      } catch (e) {}
+    }
+  }
+  try {
+    return new RegExp(s, "i");
+  } catch (e2) {
+    return null;
+  }
+}
+
+function gyParseBlockPatterns(cfg) {
+  var raw = String((cfg && cfg.magnet_block_patterns) || "").trim();
+  var sources = raw
+    ? raw.split(/[;|]/).map(function (s) { return String(s || "").trim(); }).filter(Boolean)
+    : GY_DEFAULT_BLOCK_PATTERNS.slice();
+  var patterns = [];
+  for (var i = 0; i < sources.length; i++) {
+    var re = gyParseRegexSource(sources[i]);
+    if (re) patterns.push(re);
+  }
+  return patterns;
+}
+
+function gyBasename(name) {
+  var s = String(name || "").replace(/\\/g, "/");
+  var idx = s.lastIndexOf("/");
+  return idx >= 0 ? s.slice(idx + 1) : s;
+}
+
+function gyIsVideoFileName(name) {
+  var base = gyBasename(name);
+  var parts = base.split(".");
+  if (parts.length < 2) return false;
+  return !!GY_VIDEO_EXTS[parts.pop().toLowerCase()];
+}
+
+function gyIsObviousJunk(name) {
+  return /\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent|srt|ass)$/i.test(gyBasename(name));
+}
+
+function gyIsLikelyVideo(entry) {
+  if (gyIsVideoFileName(entry.name)) return true;
+  if (Number(entry.size || 0) >= 50 * 1024 * 1024) return true;
+  var raw = entry.raw;
+  if (raw) {
+    var t = raw.resType != null ? raw.resType : raw.fileType;
+    if (t === 1 || t === "1" || String(raw.type || "").toLowerCase() === "video") return true;
+  }
+  return false;
+}
+
+function gyMaxVideoSize(entries) {
+  var max = 0;
+  for (var i = 0; i < entries.length; i++) {
+    if (!gyIsLikelyVideo(entries[i])) continue;
+    max = Math.max(max, Number(entries[i].size || 0));
+  }
+  return max;
+}
+
+function gyIsMultiPartName(name) {
+  var n = String(name || "").toLowerCase();
+  return (
+    /(?:^|[\._\-])p(?:art)?[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])cd[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])disc[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])vol[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /分段|第[\d一二三四五六七八九十]+[部分集段]/.test(n)
+  );
+}
+
+function gyShouldBlock(entry, patterns, minVideoMb, videoOnly, maxVideoSize) {
+  var name = String(entry.name || "");
+  if (gyIsObviousJunk(name)) return { blocked: true, reason: "junk" };
+  for (var i = 0; i < patterns.length; i++) {
+    if (patterns[i].test(name)) return { blocked: true, reason: "pattern" };
+  }
+  if (videoOnly && name && !gyIsLikelyVideo(entry)) return { blocked: true, reason: "non-video" };
+  var size = Number(entry.size || 0);
+  var isVideo = gyIsLikelyVideo(entry);
+  if (isVideo && size > 0 && maxVideoSize > 0 && size < maxVideoSize * 0.12 && !gyIsMultiPartName(name)) {
+    return { blocked: true, reason: "small-video" };
+  }
+  if (
+    minVideoMb > 0 &&
+    isVideo &&
+    size > 0 &&
+    maxVideoSize > 0 &&
+    size < minVideoMb * 1024 * 1024 &&
+    size < maxVideoSize * 0.35
+  ) {
+    return { blocked: true, reason: "size" };
+  }
+  return { blocked: false, reason: "" };
+}
+
+function gyPruneDominantVideo(kept, blocked) {
+  if (kept.length <= 1) return { kept: kept, blocked: blocked };
+  var videos = kept.filter(gyIsLikelyVideo);
+  if (videos.length <= 1) return { kept: kept, blocked: blocked };
+  var hasMultipart = videos.some(function (e) { return gyIsMultiPartName(e.name); });
+  var maxSize = Math.max.apply(
+    null,
+    videos.map(function (e) { return Number(e.size || 0); })
+  );
+  var floor = hasMultipart ? maxSize * 0.45 : maxSize * 0.3;
+  var survivors = kept.filter(function (e) {
+    if (!gyIsLikelyVideo(e)) return true;
+    return gyIsMultiPartName(e.name) || Number(e.size || 0) >= floor;
+  });
+  if (survivors.length >= kept.length) return { kept: kept, blocked: blocked };
+  var survivorMap = {};
+  survivors.forEach(function (e) { survivorMap[e.index] = 1; });
+  var newBlocked = blocked.slice();
+  kept.forEach(function (e) {
+    if (!survivorMap[e.index]) newBlocked.push({ entry: e, reason: "pruned" });
+  });
+  return { kept: survivors, blocked: newBlocked };
+}
+
+function gyPickVideoFallback(entries, patterns) {
+  var candidates = [];
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i];
+    var name = String(entry.name || "");
+    if (gyIsObviousJunk(name)) continue;
+    var hit = false;
+    for (var p = 0; p < patterns.length; p++) {
+      if (patterns[p].test(name)) {
+        hit = true;
+        break;
+      }
+    }
+    if (hit) continue;
+    candidates.push(entry);
+  }
+  if (!candidates.length) candidates = entries.filter(gyIsLikelyVideo);
+  if (!candidates.length) candidates = entries.slice();
+  candidates.sort(function (a, b) { return Number(b.size || 0) - Number(a.size || 0); });
+  return candidates[0] || null;
+}
+
+function gyFilterResolvedFiles(entries, cfg) {
+  var patterns = gyParseBlockPatterns(cfg);
+  var minVideoMb = Number(cfg.magnet_min_video_mb || 0);
+  if (!Number.isFinite(minVideoMb) || minVideoMb < 0) minVideoMb = 0;
+  var videoOnly = String(cfg.magnet_video_only || "1") !== "0";
+  var maxVideoSize = gyMaxVideoSize(entries);
+  var kept = [];
+  var blocked = [];
+  for (var i = 0; i < entries.length; i++) {
+    var verdict = gyShouldBlock(entries[i], patterns, minVideoMb, videoOnly, maxVideoSize);
+    if (verdict.blocked) blocked.push({ entry: entries[i], reason: verdict.reason });
+    else kept.push(entries[i]);
+  }
+  if (!kept.length && entries.length) {
+    var fallback = gyPickVideoFallback(entries, patterns);
+    if (fallback) {
+      kept = [fallback];
+      blocked = entries
+        .filter(function (e) { return e.index !== fallback.index; })
+        .map(function (e) { return { entry: e, reason: "fallback" }; });
+    }
+  }
+  return gyPruneDominantVideo(kept, blocked);
+}
+
+function gyFormatEntryPreview(entries, limit) {
+  var max = limit || 8;
+  var lines = [];
+  for (var i = 0; i < entries.length && i < max; i++) {
+    lines.push(entries[i].name || "#" + entries[i].index);
+  }
+  if (entries.length > max) lines.push("… 另有 " + (entries.length - max) + " 个");
+  return lines.join("\n");
+}
+
+function gyFormatBlockedPreview(blocked, limit) {
+  var max = limit || 8;
+  var lines = [];
+  for (var i = 0; i < blocked.length && i < max; i++) {
+    var item = blocked[i];
+    var label = item.entry.name || "#" + item.entry.index;
+    var tag =
+      item.reason === "size"
+        ? " (过小)"
+        : item.reason === "small-video"
+          ? " (小广告)"
+          : item.reason === "pruned"
+            ? " (冗余)"
+            : item.reason === "non-video"
+              ? " (非视频)"
+              : item.reason === "pattern"
+                ? " (规则)"
+                : item.reason === "junk"
+                  ? " (junk)"
+                  : "";
+    lines.push(label + tag);
+  }
+  if (blocked.length > max) lines.push("… 另有 " + (blocked.length - max) + " 个");
+  return lines.join("\n");
+}
+
+async function guangyaResolveResource(accessToken, did, magnet) {
+  var data = await gyHttpPost(
+    GUANGYA_API_BASE + "/nd.bizcloudcollection.s/v1/resolve_res",
+    gyApiHeaders(accessToken, did),
+    { url: magnet },
+    45000
+  );
+  if (!data) throw new Error("光鸭解析返回空响应");
+  return data;
+}
+
+function gyIsGuangyaTaskOk(task) {
+  if (!task) return false;
+  var msg = String(task.msg || "").toLowerCase();
+  if (msg === "success" || msg === "") return true;
+  if (task.code === 0) return true;
+  return !!task.data;
+}
+
+function gySanitizeTaskName(name) {
+  name = safeText(name)
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!name || name === "." || name === "..") return "";
+  if (name.length > 180) name = name.slice(0, 180);
+  return name;
+}
+
+function gySanitizeParentId(parentId) {
+  parentId = safeText(parentId);
+  if (!parentId) return "";
+  if (!/^[0-9a-zA-Z_-]{4,64}$/.test(parentId)) return "";
+  return parentId;
+}
+
+async function guangyaCreateTask(accessToken, did, taskInput) {
+  taskInput = taskInput || {};
+  var body = {
+    url: String(taskInput.url || "").trim(),
+    parentId: gySanitizeParentId(taskInput.parentId),
+  };
+  var newName = gySanitizeTaskName(taskInput.newName);
+  if (newName) body.newName = newName;
+  var indexes = gySanitizeFileIndexes(taskInput.fileIndexes);
+  if (indexes && indexes.length) body.fileIndexes = indexes;
+  return gyHttpPost(
+    GUANGYA_API_BASE + "/nd.bizcloudcollection.s/v1/create_task",
+    gyApiHeaders(accessToken, did),
+    body,
+    30000
+  );
+}
+
+async function submitGuangyaMagnetTask(accessToken, did, magnet, cfg, filtered, resolved) {
+  var magnetUrl = String(magnet || "").trim();
+  var resolvedUrl = gyResolvedTaskUrl(resolved, magnetUrl);
+  var taskName = gyResolvedTaskName(resolved, magnetUrl);
+  var parentId = gySanitizeParentId(cfg.guangya_parent_id);
+  var indexes = gySanitizeFileIndexes(
+    filtered.kept.map(function (e) {
+      return e.index;
+    })
+  );
+  var attempts = [
+    { url: resolvedUrl, parentId: parentId, newName: taskName, fileIndexes: indexes, label: "filtered" },
+    { url: resolvedUrl, parentId: parentId, newName: taskName, fileIndexes: null, label: "no-indexes" },
+    { url: magnetUrl, parentId: parentId, newName: taskName, fileIndexes: null, label: "raw-magnet" },
+    { url: resolvedUrl, parentId: "", newName: taskName, fileIndexes: null, label: "root-dir" },
+    { url: magnetUrl, parentId: "", newName: "", fileIndexes: null, label: "minimal" },
+  ];
+  var lastErr = null;
+  for (var i = 0; i < attempts.length; i++) {
+    var attempt = attempts[i];
+    try {
+      var task = await guangyaCreateTask(accessToken, did, attempt);
+      if (gyIsGuangyaTaskOk(task)) return { task: task, attempt: attempt.label };
+      lastErr = new Error(gyApiErrorText(task, 0) || "光鸭 create_task 失败");
+    } catch (err) {
+      lastErr = err;
+      if (!gyIsHttpStatus400(err)) throw err;
+    }
+  }
+  throw lastErr || new Error("光鸭 create_task 失败");
+}
+
+async function saveMagnetToGuangya(magnet, cfg) {
+  var did = await ensureGuangyaDeviceId();
+  var accessToken;
+  try {
+    accessToken = await ensureGuangyaAccessToken(cfg.guangya_token, did);
+  } catch (err) {
+    throw new Error("换票失败: " + String((err && err.message) || err || "未知错误"));
+  }
+  var resolved = null;
+  var entries = [];
+  try {
+    resolved = await guangyaResolveResource(accessToken, did, magnet);
+    entries = gyExtractResolvedEntries(resolved);
+  } catch (err) {
+    if (!gyIsHttpStatus400(err)) throw new Error("解析磁力失败: " + String((err && err.message) || err));
+  }
+  var filtered = { kept: [], blocked: [] };
+  if (entries.length) {
+    filtered =
+      String(cfg.magnet_filter || "1") !== "0"
+        ? gyFilterResolvedFiles(entries, cfg)
+        : { kept: entries, blocked: [] };
+    if (!filtered.kept.length) throw new Error("过滤后没有可转存文件");
+  }
+  var submitted;
+  try {
+    submitted = await submitGuangyaMagnetTask(accessToken, did, magnet, cfg, filtered, resolved);
+  } catch (err) {
+    throw new Error("提交任务失败: " + String((err && err.message) || err));
+  }
+  var task = submitted.task;
+  return {
+    ok: true,
+    keptCount: filtered.kept.length,
+    blockedCount: filtered.blocked.length,
+    keptPreview: gyFormatEntryPreview(filtered.kept),
+    blockedPreview: filtered.blocked.length ? gyFormatBlockedPreview(filtered.blocked) : "",
+    task: task,
+  };
+}
+
+async function handleGuangyaMagnetSave(hash, params) {
+  hash = String(hash || "").trim().toLowerCase();
+  var entry = loadMagnetEntry(hash);
+  var link = MAGNET_LINK_PREFIX + hash;
+  if (!entry || !entry.magnet) {
+    return {
+      id: hash,
+      type: "url",
+      title: "转存失败",
+      description: "找不到磁力缓存，请返回影片详情页重新加载后再试",
+      link: link,
+    };
+  }
+  var cfg = await getGuangyaConfig(params);
+  var token = normalizeGuangyaToken(
+    cfg.guangya_token ||
+      (await resolveGuangyaTokenAsync(params)) ||
+      (await discoverGuangyaTokenAsync(params || {})) ||
+      resolveGuangyaTokenSync(params)
+  );
+  if (token) {
+    cfg.guangya_token = token;
+    persistGlobalParam("guangya_token", token);
+  }
+  if (!token) {
+    return {
+      id: hash,
+      type: "url",
+      title: "未配置光鸭",
+      description: "请在模块全局参数中填写光鸭 refresh_token（gy.- 开头）",
+      link: link,
+      backdropPath: entry.backdropPath || undefined,
+    };
+  }
+  try {
+    var result = await saveMagnetToGuangya(entry.magnet, cfg);
+    var lines = [];
+    var nameText = stripCodeFromMagnetName(entry.name || "", entry.code);
+    if (nameText && nameText !== entry.hash) lines.push(nameText);
+    var head = [];
+    var sizeText = formatMagnetSize(entry.size) || safeText(entry.sizeText || "");
+    if (sizeText) head.push(sizeText);
+    head.push("保留 " + result.keptCount);
+    if (result.blockedCount > 0) head.push("过滤 " + result.blockedCount);
+    if (entry.source || (entry.sources && entry.sources.length)) {
+      head.push(magnetSourceLabel(entry));
+    }
+    if (head.length) lines.push(head.join(" · "));
+    if (result.keptPreview) lines.push("已提交\n" + result.keptPreview);
+    if (result.blockedPreview) lines.push("已过滤\n" + result.blockedPreview);
+    return {
+      id: hash,
+      type: "url",
+      title: "光鸭转存已提交",
+      description: lines.join("\n"),
+      link: link,
+      backdropPath: entry.backdropPath || undefined,
+      posterPath: entry.backdropPath || undefined,
+    };
+  } catch (err) {
+    return {
+      id: hash,
+      type: "url",
+      title: "光鸭转存失败",
+      description: String((err && err.message) || err || "未知错误"),
+      link: link,
+      backdropPath: entry.backdropPath || undefined,
+    };
+  }
+}
+
+
+/* ===== catemby detail + guangya magnet wiring ===== */
+
+async function loadDetail(link, params) {
+  params = params || {};
+  const linkStr = String(link || "").trim();
+  if (linkStr.indexOf(MAGNET_LINK_PREFIX) === 0) {
+    return await handleGuangyaMagnetSave(linkStr.slice(MAGNET_LINK_PREFIX.length), params);
+  }
+
   const movieId = extractMovieId(link);
 
   const detail = await apiGet("/v4/movies/" + movieId);
   const movie = detail.movie || {};
   const rawCode = safeText(movie.number || "");
   const code = isValidJavCatalogCode(rawCode) ? rawCode : "";
-  // DMM 高清只复用列表阶段缓存，详情不再发起探测；无 DMM 高清则不赋值，不回退站点封面
-  const dmmProbe = code ? getCachedDmmProbeCover(code) : null;
-  const probeBackdrop =
-    dmmProbe && dmmProbe.backdropUrl && !isInvalidCoverTarget(dmmProbe.backdropUrl)
-      ? String(dmmProbe.backdropUrl).trim()
-      : "";
-  const probePoster =
-    dmmProbe &&
-    dmmProbe.posterUrl &&
-    !isInvalidCoverTarget(dmmProbe.posterUrl) &&
-    !isLowResDmmPosterUrl(dmmProbe.posterUrl)
-      ? String(dmmProbe.posterUrl).trim()
-      : "";
-  const coverUrl = probeBackdrop || probePoster || "";
-  const posterUrl = probePoster || probeBackdrop || "";
 
-  let backdropPathsList = [];
-  if (coverUrl) {
-    const galleryUrls = collectGalleryUrls(movie);
-    const fallbackGallery =
-      !galleryUrls.length && code
-        ? compactUniqueUrls((fetchJavTrailersMeta(code, dmmProbe).backdropPaths || [])).filter(Boolean)
-        : [];
-    const coverKey = urlDedupeKey(coverUrl);
-    const stills = (galleryUrls.length ? galleryUrls : fallbackGallery).filter(
-      (u) => urlDedupeKey(u) !== coverKey
-    );
-    backdropPathsList = compactUniqueUrls([].concat(coverUrl ? [coverUrl] : [], stills)).filter(Boolean);
+  // 对齐 javdb：顶图只用 DMM Probe 高清；缓存未命中时详情再探测一次；无高清不回退站点封面
+  let dmmProbe = code ? getCachedDmmProbeCover(code) : null;
+  if (code && !dmmProbe) {
+    try {
+      dmmProbe = await fetchDmmProbeCover(code, params);
+    } catch (eProbe) {
+      dmmProbe = null;
+    }
   }
+  let posterUrl = "";
+  let coverUrl = "";
+  if (dmmProbe) {
+    const probePoster = String(dmmProbe.posterUrl || "").trim();
+    const probeBackdrop = String(dmmProbe.backdropUrl || "").trim();
+    if (probePoster && !isInvalidCoverTarget(probePoster) && !isLowResDmmPosterUrl(probePoster)) {
+      posterUrl = probePoster;
+    }
+    if (probeBackdrop && !isInvalidCoverTarget(probeBackdrop)) {
+      coverUrl = probeBackdrop;
+    }
+  }
+
+  const galleryUrls = collectGalleryUrls(movie);
+  // 顶图有 DMM 高清才放首位；无高清不拿站点封面顶上
+  const backdropPathsList = compactUniqueUrls(
+    [].concat(coverUrl ? [coverUrl] : [], galleryUrls || [])
+  ).filter(Boolean);
+
   const meta = parseDetailMeta(movie);
   const actorMovies = (movie.actor_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
   const fallbackRelated = (movie.relative_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
   const relatedSource = actorMovies.length ? actorMovies : fallbackRelated;
-  const relatedItems = relatedSource.map((item) => mapRelatedMovie(item, posterUrl || coverUrl));
+  const relatedMovies = relatedSource.map((item) => mapRelatedMovie(item, posterUrl || coverUrl));
+
+  // 磁力：API_BASE magnets + 短评 + Sukebei；点击 gy: 走光鸭转存
+  let magnetItems = [];
+  let magnetSource = "";
+  let detailReviews = [];
+  try {
+    const magnetBundle = await fetchDetailMagnets(movieId, params, code || rawCode);
+    magnetSource = magnetBundle.source || "";
+    detailReviews = magnetBundle.reviews || [];
+    magnetItems = buildMagnetRelatedItems(magnetBundle.magnets, {
+      movieId: movieId,
+      code: code || rawCode,
+      title: safeText(movie.title || code || rawCode),
+      backdropPath: coverUrl || posterUrl || (backdropPathsList[0] || ""),
+    });
+  } catch (eMag) {}
+
+  const relatedItems = magnetItems.length
+    ? magnetItems.concat(relatedMovies).slice(0, 24)
+    : relatedMovies;
 
   const previewUrl = movie.preview_video_url || "";
-  const trailers = buildTrailers(movie, posterUrl || coverUrl);
+  const trailers = buildTrailers(movie, coverUrl || posterUrl);
 
   const titleText = safeText(movie.title || code);
   const displayTitle = code && titleText.indexOf(code) !== 0 ? code + " " + titleText : titleText;
+  const descParts = [];
+  if (code) descParts.push("番号: " + code);
+  if (movie.release_date) descParts.push("日期: " + movie.release_date);
+  if (movie.duration) descParts.push("时长: " + movie.duration + " 分钟");
   const summary = safeText(movie.summary || "");
+  if (summary) descParts.push("── 剧情简介 ──\n\n" + summary);
+  if (movie.maker_name) descParts.push("厂牌: " + movie.maker_name);
+  const stats = [];
+  if (movie.want_watch_count) stats.push("想看 " + movie.want_watch_count);
+  if (movie.watched_count) stats.push("观看 " + movie.watched_count);
+  if (movie.reviews_count) stats.push("评价 " + movie.reviews_count);
+  if (magnetItems.length) stats.push("磁力 " + magnetItems.length);
+  if (stats.length) descParts.push(stats.join("  "));
+  const shortReviewBlock = formatDetailReviewsForDescription(detailReviews);
+  if (shortReviewBlock) descParts.push(shortReviewBlock);
+  if (magnetItems.length) {
+    descParts.push(formatMagnetSourceHint(magnetSource));
+  } else if ((movie.magnets_count || 0) > 0) {
+    descParts.push("磁力: 标记有磁链，暂未解析到可用条目");
+  } else if (resolveGuangyaTokenSync(params)) {
+    descParts.push("磁力: 暂无可用磁链");
+  }
 
-  return {
+  const item = {
     id: code || movie.id || movieId,
     type: "detail",
     mediaType: "movie",
     title: displayTitle,
     link: movieLink(movie.id || movieId),
-    description: summary || undefined,
+    description: descParts.length ? descParts.join("\n\n") : undefined,
     // 预告只走底部 trailers，不写入 videoUrl，避免被当成播放源
     playerType: "system",
     customHeaders: {
@@ -3734,10 +6078,6 @@ async function loadDetail(link) {
       Referer: SITE_BASE + "/movie/" + movieId,
       Origin: SITE_BASE,
     },
-    backdropPath: coverUrl || undefined,
-    posterPath: posterUrl || undefined,
-    detailPoster: posterUrl || undefined,
-    coverUrl: coverUrl || undefined,
     backdropPaths: backdropPathsList.length ? backdropPathsList : undefined,
     genreItems: meta.genreItems.length ? meta.genreItems : undefined,
     peoples: meta.peoples.length ? meta.peoples : undefined,
@@ -3752,8 +6092,20 @@ async function loadDetail(link) {
       videoMode: "none",
       previewVideoUrl: previewUrl || "",
       fullVideoAvailable: false,
+      magnetCount: magnetItems.length,
+      magnetSource: magnetSource || "",
     },
   };
+  if (coverUrl) {
+    item.backdropPath = coverUrl;
+    item.coverUrl = coverUrl;
+    item.image = coverUrl;
+  }
+  if (posterUrl) {
+    item.posterPath = posterUrl;
+    item.detailPoster = posterUrl;
+  }
+  return item;
 }
 
 function extractSearchCode(text) {
