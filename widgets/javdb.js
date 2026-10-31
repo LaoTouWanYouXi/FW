@@ -2889,14 +2889,11 @@ WidgetMetadata = {
           title: "排序",
           type: "enumeration",
           enumOptions: [
-            { title: "最近上架", value: "published" },
-            { title: "最高评分", value: "score" },
-            { title: "最多收藏", value: "fav" },
             { title: "最近上架(有磁力)", value: "published_download" },
             { title: "最高评分(有磁力)", value: "score_download" },
             { title: "最多收藏(有磁力)", value: "fav_download" },
           ],
-          value: "published",
+          value: "published_download",
         },
         { name: "page", title: "页码", type: "page", value: "1" },
       ],
@@ -4373,6 +4370,25 @@ function buildListDescription(movie) {
   return parts.join(" | ");
 }
 
+/** 接口的磁力筛选偶尔会混入无磁力影片，按列表磁力标记再过滤一次。 */
+function movieHasMagnets(movie) {
+  movie = movie || {};
+  var counts = [movie.magnets_count, movie.magnet_count, movie.magnetsCount, movie.magnetCount];
+  for (var i = 0; i < counts.length; i++) {
+    if (Number(counts[i] || 0) > 0) return true;
+  }
+  if (Array.isArray(movie.magnets) && movie.magnets.length > 0) return true;
+  var flags = [movie.has_magnets, movie.has_magnet, movie.hasMagnets, movie.hasMagnet];
+  for (var j = 0; j < flags.length; j++) {
+    if (flags[j] === true || flags[j] === 1 || String(flags[j]).toLowerCase() === "true") return true;
+  }
+  return false;
+}
+
+function filterMoviesWithMagnets(movies) {
+  return (movies || []).filter(movieHasMagnets);
+}
+
 function mapListMovie(movie) {
   var code = safeText(movie.number || "");
   var title = safeText(movie.title || code || movie.id);
@@ -4417,7 +4433,9 @@ function buildCategoryFilter(kind, itemId, magnetOnly) {
   var typePart = "0";
   var extra = magnetOnly ? "m" : "";
   if (kind === "tags") {
-    if (/^[pmcsiv]$/i.test(id)) return typePart + ":0:x:" + id.toLowerCase();
+    if (/^[pmcsiv]$/i.test(id)) {
+      return typePart + ":0:x:" + id.toLowerCase() + (extra ? ":" + extra : "");
+    }
     return typePart + ":t::" + id + (extra ? ":" + extra : "");
   }
   var kindCode = CATEGORY_KIND_CODE[kind] || "a";
@@ -4442,7 +4460,7 @@ async function fetchCategoryMovies(filterBy, params) {
     },
     params
   );
-  return (data && data.movies) || [];
+  return filterMoviesWithMagnets((data && data.movies) || []);
 }
 
 function categoryKindLabel(kind) {
@@ -4545,18 +4563,17 @@ async function fetchCategoryEntities(kind, params) {
 
 async function fetchSearchMovies(keyword, params, magnetOnly) {
   var page = Number(params.page || params.from || 1);
-  var sortRaw = String((params && params.sort_by) || "published");
-  var magnet = !!magnetOnly || /_download$/.test(sortRaw);
-  var sortKey = magnet ? sortRaw.replace(/_download$/, "") : sortRaw;
+  var sortRaw = String((params && params.sort_by) || "published_download");
+  var sortKey = sortRaw.replace(/_download$/, "");
   var query = {
     q: keyword,
     page: page,
     type: "movie",
-    movie_filter_by: magnet ? "magnet" : "all",
+    movie_filter_by: "magnet",
     movie_sort_by: SEARCH_SORT_MAP[sortKey] || "release",
   };
   var data = await apiGet("/v2/search", query, params);
-  return (data && data.movies) || [];
+  return filterMoviesWithMagnets((data && data.movies) || []);
 }
 
 function parseDetailMeta(movie) {
@@ -6960,14 +6977,8 @@ async function loadDetail(link, params) {
       genreItems: meta.genreItems,
       peoples: meta.peoples,
       description: descParts.join("\n\n"),
-      // 预告只走底部 trailers；不写 videoUrl/previewUrl，并关闭播放资源占位
+      // 仅保留预告模块；不写 videoId/videoUrl/previewUrl，避免生成无效的 JavDB 播放源。
       trailers: trailers,
-      videoId: movie.id || movieId,
-      extra: {
-        videoMode: "none",
-        previewVideoUrl: previewUrl || "",
-        fullVideoAvailable: false,
-      },
     };
     if (relatedItems.length) item.relatedItems = relatedItems;
     if (coverUrl) {
@@ -7006,6 +7017,8 @@ if (typeof module !== "undefined" && module.exports) {
     resolveCategoryTarget: resolveCategoryTarget,
     buildCategoryFilter: buildCategoryFilter,
     mapListMovie: mapListMovie,
+    movieHasMagnets: movieHasMagnets,
+    filterMoviesWithMagnets: filterMoviesWithMagnets,
     categoryIdFromPath: categoryIdFromPath,
     buildJdSignature: buildJdSignature,
     extractToken: extractToken,

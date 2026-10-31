@@ -1530,16 +1530,16 @@ function categoryModuleParams(options) {
     },
     {
       name: "sort_by",
-      title: "排序",
+      title: "作品排序",
       type: "enumeration",
       enumOptions: [
-        { title: "最近上市", value: "published" },
-        { title: "最高评分", value: "score" },
-        { title: "最多收藏", value: "fav" },
+        { title: "最近上架(有磁力)", value: "published_download" },
+        { title: "最高评分(有磁力)", value: "score_download" },
+        { title: "最多收藏(有磁力)", value: "fav_download" },
       ],
-      value: "published",
+      value: "published_download",
     },
-    { name: "page", title: "页码", type: "page", value: "1" },
+    { name: "page", title: "作品页码", type: "page", value: "1" },
     { name: "category_kind", title: "分类类型", type: "constant", value: options.kind || "actors" },
   ];
 }
@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.9.2",
+  version: "1.9.3",
   requiredVersion: "0.0.2",
   detailCacheDuration: 3600,
   globalParams: [
@@ -2077,8 +2077,13 @@ function shouldUseCategorySearch(movieType) {
   return movieType === "uncensored" || movieType === "western" || movieType === "fc2";
 }
 
+function normalizeWorkSortKey(sortBy) {
+  const key = String(sortBy || "published_download").toLowerCase().replace(/_download$/, "");
+  return SORT_API_MAP[key] ? key : "published";
+}
+
 function resolveSearchSortBy(sortBy) {
-  const key = String(sortBy || "published").toLowerCase();
+  const key = normalizeWorkSortKey(sortBy);
   return SEARCH_SORT_MAP[key] || SEARCH_SORT_MAP.published;
 }
 
@@ -2107,29 +2112,28 @@ function resolveCategorySearchKeyword(kind, itemId, params) {
 function buildCategoryFilter(kind, itemId, movieType, listFilter) {
   const typePart = MOVIE_TYPE_CODE[movieType || "all"] || "0";
   const id = String(itemId || "").trim();
-  // 标签筛选格式: movieType:t::tagId （第三段占位为空，标签 ID 在第四段）
-  // 基本筛选项 p/m/c/s/i/v: movieType:0:x:code
+  // “作品排序”统一仅显示有磁力作品。基础筛选 p/m/c/s/i/v 保持 JavDB
+  // 原生格式；其余演员/片商/标签筛选都追加 :m。
+  const extra = LIST_FILTER_CODE[listFilter || "magnet"] || "m";
   if (kind === "tags") {
     if (/^[pmcsiv]$/i.test(id)) {
       return typePart + ":0:x:" + id.toLowerCase();
     }
-    return typePart + ":t::" + id;
+    return typePart + ":t::" + id + ":" + extra;
   }
   const kindCode = CATEGORY_KIND_CODE[kind] || "0";
-  let filterBy = typePart + ":" + kindCode + ":" + id;
-  const extra = LIST_FILTER_CODE[listFilter || "all"];
-  filterBy += extra ? ":" + extra : ":";
-  return filterBy;
+  return typePart + ":" + kindCode + ":" + id + ":" + extra;
 }
 
 async function fetchSearchMovies(keyword, params) {
+  params = params || {};
   const page = Number(params.page || params.from || 1);
   const movieType = resolveMovieType(params.movie_type);
   const query = {
     q: keyword,
     page,
     type: "movie",
-    movie_filter_by: "all",
+    movie_filter_by: "magnet",
     movie_sort_by: resolveSearchSortBy(params.sort_by),
   };
   if (movieType !== "all") {
@@ -2144,7 +2148,7 @@ async function fetchTagMovies(tagName, params) {
 }
 
 function resolveSortQuery(sortBy) {
-  return SORT_API_MAP[sortBy] || SORT_API_MAP.published;
+  return SORT_API_MAP[normalizeWorkSortKey(sortBy)] || SORT_API_MAP.published;
 }
 
 async function fetchCategoryMovies(filterBy, params) {
@@ -2995,19 +2999,54 @@ function isPreviewVariant(item) {
   return false;
 }
 
+function normalizeResolveVariant(item) {
+  if (!item) return null;
+  if (typeof item === "string") return { sourceUrl: item, variant: "original", label: "原版" };
+  if (typeof item !== "object") return null;
+  const sourceUrl = String(
+    item.sourceUrl || item.source_url || item.streamUrl || item.stream_url ||
+    item.playUrl || item.play_url || item.url || item.src || ""
+  ).trim();
+  if (!sourceUrl) return null;
+  return Object.assign({}, item, {
+    sourceUrl,
+    variant: item.variant || item.type || item.quality || "",
+    label: item.label || item.name || item.title || item.quality || "",
+  });
+}
+
+function collectResolveVariants(data) {
+  if (!data) return [];
+  if (typeof data === "string") return [normalizeResolveVariant(data)].filter(Boolean);
+  const root = data.data && typeof data.data === "object" ? data.data : data;
+  let variants = [];
+  if (Array.isArray(root.variants)) variants = root.variants;
+  else if (Array.isArray(root.sources)) variants = root.sources;
+  else if (Array.isArray(root.streams)) variants = root.streams;
+  else if (Array.isArray(root.items)) variants = root.items;
+  else {
+    const single = normalizeResolveVariant(root);
+    if (single) variants = [single];
+  }
+  return variants.map(normalizeResolveVariant).filter(Boolean);
+}
+
 function pickResolveVariant(data) {
-  if (!data || data.error || !Array.isArray(data.variants) || !data.variants.length) return null;
-  const usable = data.variants.filter((item) => item && item.sourceUrl && !isPreviewVariant(item));
+  if (!data || data.error) return null;
+  const usable = collectResolveVariants(data).filter((item) => !isPreviewVariant(item));
   if (!usable.length) return null;
   const picked =
-    usable.find((item) => String(item.variant || "").toLowerCase() === "original") ||
-    usable.find((item) => /原版|完整|full|original/i.test(String(item.label || "") + " " + String(item.variant || ""))) ||
+    usable.find((item) => /(?:^|_)(?:original|raw)(?:_|$)/i.test(String(item.variant || ""))) ||
+    usable.find((item) => /原版|完整|full|original|raw/i.test(String(item.label || "") + " " + String(item.variant || ""))) ||
     usable[0];
   return picked && picked.sourceUrl ? picked : null;
 }
 
-function movieLink(id) {
-  return encodeLink("/movie/" + id);
+function movieLink(id, code) {
+  let link = "/movie/" + encodeURIComponent(String(id || ""));
+  const number = safeText(code || "");
+  if (number) link += "?number=" + encodeURIComponent(number);
+  return encodeLink(link);
 }
 
 function siteUrl(path) {
@@ -3393,17 +3432,20 @@ function mapListMovie(movie, params) {
     type: "url",
     mediaType: "movie",
     title: code ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "") : title,
+    code: code || rawCode || "",
+    number: code || rawCode || "",
+    movieId: movie.id || "",
     backdropPath: covers.backdropPath || siteCover,
     posterPath: covers.posterPath || undefined,
     detailPoster: covers.detailPoster || undefined,
     coverUrl: covers.coverUrl || covers.backdropPath || siteCover,
-    link: movieLink(movie.id),
+    link: movieLink(movie.id, code || rawCode),
     description: buildListDescription(movie),
     releaseDate: movie.release_date || "",
     durationText: movie.duration ? movie.duration + " 分钟" : "",
     rating: Number(movie.score || 0) || 0,
     playerType: "system",
-    videoId: movie.id,
+    videoId: code || rawCode || movie.id,
   };
 }
 
@@ -3641,7 +3683,7 @@ async function loadPage(params) {
 
     // 标签（含主题/角色等）走 /v1/movies/tags 的 t 类型筛选，避免关键词搜索错位
     if (ctx.kind === "tags") {
-      const filterBy = buildCategoryFilter("tags", ctx.itemId, movieType, params.list_filter || "all");
+      const filterBy = buildCategoryFilter("tags", ctx.itemId, movieType, params.list_filter || "magnet");
       let movies = await fetchCategoryMovies(filterBy, params);
       if (!movies.length && !/^[pmcsiv]$/i.test(String(ctx.itemId))) {
         const keyword = resolveCategorySearchKeyword("tags", ctx.itemId, params);
@@ -3656,7 +3698,7 @@ async function loadPage(params) {
       return enrichListMovies(movies, params);
     }
 
-    const filterBy = buildCategoryFilter(ctx.kind, ctx.itemId, movieType, params.list_filter || "all");
+    const filterBy = buildCategoryFilter(ctx.kind, ctx.itemId, movieType, params.list_filter || "magnet");
     const movies = await fetchCategoryMovies(filterBy, params);
     if (!movies.length && ctx.kind === "makers") {
       const keyword = resolveCategorySearchKeyword(ctx.kind, ctx.itemId, params);
@@ -3677,9 +3719,10 @@ async function searchMovies(params) {
     if (!keyword) {
       return [{ id: "tip", type: "text", title: "请输入关键词开始搜索" }];
     }
-    const page = Number(params.page || params.from || 1);
-    const data = await apiGet("/v2/search", { q: keyword, page, type: "movie" });
-    return enrichListMovies(data.movies || []);
+    const movies = await fetchSearchMovies(keyword, Object.assign({}, params, {
+      sort_by: params.sort_by || "published_download",
+    }));
+    return enrichListMovies(movies, params);
   } catch (error) {
     console.error("[catemby] searchMovies 失败:", error.message || error);
     throw error;
@@ -5685,7 +5728,10 @@ async function loadDetail(link, params) {
     type: "detail",
     mediaType: "movie",
     title: displayTitle,
-    link: movieLink(movie.id || movieId),
+    code: code || rawCode || "",
+    number: code || rawCode || "",
+    movieId: movie.id || movieId,
+    link: movieLink(movie.id || movieId, code || rawCode),
     description: descParts.length ? descParts.join("\n\n") : undefined,
     // 预告只走底部 trailers，不写入 videoUrl，避免被当成播放源
     playerType: "system",
@@ -5703,11 +5749,14 @@ async function loadDetail(link, params) {
     releaseDate: movie.release_date || "",
     durationText: movie.duration ? movie.duration + " 分钟" : "",
     rating: Number(movie.score || 0) || 0,
-    videoId: movie.id || movieId,
+    videoId: code || rawCode || movie.id || movieId,
     extra: {
-      videoMode: "none",
+      videoMode: "stream",
       previewVideoUrl: previewUrl || "",
-      fullVideoAvailable: false,
+      fullVideoAvailable: !!(code || rawCode),
+      code: code || rawCode || "",
+      number: code || rawCode || "",
+      movieId: movie.id || movieId,
       magnetCount: magnetItems.length,
       magnetSource: magnetSource || "",
     },
@@ -5764,19 +5813,25 @@ function collectStringValues(value, depth, out, visited) {
 
 function extractCodeFromParams(params) {
   params = params || {};
-  // videoId 常为站点哈希或媒体库数字 ID，放到文件名/标题之后，避免误当成番号
+  const linkQuery = parseLinkQuery(params.link || "").query || {};
+  // 优先读取显式番号与链接中的 number；站点哈希/媒体库 ID 放到末尾。
   const priority = [
-    params.code, params.number, params.fileName, params.filename, params.file_name,
+    params.code, params.number, params.catalogCode, params.catalog_code,
+    linkQuery.number, linkQuery.code,
+    params.fileName, params.filename, params.file_name,
     params.name, params.path, params.filePath, params.file_path, params.mediaPath, params.media_path,
     params.title, params.seriesName, params.originalTitle, params.originalName,
     params.episodeName, params.id, params.description, params.link,
     params.videoId, params.url, params.videoUrl, params.playUrl, params.streamUrl,
   ];
+  if (params.extra) {
+    priority.push(params.extra.code, params.extra.number, params.extra.catalogCode);
+  }
   if (params.tmdbInfo) {
     priority.push(params.tmdbInfo.title, params.tmdbInfo.name, params.tmdbInfo.originalTitle, params.tmdbInfo.originalName);
   }
   if (params.info) {
-    priority.push(params.info.title, params.info.name, params.info.originalTitle, params.info.originalName);
+    priority.push(params.info.code, params.info.number, params.info.title, params.info.name, params.info.originalTitle, params.info.originalName);
   }
   for (const value of priority) {
     const code = extractSearchCode(value);
@@ -5789,12 +5844,50 @@ function extractCodeFromParams(params) {
   return "";
 }
 
+function extractMovieIdFromPlaybackParams(params) {
+  params = params || {};
+  const candidates = [params.movieId, params.movie_id, params.javdbId, params.javdb_id];
+  if (params.extra) candidates.push(params.extra.movieId, params.extra.movie_id);
+  const links = [params.link, params.detailLink, params.detail_link];
+  for (const link of links) {
+    if (!link) continue;
+    try {
+      const id = extractMovieId(link);
+      if (id && !isValidJavCatalogCode(id)) return id;
+    } catch (e) {}
+  }
+  for (const value of candidates) {
+    const id = String(value || "").trim();
+    if (id && !isValidJavCatalogCode(id)) return id;
+  }
+  // 兼容旧列表项：旧版 videoId/id 仅携带 JavDB 内部 ID。
+  for (const value of [params.videoId, params.id]) {
+    const id = String(value || "").trim();
+    if (id && !extractSearchCode(id)) return id;
+  }
+  return "";
+}
+
+async function recoverCodeFromPlaybackParams(params) {
+  const direct = extractCodeFromParams(params || {});
+  if (direct) return direct;
+  const movieId = extractMovieIdFromPlaybackParams(params || {});
+  if (!movieId) return "";
+  try {
+    const movie = await apiGet("/v4/movies/" + encodeURIComponent(movieId));
+    const code = extractSearchCode(movie && movie.number);
+    return code && isValidJavCatalogCode(code) ? code : "";
+  } catch (e) {
+    return "";
+  }
+}
+
 async function loadResource(params) {
   try {
-    const code = extractCodeFromParams(params || {});
+    params = params || {};
+    const code = await recoverCodeFromPlaybackParams(params);
     if (!code) return [];
 
-    // 片源只依赖番号 resolve，不再串行搜片+详情（可省 1–3s）
     const fullVideo = await resolveFullVideo(code, "zh");
     if (!fullVideo || !fullVideo.sourceUrl || isPreviewVariant(fullVideo)) return [];
 
@@ -5809,6 +5902,7 @@ async function loadResource(params) {
         name: "Catemby 完整(" + (fullVideo.label || "原版") + ")",
         description: "番号：" + code + "\n类型：完整视频",
         url: fullVideo.sourceUrl,
+        playerType: "system",
         customHeaders: headers,
       },
     ];
