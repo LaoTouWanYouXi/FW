@@ -1548,12 +1548,12 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "catemby_legacy",
   title: "Catemby遗产",
-  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(API/短评/Sukebei)一键转存光鸭",
+  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.9.1",
+  version: "1.9.2",
   requiredVersion: "0.0.2",
-  detailCacheDuration: 60,
+  detailCacheDuration: 3600,
   globalParams: [
     {
       name: "guangya_token",
@@ -2165,7 +2165,7 @@ const DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
 const DMM_PROBE_WORKER_CACHE = {};
 const DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
 const DMM_PROBE_BATCH_SIZE = 20;
-const DMM_PROBE_BATCH_TIMEOUT_MS = 60000;
+const DMM_PROBE_BATCH_TIMEOUT_MS = 20000;
 const DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v2.";
 const DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
 const DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
@@ -2236,6 +2236,20 @@ function dmmProbeStorageKey(code) {
   return DMM_PROBE_STORAGE_PREFIX + String(code || "").trim().toUpperCase();
 }
 
+function normalizeProbeBest(best) {
+  if (!best || typeof best !== "object") return null;
+  let posterUrl = String(best.posterUrl || "").trim();
+  let backdropUrl = String(best.backdropUrl || "").trim();
+  if (isInvalidCoverTarget(posterUrl) || isLowResDmmPosterUrl(posterUrl)) posterUrl = "";
+  if (isInvalidCoverTarget(backdropUrl)) backdropUrl = "";
+  if (!posterUrl && !backdropUrl) return null;
+  return {
+    contentId: String(best.contentId || ""),
+    posterUrl: posterUrl,
+    backdropUrl: backdropUrl,
+  };
+}
+
 function loadDmmProbeFromStorage(code) {
   code = String(code || "").trim().toUpperCase();
   if (!code) return undefined;
@@ -2247,11 +2261,12 @@ function loadDmmProbeFromStorage(code) {
     const ttl = entry.ok ? DMM_PROBE_STORAGE_TTL_OK_MS : DMM_PROBE_STORAGE_TTL_FAIL_MS;
     if (Date.now() - Number(entry.savedAt) > ttl) return undefined;
     if (!entry.ok) return null;
-    return {
-      contentId: String(entry.contentId || ""),
-      posterUrl: String(entry.posterUrl || ""),
-      backdropUrl: String(entry.backdropUrl || ""),
-    };
+    // 与 javdb.js 一致：旧的空 URL“成功缓存”按未命中处理，允许列表重新探测。
+    return normalizeProbeBest({
+      contentId: entry.contentId || "",
+      posterUrl: entry.posterUrl || "",
+      backdropUrl: entry.backdropUrl || "",
+    }) || undefined;
   } catch (err) {
     return undefined;
   }
@@ -2298,14 +2313,10 @@ function parseDmmProbeWorkerResponse(res) {
     const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
     if (!data) return { probe: undefined, knownMiss: false };
     if (data.ok && data.best) {
-      return {
-        probe: {
-          contentId: String(data.best.contentId || ""),
-          posterUrl: String(data.best.posterUrl || ""),
-          backdropUrl: String(data.best.backdropUrl || ""),
-        },
-        knownMiss: false,
-      };
+      const probe = normalizeProbeBest(data.best);
+      return probe
+        ? { probe: probe, knownMiss: false }
+        : { probe: null, knownMiss: true };
     }
     if (data.ok === false) return { probe: null, knownMiss: true };
     return { probe: undefined, knownMiss: false };
@@ -2407,17 +2418,19 @@ async function prefetchDmmProbeCovers(codes, params) {
   const base = getDmmProbeWorkerBase(params);
   if (!base) return;
 
+  // 与 javdb.js 一致：批量探测失败后逐条并发回退，避免每个番号最多串行等 8 秒。
   const batchSize = DMM_PROBE_BATCH_SIZE || 20;
   for (let start = 0; start < pending.length; start += batchSize) {
     const chunk = pending.slice(start, start + batchSize);
     const ok = await fetchDmmProbeCoverBatch(chunk, params);
-    if (!ok) {
-      for (let j = 0; j < chunk.length; j++) {
-        if (!Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, chunk[j])) {
-          await fetchDmmProbeCover(chunk[j], params);
-        }
+    if (ok) continue;
+    const tasks = [];
+    for (let j = 0; j < chunk.length; j++) {
+      if (!Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, chunk[j])) {
+        tasks.push(fetchDmmProbeCover(chunk[j], params));
       }
     }
+    await Promise.all(tasks);
   }
 }
 
@@ -2432,11 +2445,7 @@ function applyDmmProbeBatchResults(data, requestedCodes) {
       .toUpperCase();
     if (!code) continue;
     if (row && row.ok && row.best) {
-      byCode[code] = {
-        contentId: String(row.best.contentId || ""),
-        posterUrl: String(row.best.posterUrl || ""),
-        backdropUrl: String(row.best.backdropUrl || ""),
-      };
+      byCode[code] = normalizeProbeBest(row.best);
     } else {
       byCode[code] = null;
     }
@@ -4323,7 +4332,7 @@ function stripCodeFromMagnetName(name, code) {
   return stripped || name;
 }
 
-/* ========================= 短评磁力解析 ========================= */
+/* ========================= JavDB API 磁力解析 ========================= */
 
 function decodeMagnetSegment(raw) {
   try {
@@ -4373,400 +4382,24 @@ function parseMagnetFlags(text) {
   };
 }
 
-function trimMagnetUri(raw) {
-  return String(raw || "")
-    .replace(/[)\]}>,.;。，、！!？?]+$/g, "")
-    .replace(/\\+$/, "")
-    .trim();
-}
-
-function extractMagnetsFromText(text) {
-  var results = [];
-  var src = String(text || "");
-  if (!src || src.toLowerCase().indexOf("magnet:") < 0) return results;
-  var re = /magnet:\?[^\s<>"'\u0000-\u001f]+/gi;
-  var match;
-  while ((match = re.exec(src)) !== null) {
-    var magnet = trimMagnetUri(match[0]);
-    if (!/^magnet:\?/i.test(magnet)) continue;
-    var hash = extractMagnetHash(magnet);
-    if (!hash) continue;
-    var start = Math.max(0, match.index - 160);
-    var end = Math.min(src.length, match.index + magnet.length + 160);
-    results.push({
-      magnet: magnet,
-      hash: hash,
-      context: src.slice(start, end),
-    });
-  }
-  return results;
-}
-
-function reviewTextFromItem(item) {
-  if (!item || typeof item !== "object") return "";
-  var keys = ["body", "content", "text", "review", "comment", "message", "description"];
-  for (var i = 0; i < keys.length; i++) {
-    var val = item[keys[i]];
-    if (typeof val === "string" && val.trim()) return val;
-  }
-  return "";
-}
-
-function parseMagnetDisplayName(magnet, context, code) {
-  var dnMatch = String(magnet || "").match(/(?:^|[?&])dn=([^&]+)/i);
-  if (dnMatch) {
-    var dn = safeText(decodeMagnetSegment(dnMatch[1]));
-    var cleaned = stripCodeFromMagnetName(dn, code);
-    if (cleaned && cleaned.toUpperCase() !== safeText(code).toUpperCase()) return cleaned;
-    if (dn && (!code || dn.toUpperCase() !== safeText(code).toUpperCase())) return dn;
-  }
-  var ctx = safeText(
-    String(context || "")
-      .replace(magnet, "")
-      .replace(/magnet:\?[^\s<>"']+/gi, " ")
-      .replace(/\s+/g, " ")
-  );
-  ctx = stripCodeFromMagnetName(ctx, code);
-  if (ctx && ctx.length <= 80 && ctx.toUpperCase() !== safeText(code).toUpperCase()) return ctx;
-  return "短评分享";
-}
-
-function magnetsFromReviews(reviews, code) {
-  var out = [];
-  var seen = {};
-  (reviews || []).forEach(function (review) {
-    extractMagnetsFromText(reviewTextFromItem(review)).forEach(function (entry) {
-      if (seen[entry.hash]) return;
-      seen[entry.hash] = true;
-      var flags = parseMagnetFlags(entry.context + " " + entry.magnet);
-      var sizeMb = parseMagnetSizeMb(entry.context) || parseMagnetSizeFromUri(entry.magnet);
-      out.push({
-        hash: entry.hash,
-        name: parseMagnetDisplayName(entry.magnet, entry.context, code),
-        size: sizeMb,
-        cnsub: flags.cnsub,
-        hd: flags.hd,
-        uncensored: flags.uncensored,
-        source: "review",
-        magnet: entry.magnet,
-      });
-    });
-  });
-  return out;
-}
-
-async function fetchMovieReviews(movieId, params, options) {
-  options = options || {};
-  var page = Number(options.page || 1) || 1;
-  var limit = Number(options.limit || 20) || 20;
-  var maxPages = Number(options.maxPages || 5) || 5;
-
-  async function fetchReviewPage(pageNumber) {
-    try {
-      var data = await apiGet(
-        "/v1/movies/" + movieId + "/reviews",
-        { page: pageNumber, limit: limit },
-        params
-      );
-      var list = (data && (data.reviews || data.comments || data.list || data.items)) || [];
-      return Array.isArray(list) ? list : [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  var firstPage = await fetchReviewPage(page);
-  if (!firstPage.length || firstPage.length < limit || maxPages <= 1) return firstPage;
-
-  // 后续短评页彼此独立，并发获取，避免详情页为 5 页短评逐页串行等待。
-  var tasks = [];
-  for (var p = page + 1; p < page + maxPages; p++) tasks.push(fetchReviewPage(p));
-  var pages = await Promise.all(tasks);
-  var all = firstPage.slice();
-  for (var i = 0; i < pages.length; i++) {
-    if (pages[i].length) all = all.concat(pages[i]);
-  }
-  return all;
-}
-
-/* ========================= Sukebei 磁力（对齐可视化版） ========================= */
-
-var SUKEBEI_BASE = "https://sukebei.nyaa.si";
-var SUKEBEI_CACHE_TTL = 3600 * 1000;
-var SUKEBEI_CACHE_PREFIX = "catemby.sukebei.v1.";
-var SUKEBEI_MAX_RESULTS = 12;
-
-function extractSukebeiInfoHash(href) {
-  var m = String(href || "").match(/btih:([a-fA-F0-9]{40}|[a-zA-Z0-9]{32})/i);
-  return m ? m[1].toLowerCase() : "";
-}
-
-function simpleSukebeiHash(text) {
-  var h = 0;
-  var s = String(text || "");
-  for (var i = 0; i < s.length; i++) {
-    h = (h << 5) - h + s.charCodeAt(i);
-    h |= 0;
-  }
-  return "h" + Math.abs(h).toString(36);
-}
-
-function extractSukebeiTags(title) {
-  var text = String(title || "");
-  var tags = [];
-  if (/(?:[^A-Za-z]|^)FHDC|[-_]CH?(?:[^A-Za-z]|$)|中字|中文|字幕/i.test(text)) tags.push("cnsub");
-  if (/\bHD\b|1080|720p|2160/i.test(text)) tags.push("hd");
-  if (/\b4K\b/i.test(text)) tags.push("4k");
-  if (/破解|流出|无码|uncensored|uncen|-uc\b|leak/i.test(text)) tags.push("uncensored");
-  return tags;
-}
-
-function parseSukebeiSizeBytes(text) {
-  var m = String(text || "")
-    .replace(/,/g, "")
-    .match(/([\d.]+)\s*(GiB|MiB|KiB|GB|MB|KB|B)?/i);
-  if (!m) return 0;
-  var n = parseFloat(m[1]);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  var unit = String(m[2] || "B").toUpperCase();
-  var map = { GIB: 1 << 30, MIB: 1 << 20, KIB: 1 << 10, GB: 1 << 30, MB: 1 << 20, KB: 1 << 10, B: 1 };
-  return n * (map[unit] || 1);
-}
-
-function scoreSukebeiCandidate(item) {
-  var score = 0;
-  var tags = (item && item.tags) || [];
-  if (tags.indexOf("cnsub") >= 0) score += 100;
-  if (tags.indexOf("hd") >= 0) score += 20;
-  if (tags.indexOf("4k") >= 0) score += 10;
-  if (tags.indexOf("uncensored") >= 0) score += 30;
-  if (item && item.sizeBytes) {
-    var gb = item.sizeBytes / (1 << 30);
-    if (gb >= 0.3 && gb <= 15) score += 20;
-    if (gb > 30) score -= 50;
-  }
-  return score;
-}
-
-function sukebeiCacheKey(keyword) {
-  return SUKEBEI_CACHE_PREFIX + String(keyword || "").trim().toLowerCase();
-}
-
-function loadSukebeiCache(keyword) {
-  try {
-    var raw = readStore(sukebeiCacheKey(keyword));
-    if (!raw) return null;
-    var entry = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!entry || !entry.time || !Array.isArray(entry.items)) return null;
-    if (Date.now() - Number(entry.time) > SUKEBEI_CACHE_TTL) return null;
-    return entry.items;
-  } catch (e) {
-    return null;
-  }
-}
-
-function saveSukebeiCache(keyword, items) {
-  if (!items || !items.length) return;
-  try {
-    writeStore(
-      sukebeiCacheKey(keyword),
-      JSON.stringify({ time: Date.now(), items: items })
-    );
-  } catch (e) {}
-}
-
-function parseSukebeiHtmlWithWidget(html) {
-  var out = [];
-  if (!Widget.html || typeof Widget.html.load !== "function") return out;
-  try {
-    var $ = Widget.html.load(html);
-    $("tr.default, tr.success").each(function () {
-      var titleEl = $(this).find("td:nth-child(2) > a:nth-child(1)");
-      var magnetEl = $(this).find("td:nth-child(3) > a:last-child");
-      var sizeEl = $(this).find("td:nth-child(4)");
-      var title = String(titleEl.attr("title") || titleEl.text() || "").trim();
-      var maglink = String(magnetEl.attr("href") || "").trim();
-      var sizeText = String(sizeEl.text() || "").trim();
-      if (!title || !maglink) return;
-      if (!/^magnet:/i.test(maglink)) return;
-      var infoHash = extractSukebeiInfoHash(maglink) || simpleSukebeiHash(maglink);
-      var tags = extractSukebeiTags(title);
-      out.push({
-        title: title,
-        maglink: maglink,
-        size: sizeText,
-        sizeBytes: parseSukebeiSizeBytes(sizeText),
-        infoHash: infoHash,
-        source: "sukebei",
-        tags: tags,
-      });
-    });
-  } catch (e) {}
-  return out;
-}
-
-function parseSukebeiHtmlFallback(html) {
-  var out = [];
-  var src = String(html || "");
-  if (!src) return out;
-  var rowRe = /<tr[^>]*class="[^"]*(?:default|success)[^"]*"[^>]*>([\s\S]*?)<\/tr>/gi;
-  var row;
-  while ((row = rowRe.exec(src)) !== null) {
-    var block = row[1] || "";
-    var titleMatch =
-      block.match(/<a[^>]*title="([^"]+)"[^>]*>/i) ||
-      block.match(/<td[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i);
-    var magnetMatch = block.match(/href="(magnet:\?[^"]+)"/i);
-    var sizeMatch = block.match(/<td[^>]*>\s*([\d.,]+\s*(?:GiB|MiB|KiB|GB|MB|KB|B)?)\s*<\/td>/i);
-    var title = safeText(titleMatch ? titleMatch[1] : "");
-    var maglink = magnetMatch ? trimMagnetUri(magnetMatch[1]) : "";
-    if (!title || !maglink) continue;
-    var infoHash = extractSukebeiInfoHash(maglink) || simpleSukebeiHash(maglink);
-    var sizeText = sizeMatch ? String(sizeMatch[1]).trim() : "";
-    var tags = extractSukebeiTags(title);
-    out.push({
-      title: title,
-      maglink: maglink,
-      size: sizeText,
-      sizeBytes: parseSukebeiSizeBytes(sizeText),
-      infoHash: infoHash,
-      source: "sukebei",
-      tags: tags,
-    });
-  }
-  return out;
-}
-
-async function searchMagnetSukebei(keyword) {
-  var q = String(keyword || "").trim();
-  if (!q) return [];
-  var cached = loadSukebeiCache(q);
-  if (cached) return cached;
-
-  var url = SUKEBEI_BASE + "/?f=0&c=0_0&q=" + encodeURIComponent(q);
-  var resp;
-  try {
-    resp = await Widget.http.get(url, {
-      timeout: 8000,
-      headers: {
-        Accept: "text/html,application/xhtml+xml",
-        "User-Agent": UA,
-      },
-    });
-  } catch (e) {
-    console.log("[magnet:sukebei] request failed:", (e && e.message) || e);
-    return [];
-  }
-  if (!resp || resp.data === undefined || resp.data === null) {
-    console.log("[magnet:sukebei] no response");
-    return [];
-  }
-  var html = typeof resp.data === "string" ? resp.data : String(resp.data);
-  var list = parseSukebeiHtmlWithWidget(html);
-  if (!list.length) list = parseSukebeiHtmlFallback(html);
-  list.sort(function (a, b) {
-    return scoreSukebeiCandidate(b) - scoreSukebeiCandidate(a);
-  });
-  if (list.length > SUKEBEI_MAX_RESULTS) list = list.slice(0, SUKEBEI_MAX_RESULTS);
-  console.log("[magnet:sukebei] result count:", list.length);
-  saveSukebeiCache(q, list);
-  return list;
-}
-
-function magnetsFromSukebei(candidates, code) {
-  var out = [];
-  var seen = {};
-  (candidates || []).forEach(function (item) {
-    if (!item) return;
-    var magnet = String(item.maglink || item.magnet || "").trim();
-    if (!/^magnet:/i.test(magnet)) return;
-    var hash = String(item.infoHash || extractSukebeiInfoHash(magnet) || "").trim().toLowerCase();
-    if (!hash || seen[hash]) return;
-    seen[hash] = true;
-    var tags = item.tags || extractSukebeiTags(item.title || "");
-    var sizeMb = 0;
-    if (item.sizeBytes > 0) sizeMb = item.sizeBytes / (1024 * 1024);
-    else sizeMb = parseMagnetSizeMb(item.size || "") || parseMagnetSizeFromUri(magnet);
-    out.push({
-      hash: hash,
-      name: safeText(item.title || code || hash),
-      size: sizeMb,
-      sizeText: safeText(item.size || ""),
-      cnsub: tags.indexOf("cnsub") >= 0,
-      hd: tags.indexOf("hd") >= 0 || tags.indexOf("4k") >= 0,
-      uhd: tags.indexOf("4k") >= 0,
-      uncensored: tags.indexOf("uncensored") >= 0,
-      source: "sukebei",
-      sources: ["sukebei"],
-      magnet: magnet,
-    });
-  });
-  return out;
-}
-
 function formatMagnetSourceHint(source) {
-  if (source === "review") return "磁力: 见下方磁力栏（短评），点击转存光鸭";
-  if (source === "sukebei") return "磁力: 见下方磁力栏（Sukebei），点击转存光鸭";
-  if (source === "mixed") return "磁力: 见下方磁力栏（多源已合并），点击转存光鸭";
   if (source === "api") return "磁力: 见下方磁力栏（JavDB），点击转存光鸭";
   return "磁力: 见下方磁力栏，点击转存光鸭";
 }
 
 async function fetchDetailMagnets(movieId, params, code) {
-  // 三个来源互不依赖；并发请求，详情耗时取最慢单项而不是三项之和。
-  var apiTask = apiGet("/v1/movies/" + movieId + "/magnets", null, params)
-    .then(function (data) {
-      return (data && data.magnets) || [];
-    })
-    .catch(function () {
-      return [];
-    });
-  var reviewTask = fetchMovieReviews(movieId, params, { page: 1, limit: 20, maxPages: 5 })
-    .catch(function () {
-      return [];
-    });
-  var sukebeiTask = code
-    ? searchMagnetSukebei(code).catch(function (eSuk) {
-        console.log("[magnet:sukebei] merge failed:", (eSuk && eSuk.message) || eSuk);
-        return [];
-      })
-    : Promise.resolve([]);
-
-  var results = await Promise.all([apiTask, reviewTask, sukebeiTask]);
-  var apiMagnets = results[0] || [];
-  var reviews = results[1] || [];
-  var reviewMagnets = magnetsFromReviews(reviews, code);
-  var sukebeiMagnets = magnetsFromSukebei(results[2] || [], code);
-  var merged = mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code, sukebeiMagnets);
-  var source = "";
-  var parts = [];
-  if (apiMagnets.length) parts.push("api");
-  if (reviewMagnets.length) parts.push("review");
-  if (sukebeiMagnets.length) parts.push("sukebei");
-  if (parts.length > 1) source = "mixed";
-  else if (parts[0] === "api") source = "api";
-  else if (parts[0] === "review") source = "review";
-  else if (parts[0] === "sukebei") source = "sukebei";
-  return { magnets: merged, source: source, reviews: reviews };
-}
-
-/** 短评写入详情简介（对齐可视化：按点赞排序取前 15） */
-function formatDetailReviewsForDescription(reviews) {
-  var list = (reviews || [])
-    .filter(function (item) {
-      return item && (item.content || reviewTextFromItem(item));
-    })
-    .sort(function (a, b) {
-      return (Number(b.likes_count) || 0) - (Number(a.likes_count) || 0);
-    })
-    .slice(0, 15);
-  if (!list.length) return "";
-  var parts = ["── 短评 ──"];
-  for (var i = 0; i < list.length; i++) {
-    var text = safeText(list[i].content || reviewTextFromItem(list[i]));
-    if (text) parts.push(text);
+  // 详情只请求 JavDB 磁力 API；不再等待短评与 Sukebei。
+  try {
+    var magnetData = await apiGet("/v1/movies/" + movieId + "/magnets", null, params);
+    var apiMagnets = (magnetData && magnetData.magnets) || [];
+    return {
+      rawMagnets: apiMagnets,
+      magnets: mergeAndDedupeMagnets(apiMagnets, [], code, []),
+      source: apiMagnets.length ? "api" : "",
+    };
+  } catch (eMag) {
+    return { rawMagnets: [], magnets: [], source: "" };
   }
-  return parts.length > 1 ? parts.join("\n\n") : "";
 }
 
 function normalizeMagnetSourceKey(source) {
@@ -5967,23 +5600,20 @@ async function loadDetail(link, params) {
 
   const movieId = extractMovieId(link);
 
-  const detail = await apiGet("/v4/movies/" + movieId);
+  // 详情资料和 JavDB 磁力接口互不依赖，直接并发，避免两个请求串行累加。
+  const detailPromise = apiGet("/v4/movies/" + movieId);
+  const magnetPromise = fetchDetailMagnets(movieId, params, "");
+  const detailResults = await Promise.all([detailPromise, magnetPromise]);
+  const detail = detailResults[0] || {};
+  const magnetBundle = detailResults[1] || { magnets: [], source: "" };
   const movie = detail.movie || {};
   const rawCode = safeText(movie.number || "");
   const code = isValidJavCatalogCode(rawCode) ? rawCode : "";
 
-  // DMM 高清封面与磁力互不依赖，命中本地封面缓存时只启动磁力任务。
-  let dmmProbe = code ? getCachedDmmProbeCover(code) : null;
-  const dmmProbeTask = code && !dmmProbe
-    ? fetchDmmProbeCover(code, params).catch(function () { return null; })
-    : Promise.resolve(dmmProbe);
-  const magnetTask = fetchDetailMagnets(movieId, params, code || rawCode).catch(function () {
-    return { magnets: [], source: "", reviews: [] };
-  });
-  const detailExtras = await Promise.all([dmmProbeTask, magnetTask]);
-  dmmProbe = detailExtras[0];
-  const magnetBundle = detailExtras[1] || { magnets: [], source: "", reviews: [] };
-
+  // 与 javdb.js 一致：详情页只读取列表阶段已缓存的 DMM Probe，不在这里发起
+  // 最长 8 秒的封面探测。未命中时立即回退站点/CDN 封面。
+  const dmmProbe = code ? getCachedDmmProbeCover(code) : null;
+  const siteCover = resolveDetailBackdropUrl(movie) || buildCatembyCdnCoverUrl(movie.id || movieId);
   let posterUrl = "";
   let coverUrl = "";
   if (dmmProbe) {
@@ -5996,19 +5626,27 @@ async function loadDetail(link, params) {
       coverUrl = probeBackdrop;
     }
   }
+  if (!coverUrl) coverUrl = siteCover || "";
+  if (!posterUrl) posterUrl = siteCover || "";
 
   const galleryUrls = collectGalleryUrls(movie);
-  // 顶图有 DMM 高清才放首位；无高清不拿站点封面顶上
+  // DMM 高清优先；缓存未命中时使用详情接口或 Catemby CDN 封面。
   const backdropPathsList = compactUniqueUrls(
     [].concat(coverUrl ? [coverUrl] : [], galleryUrls || [])
   ).filter(Boolean);
 
   const meta = parseDetailMeta(movie);
 
-  // 相似作品区域仅用于展示磁力，不再解析 actor_movies / relative_movies。
+  // 只保留 JavDB API 磁力；已移除短评和 Sukebei 请求。
+  // 请求启动时番号尚未返回，因此详情到达后用番号重新规范化磁力标题与特征。
+  const normalizedMagnets = mergeAndDedupeMagnets(
+    magnetBundle.rawMagnets || magnetBundle.magnets || [],
+    [],
+    code || rawCode,
+    []
+  );
   const magnetSource = magnetBundle.source || "";
-  const detailReviews = magnetBundle.reviews || [];
-  const magnetItems = buildMagnetRelatedItems(magnetBundle.magnets || [], {
+  const magnetItems = buildMagnetRelatedItems(normalizedMagnets, {
     movieId: movieId,
     code: code || rawCode,
     title: safeText(movie.title || code || rawCode),
@@ -6034,8 +5672,6 @@ async function loadDetail(link, params) {
   if (movie.reviews_count) stats.push("评价 " + movie.reviews_count);
   if (magnetItems.length) stats.push("磁力 " + magnetItems.length);
   if (stats.length) descParts.push(stats.join("  "));
-  const shortReviewBlock = formatDetailReviewsForDescription(detailReviews);
-  if (shortReviewBlock) descParts.push(shortReviewBlock);
   if (magnetItems.length) {
     descParts.push(formatMagnetSourceHint(magnetSource));
   } else if ((movie.magnets_count || 0) > 0) {

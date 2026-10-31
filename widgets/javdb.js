@@ -1000,14 +1000,11 @@ function categoryParams(paramName, itemTitle, enumOptions) {
       title: "作品排序",
       type: "enumeration",
       enumOptions: [
-        { title: "最近上架", value: "published" },
-        { title: "最高评分", value: "score" },
-        { title: "最多收藏", value: "fav" },
         { title: "最近上架(有磁力)", value: "published_download" },
         { title: "最高评分(有磁力)", value: "score_download" },
         { title: "最多收藏(有磁力)", value: "fav_download" },
       ],
-      value: "published",
+      value: "published_download",
     },
     { name: "page", title: "作品页码", type: "page" },
   ];
@@ -3503,9 +3500,9 @@ function resolveCategoryTarget(params) {
   if (people.title) params.categoryTitle = people.title;
   if (genre.title) params.categoryTitle = genre.title;
 
-  var sortRaw = String(params.sort_by || "published");
-  var magnetOnly = /_download$/.test(sortRaw);
-  var sortKey = magnetOnly ? sortRaw.replace(/_download$/, "") : sortRaw;
+  var sortRaw = String(params.sort_by || "published_download");
+  var sortKey = sortRaw.replace(/_download$/, "");
+  var magnetOnly = true;
   params.sort_by = SORT_API_MAP[sortKey] ? sortKey : "published";
 
   var ref = genre.id || people.id || "";
