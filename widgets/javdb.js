@@ -13,7 +13,7 @@
  * 登录：POST /v1/sessions（账号密码 → JWT）
  * 列表：DMM Probe Worker 批量探测高清竖/横封面
  * 详情：顶图复用列表探测缓存；简介含剧情+短评；trailers 预告片模块
- * 磁力：relatedItems 合并 JavDB API / 短评 / Sukebei；展示体积·特征·来源，简介含文件名与转存说明
+ * 磁力：relatedItems 合并 JavDB API / 短评；展示体积·特征·来源，简介含文件名与转存说明
  */
 
 /* ===== module: 01-category-options.js ===== */
@@ -1018,7 +1018,7 @@ WidgetMetadata = {
   title: "JavDB",
   version: "4.6.3",
   requiredVersion: "0.0.1",
-  description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类预填；详情磁力合并 JavDB/短评/Sukebei，一键转存光鸭",
+  description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类预填；详情磁力合并 JavDB/短评，一键转存光鸭",
   author: "老头",
   site: API_SITE,
   detailCacheDuration: 3600,
@@ -4632,8 +4632,7 @@ function mapMagnets(magnets) {
     if (m.uhd) flags.push("4K");
     else if (m.hd) flags.push("HD");
     var size = formatMagnetSize(m.size) || safeText(m.sizeText || "");
-    var source =
-      m.source === "sukebei" ? "Sukebei" : m.source === "review" ? "短评" : m.source === "mixed" ? "多源" : "JavDB";
+    var source = m.source === "review" ? "短评" : m.source === "mixed" ? "多源" : "JavDB";
     lines.push(
       (m.name || m.hash || "magnet") +
         (size ? " · " + size : "") +
@@ -4680,9 +4679,6 @@ var GY_DEFAULT_BLOCK_PATTERNS = [
   "\\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent)$",
 ];
 var GY_AUTO_INDEX = 10000;
-var SUKEBEI_BASE = "https://sukebei.nyaa.si";
-var SUKEBEI_TIMEOUT_MS = 8000;
-var SUKEBEI_MAX_RESULTS = 12;
 
 function gyRandomHex(len) {
   var out = "";
@@ -4831,31 +4827,6 @@ function parseMagnetFlags(text) {
   };
 }
 
-function magnetTitleMatchesCode(title, code) {
-  var t = String(title || "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
-  var c = String(code || "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
-  if (!c) return true;
-  return t.indexOf(c) !== -1;
-}
-
-function scoreSukebeiCandidate(item) {
-  var score = 0;
-  if (!item) return 0;
-  if (item.cnsub) score += 100;
-  if (item.uhd) score += 40;
-  else if (item.hd) score += 20;
-  if (item.uncensored) score += 30;
-  var gb = Number(item.size || 0) / 1024;
-  if (gb >= 0.3 && gb <= 20) score += 20;
-  if (gb > 30) score -= 40;
-  score += Math.min(Number(item.seeders || 0), 100) / 5;
-  return score;
-}
-
 function trimMagnetUri(raw) {
   return String(raw || "")
     .replace(/[)\]}>,.;。，、！!？?]+$/g, "")
@@ -4940,119 +4911,6 @@ function magnetsFromReviews(reviews, code) {
   return out;
 }
 
-/* ========================= Sukebei 磁力补充 ========================= */
-
-function parseSukebeiHtmlRows(html, code) {
-  var out = [];
-  var seen = {};
-  if (!html) return out;
-  try {
-    if (typeof Widget !== "undefined" && Widget.html && typeof Widget.html.load === "function") {
-      var $ = Widget.html.load(String(html));
-      $("tr.default, tr.success").each(function () {
-        var $row = $(this);
-        var $title = $row.find("td:nth-child(2) > a:nth-child(1)");
-        var $magnet = $row.find("td:nth-child(3) > a:last-child");
-        var sizeText = safeText($row.find("td:nth-child(4)").text());
-        var dateText = safeText($row.find("td:nth-child(5)").text());
-        var seeders = Number(safeText($row.find("td:nth-child(6)").text()).replace(/[^\d]/g, "")) || 0;
-        var title = safeText($title.attr("title") || $title.text());
-        var magnet = trimMagnetUri(String($magnet.attr("href") || ""));
-        if (!title || !/^magnet:\?/i.test(magnet)) return;
-        if (!magnetTitleMatchesCode(title, code)) return;
-        var hash = extractMagnetHash(magnet);
-        if (!hash || seen[hash]) return;
-        seen[hash] = true;
-        var flags = parseMagnetFlags(title + " " + magnet);
-        out.push({
-          hash: hash,
-          name: title,
-          size: parseMagnetSizeMb(sizeText) || parseMagnetSizeFromUri(magnet),
-          sizeText: sizeText,
-          date: dateText,
-          seeders: seeders,
-          cnsub: flags.cnsub,
-          hd: flags.hd,
-          uhd: flags.uhd,
-          uncensored: flags.uncensored,
-          source: "sukebei",
-          sources: ["sukebei"],
-          magnet: magnet,
-        });
-      });
-    }
-  } catch (eCheerio) {
-    console.warn("[javdb/sukebei] cheerio parse failed:", (eCheerio && eCheerio.message) || eCheerio);
-  }
-  if (out.length) return out;
-
-  // 兜底：正则从 HTML 抽 magnet + 邻近标题/体积
-  var src = String(html || "");
-  var re = /magnet:\?[^\s"'<>]+/gi;
-  var match;
-  while ((match = re.exec(src)) !== null) {
-    var magnet = trimMagnetUri(match[0]);
-    if (!/^magnet:\?/i.test(magnet)) continue;
-    var hash = extractMagnetHash(magnet);
-    if (!hash || seen[hash]) continue;
-    var start = Math.max(0, match.index - 400);
-    var end = Math.min(src.length, match.index + magnet.length + 200);
-    var context = src.slice(start, end).replace(/<[^>]+>/g, " ");
-    var titleGuess = safeText(
-      context
-        .replace(/magnet:\?[^\s]+/gi, " ")
-        .replace(/\s+/g, " ")
-        .slice(0, 160)
-    );
-    if (titleGuess && !magnetTitleMatchesCode(titleGuess, code) && !magnetTitleMatchesCode(context, code)) {
-      continue;
-    }
-    seen[hash] = true;
-    var flags = parseMagnetFlags(titleGuess + " " + magnet + " " + context);
-    out.push({
-      hash: hash,
-      name: titleGuess || "Sukebei " + hash.slice(0, 8),
-      size: parseMagnetSizeMb(context) || parseMagnetSizeFromUri(magnet),
-      sizeText: "",
-      date: "",
-      seeders: 0,
-      cnsub: flags.cnsub,
-      hd: flags.hd,
-      uhd: flags.uhd,
-      uncensored: flags.uncensored,
-      source: "sukebei",
-      sources: ["sukebei"],
-      magnet: magnet,
-    });
-  }
-  return out;
-}
-
-async function searchMagnetSukebei(code) {
-  code = safeText(code);
-  if (!code) return [];
-  var url = SUKEBEI_BASE + "/?f=0&c=0_0&q=" + encodeURIComponent(code);
-  try {
-    console.log("[javdb/sukebei] search:", code);
-    var resp = await Widget.http.get(url, { timeout: SUKEBEI_TIMEOUT_MS });
-    var html = resp && (resp.data || resp.body || "");
-    if (!html) {
-      console.log("[javdb/sukebei] empty response");
-      return [];
-    }
-    var list = parseSukebeiHtmlRows(html, code);
-    list.sort(function (a, b) {
-      return scoreSukebeiCandidate(b) - scoreSukebeiCandidate(a);
-    });
-    if (list.length > SUKEBEI_MAX_RESULTS) list = list.slice(0, SUKEBEI_MAX_RESULTS);
-    console.log("[javdb/sukebei] result count:", list.length);
-    return list;
-  } catch (err) {
-    console.warn("[javdb/sukebei] failed:", (err && err.message) || err);
-    return [];
-  }
-}
-
 async function fetchMovieReviews(movieId, params, options) {
   options = options || {};
   var page = Number(options.page || 1) || 1;
@@ -5082,7 +4940,6 @@ function collectMagnetSourceKeys(magnets) {
       var key = String(list[i] || "").toLowerCase();
       if (key === "api" || key === "javdb") seen.api = true;
       else if (key === "review") seen.review = true;
-      else if (key === "sukebei") seen.sukebei = true;
     }
   });
   return seen;
@@ -5093,19 +4950,16 @@ function summarizeMagnetSourceLabel(magnets, fallback) {
   var labels = [];
   if (seen.api) labels.push("JavDB官方");
   if (seen.review) labels.push("短评");
-  if (seen.sukebei) labels.push("Sukebei");
   if (labels.length > 1) return "mixed";
   if (labels.length === 1) {
     if (seen.api) return "api";
     if (seen.review) return "review";
-    if (seen.sukebei) return "sukebei";
   }
   return fallback || "";
 }
 
 function formatMagnetSourceTip(source) {
   if (source === "review") return "磁力: 见下方相似作品栏（来自短评分享），点击即可转存光鸭云盘";
-  if (source === "sukebei") return "磁力: 见下方相似作品栏（来自 Sukebei），点击即可转存光鸭云盘";
   if (source === "mixed") return "磁力: 见下方相似作品栏（多源已合并去重），点击即可转存光鸭云盘";
   if (source === "api") return "磁力: 见下方相似作品栏（JavDB官方），点击即可转存光鸭云盘";
   return "磁力: 见下方相似作品栏，点击即可转存光鸭云盘";
@@ -5114,7 +4968,6 @@ function formatMagnetSourceTip(source) {
 async function fetchDetailMagnets(movieId, params, code) {
   var apiMagnets = [];
   var reviewMagnets = [];
-  var sukebeiMagnets = [];
   var reviews = [];
 
   var magnetPromise = Promise.resolve()
@@ -5140,26 +4993,16 @@ async function fetchDetailMagnets(movieId, params, code) {
       return [];
     });
 
-  var sukebeiPromise = code
-    ? searchMagnetSukebei(code)
-    : Promise.resolve([]);
-
-  var settled = await Promise.all([magnetPromise, reviewPromise, sukebeiPromise]);
+  var settled = await Promise.all([magnetPromise, reviewPromise]);
   apiMagnets = settled[0] || [];
   reviewMagnets = settled[1] || [];
-  sukebeiMagnets = settled[2] || [];
 
-  var merged = mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code, sukebeiMagnets);
+  var merged = mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code);
   var source = summarizeMagnetSourceLabel(merged, "");
   if (!source) {
-    var hit = 0;
-    if (apiMagnets.length) hit++;
-    if (reviewMagnets.length) hit++;
-    if (sukebeiMagnets.length) hit++;
-    if (hit > 1) source = "mixed";
+    if (apiMagnets.length && reviewMagnets.length) source = "mixed";
     else if (apiMagnets.length) source = "api";
     else if (reviewMagnets.length) source = "review";
-    else if (sukebeiMagnets.length) source = "sukebei";
   }
   return {
     magnets: merged,
@@ -5168,7 +5011,6 @@ async function fetchDetailMagnets(movieId, params, code) {
     counts: {
       api: apiMagnets.length,
       review: reviewMagnets.length,
-      sukebei: sukebeiMagnets.length,
       merged: merged.length,
     },
   };
@@ -5196,7 +5038,7 @@ function formatDetailReviewsForDescription(reviews) {
 function normalizeMagnetSourceKey(source) {
   var key = String(source || "api").toLowerCase();
   if (key === "javdb") return "api";
-  if (key === "api" || key === "review" || key === "sukebei" || key === "mixed") return key;
+  if (key === "api" || key === "review" || key === "mixed") return key;
   return "api";
 }
 
@@ -5211,7 +5053,6 @@ function magnetSourceLabel(m) {
   if (!keys.length) keys.push("api");
   var labels = keys.map(function (key) {
     if (key === "review") return "短评";
-    if (key === "sukebei") return "Sukebei";
     return "JavDB官方";
   });
   return labels.join("＋");
@@ -5322,7 +5163,7 @@ function pickBetterMagnet(current, candidate) {
   return mergeMagnetCandidateMeta(better, other);
 }
 
-function mergeMagnetLists(apiMagnets, reviewMagnets, code, sukebeiMagnets) {
+function mergeMagnetLists(apiMagnets, reviewMagnets, code) {
   var map = {};
   function ingest(list, source) {
     (list || []).forEach(function (raw) {
@@ -5333,7 +5174,6 @@ function mergeMagnetLists(apiMagnets, reviewMagnets, code, sukebeiMagnets) {
   }
   ingest(apiMagnets, "api");
   ingest(reviewMagnets, "review");
-  ingest(sukebeiMagnets, "sukebei");
   return Object.keys(map).map(function (hash) {
     return map[hash];
   });
@@ -5354,8 +5194,8 @@ function dedupeMagnetsByGbBucket(magnets) {
     });
 }
 
-function mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code, sukebeiMagnets) {
-  var merged = mergeMagnetLists(apiMagnets, reviewMagnets, code, sukebeiMagnets);
+function mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code) {
+  var merged = mergeMagnetLists(apiMagnets, reviewMagnets, code);
   return dedupeMagnetsByGbBucket(merged);
 }
 
@@ -7191,7 +7031,6 @@ if (typeof module !== "undefined" && module.exports) {
     mapCategoryEntity: mapCategoryEntity,
     fetchDetailMagnets: fetchDetailMagnets,
     mergeAndDedupeMagnets: mergeAndDedupeMagnets,
-    searchMagnetSukebei: searchMagnetSukebei,
     buildMagnetItemDescription: buildMagnetItemDescription,
     formatMagnetSourceTip: formatMagnetSourceTip,
     dedupeMagnetsByGbBucket: dedupeMagnetsByGbBucket,

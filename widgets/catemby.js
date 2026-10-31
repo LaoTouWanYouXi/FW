@@ -3409,33 +3409,6 @@ function buildListDescription(movie) {
   return parts.join(" · ");
 }
 
-function mapRelatedMovie(item, fallbackCover) {
-  const cover =
-    (item.cover_url && !isJdbstaticUrl(item.cover_url) ? item.cover_url : "") ||
-    (item.thumb_url && !isJdbstaticUrl(item.thumb_url) ? item.thumb_url : "") ||
-    buildCatembyCdnCoverUrl(item.id) ||
-    fallbackCover ||
-    "";
-  const code = safeText(item.number || "");
-  const title = safeText(item.title || code || item.id);
-  const displayTitle = code
-    ? code + " " + title.replace(new RegExp("^" + code + "\\s*"), "")
-    : title;
-  const meta = [];
-  if (item.release_date) meta.push(String(item.release_date).slice(0, 10));
-  if (item.score) meta.push(Number(item.score).toFixed(1) + "分");
-  return {
-    id: code || item.id,
-    type: "url",
-    mediaType: "movie",
-    title: safeText(displayTitle),
-    backdropPath: cover || undefined,
-    link: movieLink(item.id),
-    description: meta.length ? meta.join(" · ") : undefined,
-    videoId: item.id,
-  };
-}
-
 function parseDetailMeta(movie) {
   const genreItems = [];
   const peoples = [];
@@ -4487,18 +4460,31 @@ async function fetchMovieReviews(movieId, params, options) {
   var page = Number(options.page || 1) || 1;
   var limit = Number(options.limit || 20) || 20;
   var maxPages = Number(options.maxPages || 5) || 5;
-  var all = [];
-  for (var p = page; p < page + maxPages; p++) {
-    var data;
+
+  async function fetchReviewPage(pageNumber) {
     try {
-      data = await apiGet("/v1/movies/" + movieId + "/reviews", { page: p, limit: limit }, params);
+      var data = await apiGet(
+        "/v1/movies/" + movieId + "/reviews",
+        { page: pageNumber, limit: limit },
+        params
+      );
+      var list = (data && (data.reviews || data.comments || data.list || data.items)) || [];
+      return Array.isArray(list) ? list : [];
     } catch (e) {
-      break;
+      return [];
     }
-    var list = (data && (data.reviews || data.comments || data.list || data.items)) || [];
-    if (!Array.isArray(list) || !list.length) break;
-    all = all.concat(list);
-    if (list.length < limit) break;
+  }
+
+  var firstPage = await fetchReviewPage(page);
+  if (!firstPage.length || firstPage.length < limit || maxPages <= 1) return firstPage;
+
+  // 后续短评页彼此独立，并发获取，避免详情页为 5 页短评逐页串行等待。
+  var tasks = [];
+  for (var p = page + 1; p < page + maxPages; p++) tasks.push(fetchReviewPage(p));
+  var pages = await Promise.all(tasks);
+  var all = firstPage.slice();
+  for (var i = 0; i < pages.length; i++) {
+    if (pages[i].length) all = all.concat(pages[i]);
   }
   return all;
 }
@@ -4719,34 +4705,38 @@ function magnetsFromSukebei(candidates, code) {
 }
 
 function formatMagnetSourceHint(source) {
-  if (source === "review") return "磁力: 见下方相似作品栏（短评），点击转存光鸭";
-  if (source === "sukebei") return "磁力: 见下方相似作品栏（Sukebei），点击转存光鸭";
-  if (source === "mixed") return "磁力: 见下方相似作品栏（多源已合并），点击转存光鸭";
-  if (source === "api") return "磁力: 见下方相似作品栏（JavDB），点击转存光鸭";
-  return "磁力: 见下方相似作品栏，点击转存光鸭";
+  if (source === "review") return "磁力: 见下方磁力栏（短评），点击转存光鸭";
+  if (source === "sukebei") return "磁力: 见下方磁力栏（Sukebei），点击转存光鸭";
+  if (source === "mixed") return "磁力: 见下方磁力栏（多源已合并），点击转存光鸭";
+  if (source === "api") return "磁力: 见下方磁力栏（JavDB），点击转存光鸭";
+  return "磁力: 见下方磁力栏，点击转存光鸭";
 }
 
 async function fetchDetailMagnets(movieId, params, code) {
-  var apiMagnets = [];
-  var reviewMagnets = [];
-  var sukebeiMagnets = [];
-  var reviews = [];
-  try {
-    var magnetData = await apiGet("/v1/movies/" + movieId + "/magnets", null, params);
-    apiMagnets = (magnetData && magnetData.magnets) || [];
-  } catch (eMag) {}
-  try {
-    reviews = await fetchMovieReviews(movieId, params, { page: 1, limit: 20, maxPages: 5 });
-    reviewMagnets = magnetsFromReviews(reviews, code);
-  } catch (eRev) {}
-  try {
-    if (code) {
-      var sukebeiRaw = await searchMagnetSukebei(code);
-      sukebeiMagnets = magnetsFromSukebei(sukebeiRaw, code);
-    }
-  } catch (eSuk) {
-    console.log("[magnet:sukebei] merge failed:", (eSuk && eSuk.message) || eSuk);
-  }
+  // 三个来源互不依赖；并发请求，详情耗时取最慢单项而不是三项之和。
+  var apiTask = apiGet("/v1/movies/" + movieId + "/magnets", null, params)
+    .then(function (data) {
+      return (data && data.magnets) || [];
+    })
+    .catch(function () {
+      return [];
+    });
+  var reviewTask = fetchMovieReviews(movieId, params, { page: 1, limit: 20, maxPages: 5 })
+    .catch(function () {
+      return [];
+    });
+  var sukebeiTask = code
+    ? searchMagnetSukebei(code).catch(function (eSuk) {
+        console.log("[magnet:sukebei] merge failed:", (eSuk && eSuk.message) || eSuk);
+        return [];
+      })
+    : Promise.resolve([]);
+
+  var results = await Promise.all([apiTask, reviewTask, sukebeiTask]);
+  var apiMagnets = results[0] || [];
+  var reviews = results[1] || [];
+  var reviewMagnets = magnetsFromReviews(reviews, code);
+  var sukebeiMagnets = magnetsFromSukebei(results[2] || [], code);
   var merged = mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code, sukebeiMagnets);
   var source = "";
   var parts = [];
@@ -4757,7 +4747,7 @@ async function fetchDetailMagnets(movieId, params, code) {
   else if (parts[0] === "api") source = "api";
   else if (parts[0] === "review") source = "review";
   else if (parts[0] === "sukebei") source = "sukebei";
-  return { magnets: merged, source: source, reviews: reviews || [] };
+  return { magnets: merged, source: source, reviews: reviews };
 }
 
 /** 短评写入详情简介（对齐可视化：按点赞排序取前 15） */
@@ -5982,15 +5972,18 @@ async function loadDetail(link, params) {
   const rawCode = safeText(movie.number || "");
   const code = isValidJavCatalogCode(rawCode) ? rawCode : "";
 
-  // 对齐 javdb：顶图只用 DMM Probe 高清；缓存未命中时详情再探测一次；无高清不回退站点封面
+  // DMM 高清封面与磁力互不依赖，命中本地封面缓存时只启动磁力任务。
   let dmmProbe = code ? getCachedDmmProbeCover(code) : null;
-  if (code && !dmmProbe) {
-    try {
-      dmmProbe = await fetchDmmProbeCover(code, params);
-    } catch (eProbe) {
-      dmmProbe = null;
-    }
-  }
+  const dmmProbeTask = code && !dmmProbe
+    ? fetchDmmProbeCover(code, params).catch(function () { return null; })
+    : Promise.resolve(dmmProbe);
+  const magnetTask = fetchDetailMagnets(movieId, params, code || rawCode).catch(function () {
+    return { magnets: [], source: "", reviews: [] };
+  });
+  const detailExtras = await Promise.all([dmmProbeTask, magnetTask]);
+  dmmProbe = detailExtras[0];
+  const magnetBundle = detailExtras[1] || { magnets: [], source: "", reviews: [] };
+
   let posterUrl = "";
   let coverUrl = "";
   if (dmmProbe) {
@@ -6011,30 +6004,17 @@ async function loadDetail(link, params) {
   ).filter(Boolean);
 
   const meta = parseDetailMeta(movie);
-  const actorMovies = (movie.actor_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
-  const fallbackRelated = (movie.relative_movies || []).filter((item) => item.id !== movie.id).slice(0, 12);
-  const relatedSource = actorMovies.length ? actorMovies : fallbackRelated;
-  const relatedMovies = relatedSource.map((item) => mapRelatedMovie(item, posterUrl || coverUrl));
 
-  // 磁力：API_BASE magnets + 短评 + Sukebei；点击 gy: 走光鸭转存
-  let magnetItems = [];
-  let magnetSource = "";
-  let detailReviews = [];
-  try {
-    const magnetBundle = await fetchDetailMagnets(movieId, params, code || rawCode);
-    magnetSource = magnetBundle.source || "";
-    detailReviews = magnetBundle.reviews || [];
-    magnetItems = buildMagnetRelatedItems(magnetBundle.magnets, {
-      movieId: movieId,
-      code: code || rawCode,
-      title: safeText(movie.title || code || rawCode),
-      backdropPath: coverUrl || posterUrl || (backdropPathsList[0] || ""),
-    });
-  } catch (eMag) {}
-
-  const relatedItems = magnetItems.length
-    ? magnetItems.concat(relatedMovies).slice(0, 24)
-    : relatedMovies;
+  // 相似作品区域仅用于展示磁力，不再解析 actor_movies / relative_movies。
+  const magnetSource = magnetBundle.source || "";
+  const detailReviews = magnetBundle.reviews || [];
+  const magnetItems = buildMagnetRelatedItems(magnetBundle.magnets || [], {
+    movieId: movieId,
+    code: code || rawCode,
+    title: safeText(movie.title || code || rawCode),
+    backdropPath: coverUrl || posterUrl || (backdropPathsList[0] || ""),
+  });
+  const relatedItems = magnetItems;
 
   const previewUrl = movie.preview_video_url || "";
   const trailers = buildTrailers(movie, coverUrl || posterUrl);
