@@ -11,8 +11,8 @@
  * JavDB ForwardWidget 模块 v4
  * 管道：CategoryPath → jdforrepam API（绕过 CF）→ VideoItem
  * 登录：POST /v1/sessions（账号密码 → JWT）
- * 列表：DMM Probe Worker 批量探测高清竖/横封面
- * 详情：顶图复用列表探测缓存；简介含剧情+短评；trailers 预告片模块
+ * 图片：复用“解密javdb.可视化.js”的 direct-dmm / MGStage 高清候选策略
+ * 详情：按番号生成高清封面/剧照；简介含剧情+短评；trailers 预告片模块
  * 磁力：relatedItems 合并 JavDB API / 短评；展示体积·特征·来源，简介含文件名与转存说明
  */
 
@@ -955,8 +955,6 @@ var GLOBAL_KEYS = [
   "email",
   "password",
   "apiToken",
-  "dmmProbeWorker",
-  "dmmProbeApiKey",
   "guangya_token",
   "guangya_parent_id",
   "magnet_min_video_mb",
@@ -971,8 +969,6 @@ var DEVICE_DEFAULTS = {
   app_version_number: "198",
   app_channel: "AppStore",
 };
-
-/* DMM Probe / 高清封面实现见 10-dmm-cover.js */
 
 /* ===== module: 03-metadata.js ===== */
 
@@ -1013,7 +1009,7 @@ function categoryParams(paramName, itemTitle, enumOptions) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.6.3",
+  version: "4.7.0",
   requiredVersion: "0.0.1",
   description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类预填；详情磁力合并 JavDB/短评，一键转存光鸭",
   author: "老头",
@@ -1051,20 +1047,6 @@ WidgetMetadata = {
       title: "API Token（可选）",
       type: "input",
       description: "已有 JWT 可直接粘贴；留空则用账号密码登录",
-      value: "",
-    },
-    {
-      name: "dmmProbeWorker",
-      title: "DMM Probe Worker（可选）",
-      type: "input",
-      description: "默认 https://dmm.laotou.ccwu.cc；列表横/竖封面探测",
-      value: "",
-    },
-    {
-      name: "dmmProbeApiKey",
-      title: "DMM Probe Key（可选）",
-      type: "input",
-      description: "Worker 开启鉴权时填写 X-Probe-Key",
       value: "",
     },
     */
@@ -4352,13 +4334,8 @@ function pickCover(movie) {
   if (cdnCover) return cdnCover;
   var cdnThumb = buildJavdbCdnThumbUrl(movie.id);
   if (cdnThumb) return cdnThumb;
-  var code = safeText(movie.number);
-  if (!code) return "";
-  var m = code.toUpperCase().match(/^([A-Z0-9]+)-(\d+)$/);
-  if (!m) return "";
-  var id = m[1].toLowerCase() + ("00000" + m[2]).slice(-5);
-  var guessed = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id + "/" + id + "pl.jpg";
-  return sanitizeCoverUrl(guessed) || guessed;
+  // DMM / MGStage 只由高清策略的白名单生成，不为未知番号猜测不存在的图片。
+  return sanitizeCoverUrl(movie.small_cover_url);
 }
 
 function buildListDescription(movie) {
@@ -4394,8 +4371,8 @@ function mapListMovie(movie) {
   var title = safeText(movie.title || code || movie.id);
   if (code && title.indexOf(code) !== 0) title = code + " " + title;
   var siteCover = pickCover(movie);
-  // 对齐 catemby：横卡用 backdropPath/coverUrl，方格用 posterPath（DMM Probe 缓存）
-  var covers = buildListCoverBundle(code, siteCover, code ? lookupDmmProbeCover(code) : null);
+  // 对齐可视化版：命中 direct-dmm / MGStage 时直接展示高清竖图和横图。
+  var covers = buildListCoverBundle(code || title, siteCover, movie.small_cover_url);
   var backdrop = sanitizeCoverUrl(covers.backdropPath) || siteCover || "";
   var poster = sanitizeCoverUrl(covers.posterPath) || siteCover || "";
   return {
@@ -4417,15 +4394,7 @@ function mapListMovie(movie) {
 }
 
 async function enrichListMovies(movies, params) {
-  params = params || {};
-  var list = movies || [];
-  var codes = [];
-  for (var i = 0; i < list.length; i++) {
-    var code = safeText(list[i] && list[i].number);
-    if (code) codes.push(code);
-  }
-  await prefetchDmmProbeCovers(codes, params);
-  return list.map(mapListMovie);
+  return (movies || []).map(mapListMovie);
 }
 
 function buildCategoryFilter(kind, itemId, magnetOnly) {
@@ -6232,29 +6201,20 @@ async function handleGuangyaMagnetSave(hash, params) {
   }
 }
 
-/* ===== module: 10-dmm-cover.js ===== */
+/* ===== module: 10-visual-hd-images.js ===== */
 
-/* ========================= HD Cover（DMM Probe Worker） ========================= */
+/* ========================= 高清图片（可视化版策略） ========================= */
 
-/* DMM 高清封面（对齐 dmm-cover.js） */
-var DMM_PROBE_WORKER_BASE = "https://dmm.laotou.ccwu.cc";
-var DMM_PROBE_WORKER_CACHE = {};
-var DMM_PROBE_WORKER_TIMEOUT_MS = 8000;
-var DMM_PROBE_STORAGE_PREFIX = "javdb.dmmProbe.v2.";
-var DMM_PROBE_STORAGE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
-var DMM_PROBE_STORAGE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
-var DMM_PROBE_BATCH_TIMEOUT_MS = 20000;
-var DMM_PROBE_BATCH_SIZE = 20;
-var DMM_CONTENT_ID_OVERRIDES = {};
-var MGSTAGE_COVER_RULES = {
-  ABF: { maker: "prestige" },
-  ABW: { maker: "prestige" },
-  ABP: { maker: "prestige" },
-  CHN: { maker: "prestige" },
-  MAAN: { maker: "prestige" },
-  PPT: { maker: "prestige" },
-  "390JAC": { maker: "jackson" },
-};
+/*
+ * 与“解密javdb.可视化.js”保持同一套策略：
+ * - 已确认的片商番号直接拼接 DMM 高清竖图/横图
+ * - Prestige 系列使用 MGStage 高清图片
+ * - 其他番号继续使用 JavDB 接口/CDN 图片
+ *
+ * 这里不再调用 dmm-cover Probe Worker。
+ */
+
+var JAVDB_CDN_BASE = "https://tp.cmastd.com/rhe951l4q";
 var DMM_CONTENT_PREFIX_MAP = {
   WSA: "2",
   FSDSS: "1",
@@ -6279,351 +6239,386 @@ var DMM_CONTENT_PREFIX_MAP = {
   GSHRB: "h_346",
   MOGI: "1",
   FTAV: "1",
-  ABP: "118",
-  CHN: "118",
-  IESP: "1",
-  DLDSS: "1",
+  HAWA: "1",
+  DFDM: "2",
+  DFE: "2",
+  ECB: "2",
+  SMRA: "2",
+  VDD: "24",
+  NLD: "24",
+  DOKS: "36",
+  PS: "h_113",
+  JUKF: "h_227",
+  AMBI: "h_237",
+  NACT: "h_237",
+  ZRK: "h_1293",
+  CNSTV: "h_1472",
+  EROFV: "h_1472",
+  HMDNV: "h_1472",
+  INSTV: "h_1472",
+  STSK: "h_1605",
+  HNBR: "h_1664",
+  HRSM: "h_1745",
+  ERKR: "h_1838",
 };
-
-/* ----- probe helpers ----- */
+var DMM_CONTENT_ID_OVERRIDES = {
+  "MKMP-362": "84mkmp00362",
+};
+var DMM_DIRECT_PREFIXES = {
+  SNIS: 1,
+  SNOS: 1,
+  SONE: 1,
+  SSIS: 1,
+  SSNI: 1,
+  STARS: 1,
+  START: 1,
+  SODS: 1,
+  FSDSS: 1,
+  FCDSS: 1,
+  FNS: 1,
+  FTHTD: 1,
+  FSNF: 1,
+  NHDTC: 1,
+  KUSE: 1,
+  MOGI: 1,
+  FTAV: 1,
+  WSA: 1,
+  MIDV: 1,
+  MIDA: 1,
+  MIDE: 1,
+  MIDD: 1,
+  MIFD: 1,
+  MIKR: 1,
+  DASS: 1,
+  HIKA: 1,
+  MKMP: 1,
+  MADM: 1,
+  IPZZ: 1,
+  IPZ: 1,
+  IPX: 1,
+  NGOD: 1,
+  SDNM: 1,
+  AVSA: 1,
+  MNGS: 1,
+  WAAA: 1,
+  OFES: 1,
+  OFJE: 1,
+  OAE: 1,
+  SIVR: 1,
+  HSODA: 1,
+  JUFE: 1,
+  MUKA: 1,
+  MIMK: 1,
+  HMN: 1,
+  ROYD: 1,
+  SDHS: 1,
+  JUR: 1,
+  CAWD: 1,
+  CAWB: 1,
+  REBD: 1,
+  ADN: 1,
+  ATID: 1,
+  JUL: 1,
+  JUMS: 1,
+  JUQ: 1,
+  LULU: 1,
+  MEYD: 1,
+  MIAA: 1,
+  MIAB: 1,
+  MIRD: 1,
+  PRED: 1,
+  PRWF: 1,
+  URE: 1,
+  YUJ: 1,
+  CJOD: 1,
+  EBWH: 1,
+  JYMA: 1,
+  MDHR: 1,
+  DVAJ: 1,
+  ACHJ: 1,
+  MFYD: 1,
+  MBYD: 1,
+  PFES: 1,
+  MDYD: 1,
+  NPJS: 1,
+  ROE: 1,
+  XVSR: 1,
+  MVSD: 1,
+  DVMM: 1,
+  FPRE: 1,
+  HAWA: 1,
+  SAME: 1,
+  FWAY: 1,
+  DFDM: 1,
+  DFE: 1,
+  ECB: 1,
+  SMRA: 1,
+  VDD: 1,
+  NLD: 1,
+  DOKS: 1,
+  UMD: 1,
+  PS: 1,
+  JUKF: 1,
+  AMBI: 1,
+  NACT: 1,
+  ZRK: 1,
+  CNSTV: 1,
+  EROFV: 1,
+  HMDNV: 1,
+  INSTV: 1,
+  STSK: 1,
+  HNBR: 1,
+  HRSM: 1,
+  ERKR: 1,
+  MIZD: 1,
+  PPPE: 1,
+  AJVR: 1,
+  BLOR: 1,
+  BONY: 1,
+  DEAB: 1,
+  DSOD: 1,
+  DSS: 1,
+  EYAN: 1,
+  FJIN: 1,
+  GQHB: 1,
+  HJMO: 1,
+  HNDB: 1,
+  HNDS: 1,
+  HNVR: 1,
+  HOIZ: 1,
+  HUBLK: 1,
+  HUNTB: 1,
+  HUNTC: 1,
+  IDBD: 1,
+  IPVR: 1,
+  JUVR: 1,
+  KBTK: 1,
+  KTB: 1,
+  KTKL: 1,
+  MANX: 1,
+  MBF: 1,
+  MDON: 1,
+  MDVR: 1,
+  MUDR: 1,
+  NPJB: 1,
+  NQTD: 1,
+  NSODN: 1,
+  NTRH: 1,
+  PBD: 1,
+  PKYS: 1,
+  RKI: 1,
+  SAVR: 1,
+  SDAM: 1,
+  SDDE: 1,
+  SDJS: 1,
+  SDMM: 1,
+  SORA: 1,
+  SQDE: 1,
+  SQTE: 1,
+  URVRSP: 1,
+  VRKM: 1,
+  YAHO: 1,
+  YMDD: 1,
+  YMDS: 1,
+};
+var DMM_DIRECT_BLOCKED_CODES = {
+  "START-227": 1,
+  "IPZZ-899": 1,
+  "START-334": 1,
+  "START-302": 1,
+  "START-349": 1,
+  "START-339": 1,
+  "START-310": 1,
+  "START-314": 1,
+  "START-287": 1,
+  "START-273": 1,
+  "START-266": 1,
+  "START-304": 1,
+  "START-285": 1,
+  "START-276": 1,
+  "START-135": 1,
+  "START-62": 1,
+  "START-23": 1,
+  "START-14": 1,
+  "STARS-977": 1,
+  "STARS-917": 1,
+  "STARS-915": 1,
+  "STARS-91501": 1,
+  "SDNM-39101": 1,
+  "MIDD-946": 1,
+  "MIDD-966": 1,
+  "MIKR-12": 1,
+  "MIKR-21": 1,
+  "FLAV-421": 1,
+  "SQTE-257": 1,
+  "SQTE-187": 1,
+  "SQTE-140": 1,
+  "SQTE-128": 1,
+};
+var DMM_DIRECT_BLOCKED_RANGES = [
+  { prefix: "SQTE", min: 1, max: 70 },
+  { prefix: "SDDE", min: 1, max: 100 },
+];
+var MGSTAGE_COVER_RULES = {
+  ABF: { maker: "prestige" },
+  ABW: { maker: "prestige" },
+  ABP: { maker: "prestige" },
+  CHN: { maker: "prestige" },
+  PPT: { maker: "prestige" },
+};
+var MGSTAGE_PREFIXES = { ABF: 1, ABW: 1, ABP: 1, CHN: 1, PPT: 1 };
 
 function compactUniqueUrls(urls) {
   var seen = {};
   var result = [];
   for (var i = 0; i < (urls || []).length; i++) {
     var value = String(urls[i] || "").trim();
-    if (!value || seen[value]) continue;
-    seen[value] = true;
+    if (!value) continue;
+    var key = value.toLowerCase().split("?")[0].split("#")[0].replace(/\/+$/, "");
+    if (!key || seen[key]) continue;
+    seen[key] = true;
     result.push(value);
   }
   return result;
 }
 
-function getMgstageCoverRule(parts) {
-  if (!parts) return null;
-  return MGSTAGE_COVER_RULES[parts.prefix] || null;
+function normalizeDmmPrefix(prefix) {
+  var value = String(prefix || "").toUpperCase();
+  return value === "REBDB" ? "REBD" : value;
 }
 
-function dmmProbeStorageKey(code) {
-  return DMM_PROBE_STORAGE_PREFIX + String(code || "").trim().toUpperCase();
+function extractStandardCode(value) {
+  var text = String(value || "").toUpperCase();
+  if (!text || text.indexOf("XXX-AV") >= 0 || /\bFC2(?:[- ]?PPV)?[- ]?\d{5,8}\b/.test(text)) return "";
+  // 有分隔符时允许数字片商前缀；无分隔符时前缀必须以字母结尾，避免吞掉流水号。
+  var match =
+    text.match(/\b([A-Z0-9]{2,10})[\s_-]+(\d{1,8})([A-Z]?)\b/) ||
+    text.match(/\b([A-Z0-9]{1,9}[A-Z])(\d{1,8})([A-Z]?)\b/);
+  if (!match || !/[A-Z]/.test(match[1])) return "";
+  var number = String(parseInt(match[2], 10));
+  if (!number || number === "0" || number === "NaN") return "";
+  return match[1] + "-" + number + (match[3] || "");
 }
 
-function loadDmmProbeFromStorage(code) {
-  code = String(code || "").trim().toUpperCase();
-  if (!code) return undefined;
-  try {
-    var raw = Widget.storage.get(dmmProbeStorageKey(code));
-    if (!raw) return undefined;
-    var entry = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!entry || !entry.savedAt) return undefined;
-    var ttl = entry.ok ? DMM_PROBE_STORAGE_TTL_OK_MS : DMM_PROBE_STORAGE_TTL_FAIL_MS;
-    if (Date.now() - Number(entry.savedAt) > ttl) return undefined;
-    if (!entry.ok) return null;
-    var probe = normalizeProbeBest({
-      contentId: entry.contentId || "",
-      posterUrl: entry.posterUrl || "",
-      backdropUrl: entry.backdropUrl || "",
-    });
-    // 旧缓存可能存了空 URL 的“成功”结果，当作未命中重新探测
-    if (!probe) return undefined;
-    return probe;
-  } catch (err) {
-    return undefined;
-  }
-}
-
-function saveDmmProbeToStorage(code, probe) {
-  code = String(code || "").trim().toUpperCase();
-  if (!code) return;
-  var entry = { ok: !!probe, savedAt: Date.now() };
-  if (probe) {
-    entry.contentId = probe.contentId || "";
-    entry.posterUrl = probe.posterUrl || "";
-    entry.backdropUrl = probe.backdropUrl || "";
-  }
-  try {
-    Widget.storage.set(dmmProbeStorageKey(code), JSON.stringify(entry));
-  } catch (e) {}
-}
-
-function getDmmProbeWorkerBase(params) {
-  params = params || {};
-  var base = params.dmmProbeWorker;
-  if (!base) base = readStore("javdb.global.dmmProbeWorker");
-  if (!base) base = DMM_PROBE_WORKER_BASE;
-  return String(base || "").replace(/\/+$/, "");
-}
-
-function getDmmProbeWorkerHeaders(params) {
-  var headers = { Accept: "application/json" };
-  var key = params && params.dmmProbeApiKey;
-  if (!key) key = readStore("javdb.global.dmmProbeApiKey");
-  if (key) headers["X-Probe-Key"] = String(key);
-  return headers;
-}
-
-function normalizeProbeBest(best) {
-  if (!best || typeof best !== "object") return null;
-  var posterUrl = sanitizeCoverUrl(best.posterUrl || "");
-  var backdropUrl = sanitizeCoverUrl(best.backdropUrl || "");
-  if (posterUrl && isLowResDmmPosterUrl(posterUrl)) posterUrl = "";
-  if (!posterUrl && !backdropUrl) return null;
+function parseStandardCodeParts(value) {
+  var code = extractStandardCode(value);
+  if (!code) return null;
+  var match = code.match(/^([A-Z0-9]+)-(\d{1,8})([A-Z]?)$/);
+  if (!match) return null;
+  var prefix = match[1].toUpperCase();
+  var number = String(parseInt(match[2], 10));
+  if (!number || number === "0" || number === "NaN") return null;
   return {
-    contentId: String(best.contentId || ""),
-    posterUrl: posterUrl,
-    backdropUrl: backdropUrl,
+    prefix: prefix,
+    prefixLower: prefix.toLowerCase(),
+    number: number,
+    number3: number.length < 3 ? ("000" + number).slice(-3) : number,
+    number5: number.length < 5 ? ("00000" + number).slice(-5) : number,
+    suffix: match[3] || "",
+    code: prefix + "-" + number + (match[3] || ""),
   };
 }
 
-function parseDmmProbeWorkerResponse(res) {
-  if (!res || res.data === undefined || res.data === null) {
-    return { probe: undefined, knownMiss: false };
+function isDmmDirectBlockedCode(parts) {
+  if (!parts) return false;
+  var prefix = normalizeDmmPrefix(parts.prefix);
+  var number = parseInt(parts.number, 10);
+  if (DMM_DIRECT_BLOCKED_CODES[prefix + "-" + parts.number]) return true;
+  if (!isFinite(number)) return false;
+  for (var i = 0; i < DMM_DIRECT_BLOCKED_RANGES.length; i++) {
+    var range = DMM_DIRECT_BLOCKED_RANGES[i];
+    if (range.prefix === prefix && number >= range.min && number <= range.max) return true;
   }
-  var status = Number(res.status || res.statusCode || 0);
-  if (status >= 400) return { probe: undefined, knownMiss: false };
-  try {
-    var data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
-    if (!data) return { probe: undefined, knownMiss: false };
-    if (data.ok && data.best) {
-      var probe = normalizeProbeBest(data.best);
-      // 无可用竖版也缓存 contentId/backdrop，避免列表再猜 DMM 链接
-      if (!probe) return { probe: null, knownMiss: true };
-      return { probe: probe, knownMiss: false };
-    }
-    if (data.ok === false) return { probe: null, knownMiss: true };
-    return { probe: undefined, knownMiss: false };
-  } catch (err) {
-    return { probe: undefined, knownMiss: false };
-  }
+  return false;
 }
 
-function normalizeDmmPrefix(prefix) {
-  var p = String(prefix || "").toUpperCase();
-  if (p === "REBDB") return "REBD";
-  return p;
+function isDirectDmmSeries(parts) {
+  return !!(
+    parts &&
+    !isDmmDirectBlockedCode(parts) &&
+    DMM_DIRECT_PREFIXES[normalizeDmmPrefix(parts.prefix)]
+  );
 }
 
 function buildDmmContentIdFromParts(parts) {
   if (!parts) return "";
-  var contentCode = parts.code ? String(parts.code).toUpperCase() : "";
-  if (contentCode && DMM_CONTENT_ID_OVERRIDES[contentCode]) return DMM_CONTENT_ID_OVERRIDES[contentCode];
+  var code = String(parts.code || "").toUpperCase();
+  if (code && DMM_CONTENT_ID_OVERRIDES[code]) return DMM_CONTENT_ID_OVERRIDES[code];
   var prefix = normalizeDmmPrefix(parts.prefix);
   var numericPrefix = DMM_CONTENT_PREFIX_MAP[prefix] || "";
-  if (!numericPrefix && /^SD[A-Z]{2,3}$/.test(prefix)) {
-    return "1" + parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
-  }
-  return numericPrefix + parts.prefixLower + parts.number5 + String(parts.suffix || "").toLowerCase();
+  if (!numericPrefix && /^SD[A-Z]{2,3}$/.test(prefix)) numericPrefix = "1";
+  return numericPrefix + prefix.toLowerCase() + parts.number5 + String(parts.suffix || "").toLowerCase();
 }
 
-function parseJavCodeParts(title) {
-  var raw = String(title || "").toUpperCase();
-  var match = raw.match(/\b([A-Z0-9]+)-?(\d{2,5})([A-Z]?)\b/);
-  if (!match) return null;
-  var prefix = match[1];
-  var prefixLower = prefix.toLowerCase();
-  var suffix = match[3] || "";
-  var number5 = match[2];
-  while (number5.length < 5) number5 = "0" + number5;
-  var number3 = match[2];
-  while (number3.length < 3) number3 = "0" + number3;
-  var normalizedPrefix = normalizeDmmPrefix(prefix);
-  var makerPrefix = String(DMM_CONTENT_PREFIX_MAP[normalizedPrefix] || "");
-  if (!makerPrefix && /^SD[A-Z]{2,3}$/.test(normalizedPrefix)) makerPrefix = "1";
-  var parts = {
-    prefix: prefix,
-    prefixLower: prefixLower,
-    number: match[2],
-    number3: number3,
-    number5: number5,
-    numberPlain: String(parseInt(match[2], 10)),
-    suffix: suffix,
-    makerPrefix: makerPrefix,
-    plainCode: prefixLower + number5,
+function buildDmmCoverCandidatesFromContentId(contentId) {
+  var id = String(contentId || "").toLowerCase();
+  if (!id) return { posterCandidates: [], backdropCandidates: [] };
+  return {
+    posterCandidates: [
+      "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id + "/" + id + "ps.jpg",
+      "https://pics.dmm.co.jp/digital/video/" + id + "/" + id + "ps.jpg",
+    ],
+    backdropCandidates: [
+      "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id + "/" + id + "pl.jpg",
+      "https://pics.dmm.co.jp/digital/video/" + id + "/" + id + "pl.jpg",
+    ],
   };
-  parts.code = buildDmmContentIdFromParts(parts) || makerPrefix + prefixLower + number5;
-  return parts;
 }
 
-async function fetchDmmProbeCover(code, params) {
-  code = String(code || "").trim().toUpperCase();
-  if (!code) return null;
-  if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) {
-    return DMM_PROBE_WORKER_CACHE[code];
-  }
-
-  var stored = loadDmmProbeFromStorage(code);
-  if (stored !== undefined) {
-    DMM_PROBE_WORKER_CACHE[code] = stored;
-    return stored;
-  }
-
-  var parts = parseJavCodeParts(code);
-  if (!parts || getMgstageCoverRule(parts)) {
-    DMM_PROBE_WORKER_CACHE[code] = null;
-    return null;
-  }
-
-  var base = getDmmProbeWorkerBase(params);
-  if (!base) {
-    DMM_PROBE_WORKER_CACHE[code] = null;
-    return null;
-  }
-
-  try {
-    var url = base + "/cover?code=" + encodeURIComponent(code);
-    var res = await Widget.http.get(url, {
-      headers: getDmmProbeWorkerHeaders(params),
-      timeout: DMM_PROBE_WORKER_TIMEOUT_MS,
-      allow_redirects: true,
-    });
-    var parsed = parseDmmProbeWorkerResponse(res);
-    if (parsed.probe !== undefined || parsed.knownMiss) {
-      DMM_PROBE_WORKER_CACHE[code] = parsed.probe;
-      saveDmmProbeToStorage(code, parsed.probe);
-      return parsed.probe;
-    }
-    return null;
-  } catch (err) {
-    return null;
-  }
+function buildMgstageCoverCandidatesFromParts(parts, rule) {
+  if (!parts || !rule || !rule.maker) return { posterCandidates: [], backdropCandidates: [] };
+  var prefix = parts.prefixLower;
+  var number = parts.number3;
+  if (!prefix || !number) return { posterCandidates: [], backdropCandidates: [] };
+  var dvdDash = prefix + "-" + number;
+  var base = "https://image.mgstage.com/images/" + rule.maker + "/" + prefix + "/" + number;
+  return {
+    posterCandidates: [base + "/pf_e_" + dvdDash + ".jpg", base + "/pf_o1_" + dvdDash + ".jpg"],
+    backdropCandidates: [base + "/pb_e_" + dvdDash + ".jpg"],
+  };
 }
 
-function getCachedDmmProbeCover(code) {
-  code = String(code || "").trim().toUpperCase();
-  if (!code) return null;
-  if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) {
-    return DMM_PROBE_WORKER_CACHE[code];
+function buildImageCandidatesFromValue(value) {
+  var parts = parseStandardCodeParts(value);
+  if (!parts) return { strategy: "javdb", posterCandidates: [], backdropCandidates: [] };
+  if (isDirectDmmSeries(parts)) {
+    var dmm = buildDmmCoverCandidatesFromContentId(buildDmmContentIdFromParts(parts));
+    dmm.strategy = "direct-dmm";
+    dmm.parts = parts;
+    return dmm;
   }
-  var stored = loadDmmProbeFromStorage(code);
-  if (stored !== undefined) {
-    DMM_PROBE_WORKER_CACHE[code] = stored;
-    return stored;
+  if (MGSTAGE_PREFIXES[parts.prefix]) {
+    var mg = buildMgstageCoverCandidatesFromParts(parts, MGSTAGE_COVER_RULES[parts.prefix]);
+    mg.strategy = "mgstage";
+    mg.parts = parts;
+    return mg;
   }
-  return null;
-}
-
-function applyDmmProbeBatchResults(data, requestedCodes) {
-  var rows = (data && data.results) || (data && data.items) || [];
-  if (!Array.isArray(rows)) rows = [];
-  var byCode = {};
-  for (var i = 0; i < rows.length; i++) {
-    var row = rows[i];
-    if (!row) continue;
-    var code = String(row.code || "").trim().toUpperCase();
-    if (!code) continue;
-    if (row.ok && row.best) {
-      byCode[code] = normalizeProbeBest(row.best);
-    } else if (row.ok === false) {
-      byCode[code] = null;
-    }
-  }
-  for (var j = 0; j < (requestedCodes || []).length; j++) {
-    var c = requestedCodes[j];
-    if (!Object.prototype.hasOwnProperty.call(byCode, c)) continue;
-    DMM_PROBE_WORKER_CACHE[c] = byCode[c];
-    saveDmmProbeToStorage(c, byCode[c]);
-  }
-  return true;
-}
-
-async function fetchDmmProbeCoverBatch(codes, params) {
-  var list = codes || [];
-  if (!list.length) return true;
-  var base = getDmmProbeWorkerBase(params);
-  if (!base) return false;
-  try {
-    var headers = getDmmProbeWorkerHeaders(params);
-    headers["Content-Type"] = "application/json";
-    headers.Accept = "application/json";
-    var res = await Widget.http.post(
-      base + "/probe",
-      { codes: list, force: false, variants: false },
-      {
-        headers: headers,
-        timeout: DMM_PROBE_BATCH_TIMEOUT_MS,
-        allow_redirects: true,
-      }
-    );
-    if (!res || res.data === undefined || res.data === null) return false;
-    var status = Number(res.status || res.statusCode || 0);
-    if (status >= 400) return false;
-    var data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
-    return applyDmmProbeBatchResults(data, list);
-  } catch (err) {
-    console.error("[javdb] DMM batch probe failed:", (err && err.message) || err);
-    return false;
-  }
-}
-
-async function prefetchDmmProbeCovers(codes, params) {
-  var pending = [];
-  var seen = {};
-  for (var i = 0; i < (codes || []).length; i++) {
-    var code = String(codes[i] || "").trim().toUpperCase();
-    if (!code || seen[code]) continue;
-    seen[code] = true;
-    if (Object.prototype.hasOwnProperty.call(DMM_PROBE_WORKER_CACHE, code)) continue;
-    var storedProbe = loadDmmProbeFromStorage(code);
-    if (storedProbe !== undefined) {
-      DMM_PROBE_WORKER_CACHE[code] = storedProbe;
-      continue;
-    }
-    pending.push(code);
-  }
-  if (!pending.length) return;
-
-  // 优先批量 /probe，失败再逐条 /cover
-  for (var start = 0; start < pending.length; start += DMM_PROBE_BATCH_SIZE) {
-    var chunk = pending.slice(start, start + DMM_PROBE_BATCH_SIZE);
-    var ok = await fetchDmmProbeCoverBatch(chunk, params);
-    if (ok) continue;
-    var tasks = [];
-    for (var j = 0; j < chunk.length; j++) {
-      tasks.push(fetchDmmProbeCover(chunk[j], params));
-    }
-    await Promise.all(tasks);
-  }
+  return { strategy: "javdb", posterCandidates: [], backdropCandidates: [], parts: parts };
 }
 
 function isInvalidCoverTarget(url) {
-  var u = String(url || "")
-    .toLowerCase()
-    .trim();
-  if (!u) return true;
-  if (/^data:/i.test(u)) return true;
-  if (u.indexOf("now_printing") >= 0) return true;
-  if (u.indexOf("noimage") >= 0) return true;
-  if (u.indexOf("no_image") >= 0) return true;
-  if (u.indexOf("no-image") >= 0) return true;
-  if (u.indexOf("placeholder") >= 0) return true;
-  if (u.indexOf("blank") >= 0) return true;
-  if (/adult_pl\.jpg(\?|$)/i.test(u)) return true;
-  if (/(?:^|[\/_-])(?:pixel|spacer|transparent)(?:[\/_.-]|$)/i.test(u)) return true;
-  return false;
+  var value = String(url || "").toLowerCase().trim();
+  if (!value || /^data:/i.test(value)) return true;
+  return (
+    value.indexOf("now_printing") >= 0 ||
+    value.indexOf("noimage") >= 0 ||
+    value.indexOf("no_image") >= 0 ||
+    value.indexOf("no-image") >= 0 ||
+    value.indexOf("placeholder") >= 0 ||
+    /adult_pl\.jpg(?:\?|$)/i.test(value)
+  );
 }
-
-function isLowResDmmPosterUrl(url) {
-  var u = String(url || "").toLowerCase();
-  if (!u) return false;
-  if (/[?&]w=147(?:&|$|[?#])/.test(u) && /[?&]h=200(?:&|$|[?#])/.test(u)) return true;
-  if (/pics\.dmm\.co\.jp\/.*ps\.jpe?g(\?|$)/i.test(u)) return true;
-  if (/pics\.dmm\.com\/.*ps\.jpe?g(\?|$)/i.test(u)) return true;
-  return false;
-}
-
-var JAVDB_CDN_BASE = "https://tp.cmastd.com/rhe951l4q";
 
 function isJdbstaticUrl(url) {
   return /jdbstatic\.com/i.test(String(url || ""));
 }
 
-/** jdbstatic 常返回空白图；统一改写到 cmastd CDN */
 function normalizeJavdbCdnUrl(url) {
-  var u = String(url || "").trim();
-  if (!u) return "";
-  u = u.replace(/^https?:\/\/(?:c\d+\.)?jdbstatic\.com/i, JAVDB_CDN_BASE);
-  u = u.replace(/^https?:\/\/tp-iu\.cmastd\.com\/rhe951l4q/i, JAVDB_CDN_BASE);
-  return u;
+  var value = String(url || "").trim();
+  if (!value) return "";
+  value = value.replace(/^https?:\/\/(?:c\d+\.)?jdbstatic\.com/i, JAVDB_CDN_BASE);
+  value = value.replace(/^https?:\/\/tp-iu\.cmastd\.com\/rhe951l4q/i, JAVDB_CDN_BASE);
+  return value;
 }
 
 function buildJavdbCdnCoverUrl(movieId) {
@@ -6639,57 +6634,92 @@ function buildJavdbCdnThumbUrl(movieId) {
 }
 
 function sanitizeCoverUrl(url) {
-  var u = normalizeJavdbCdnUrl(url);
-  if (!u || isInvalidCoverTarget(u)) return "";
-  return u;
+  var value = normalizeJavdbCdnUrl(url);
+  return !value || isInvalidCoverTarget(value) ? "" : value;
+}
+
+function chooseFirstCandidate(candidates, fallback) {
+  for (var i = 0; i < (candidates || []).length; i++) {
+    var value = sanitizeCoverUrl(candidates[i]);
+    if (value) return value;
+  }
+  return sanitizeCoverUrl(fallback) || "";
+}
+
+function buildCoverBundleFromUrls(poster, backdrop) {
+  return {
+    backdropPath: backdrop,
+    posterPath: poster,
+    detailPoster: poster,
+    coverUrl: backdrop,
+    image: backdrop,
+  };
+}
+
+function buildListCoverBundle(code, siteFallback, sitePosterFallback) {
+  var fallback = sanitizeCoverUrl(siteFallback);
+  var candidates = buildImageCandidatesFromValue(code);
+  if (candidates.strategy !== "direct-dmm" && candidates.strategy !== "mgstage") {
+    // 对齐可视化版：非高清策略优先用接口竖图，缺失时由 covers 路径转为 small_covers。
+    var sitePoster = sanitizeCoverUrl(sitePosterFallback) || fallback.replace(/\/covers\//, "/small_covers/");
+    return buildCoverBundleFromUrls(sitePoster || fallback, fallback || sitePoster);
+  }
+  var poster = chooseFirstCandidate(candidates.posterCandidates, fallback);
+  var backdrop = chooseFirstCandidate(candidates.backdropCandidates, fallback);
+  return buildCoverBundleFromUrls(poster || fallback, backdrop || fallback || poster);
+}
+
+function buildDetailCoverBundle(code, siteFallback, sitePosterFallback) {
+  return buildListCoverBundle(code, siteFallback, sitePosterFallback);
+}
+
+function buildHighResGallery(code, count) {
+  var candidates = buildImageCandidatesFromValue(code);
+  var parts = candidates.parts;
+  var urls = [];
+  var total = Number(count || 10) || 10;
+  if (candidates.strategy === "direct-dmm" && parts) {
+    var contentId = buildDmmContentIdFromParts(parts);
+    for (var i = 1; i <= total; i++) {
+      urls.push(
+        "https://pics.dmm.co.jp/digital/video/" + contentId + "/" + contentId + "jp-" + i + ".jpg"
+      );
+    }
+  } else if (candidates.strategy === "mgstage" && parts) {
+    var rule = MGSTAGE_COVER_RULES[parts.prefix] || { maker: "prestige" };
+    var dvdDash = parts.prefixLower + "-" + parts.number;
+    for (var j = 1; j <= total; j++) {
+      urls.push(
+        "https://image.mgstage.com/images/" +
+          rule.maker +
+          "/" +
+          parts.prefixLower +
+          "/" +
+          parts.number +
+          "/cap_e_" +
+          j +
+          "_" +
+          dvdDash +
+          ".jpg"
+      );
+    }
+  }
+  return compactUniqueUrls(urls.map(sanitizeCoverUrl)).filter(Boolean);
 }
 
 function buildDetailTrailers(previewUrl, cover) {
   var url = String(previewUrl || "").trim();
   if (!url) return [];
-  var tc = sanitizeCoverUrl(cover) || String(cover || "").trim();
+  var image = sanitizeCoverUrl(cover) || String(cover || "").trim();
   return [
     {
-      coverUrl: tc || undefined,
-      posterPath: tc || undefined,
-      backdropPath: tc || undefined,
-      image: tc || undefined,
+      coverUrl: image || undefined,
+      posterPath: image || undefined,
+      backdropPath: image || undefined,
+      image: image || undefined,
       url: url,
     },
   ];
-}
-
-/* ----- list cover resolve ----- */
-function resolveListCoverUrl(code, siteFallback, dmmProbe, field) {
-  var fallback = sanitizeCoverUrl(siteFallback);
-  if (!code) return fallback;
-  var probe = dmmProbe !== undefined ? dmmProbe : getCachedDmmProbeCover(code);
-  if (!probe) return fallback;
-  var url = sanitizeCoverUrl(field === "poster" ? probe.posterUrl : probe.backdropUrl || "");
-  if (!url) return fallback;
-  if (field === "poster" && isLowResDmmPosterUrl(url)) return fallback;
-  return url;
-}
-
-function buildListCoverBundle(code, siteFallback, dmmProbe) {
-  var fallback = sanitizeCoverUrl(siteFallback);
-  var probe = dmmProbe !== undefined ? dmmProbe : code ? getCachedDmmProbeCover(code) : null;
-  if (probe && !sanitizeCoverUrl(probe.posterUrl) && !sanitizeCoverUrl(probe.backdropUrl)) {
-    probe = null;
-  }
-  var hdPoster = resolveListCoverUrl(code, fallback, probe, "poster") || fallback || "";
-  var hdBackdrop = resolveListCoverUrl(code, fallback, probe, "backdrop") || fallback || "";
-  return {
-    backdropPath: hdBackdrop,
-    posterPath: hdPoster,
-    detailPoster: hdPoster,
-    coverUrl: hdBackdrop,
-    image: hdBackdrop,
-  };
-}
-
-function lookupDmmProbeCover(code) {
-  return getCachedDmmProbeCover(code);
 }
 
 /* ===== module: 11-handlers.js ===== */
@@ -6901,25 +6931,19 @@ async function loadDetail(link, params) {
     var title = safeText(movie.title || code || movieId);
     if (code && title.indexOf(code) !== 0) title = code + " " + title;
 
-    // 优先 DMM 高清；没有则回退站点/CDN 封面，避免空白占位
-    var dmmProbe = code ? getCachedDmmProbeCover(code) : null;
+    // 与可视化版一致：按番号选择 direct-dmm / MGStage 高清图，其他番号回退站点/CDN。
     var siteCover = pickCover(movie);
-    var posterUrl = "";
-    var coverUrl = "";
-    if (dmmProbe) {
-      var probePoster = sanitizeCoverUrl(dmmProbe.posterUrl || "");
-      var probeBackdrop = sanitizeCoverUrl(dmmProbe.backdropUrl || "");
-      if (probePoster && !isLowResDmmPosterUrl(probePoster)) posterUrl = probePoster;
-      if (probeBackdrop) coverUrl = probeBackdrop;
-    }
-    if (!coverUrl && siteCover) coverUrl = siteCover;
-    if (!posterUrl && siteCover) posterUrl = siteCover;
+    var coverBundle = buildDetailCoverBundle(code || title, siteCover, movie.small_cover_url);
+    var posterUrl = sanitizeCoverUrl(coverBundle.posterPath) || siteCover || "";
+    var coverUrl = sanitizeCoverUrl(coverBundle.backdropPath) || siteCover || posterUrl;
 
-    var galleryUrls = [];
-    (movie.preview_images || []).forEach(function (img) {
-      var u = sanitizeCoverUrl((img && (img.large_url || img.thumb_url)) || "");
-      if (u) galleryUrls.push(u);
-    });
+    var galleryUrls = buildHighResGallery(code, 10);
+    if (!galleryUrls.length) {
+      (movie.preview_images || []).forEach(function (img) {
+        var u = sanitizeCoverUrl((img && (img.large_url || img.thumb_url)) || "");
+        if (u) galleryUrls.push(u);
+      });
+    }
     var backdropPaths = compactUniqueUrls(
       [].concat(coverUrl ? [coverUrl] : [], galleryUrls || [])
     ).filter(Boolean);
@@ -15157,7 +15181,7 @@ function mapStaticRankingEntry(entry, extraDesc) {
   var titleBase = safeText(entry.originalTitle || entry.title || code);
   var title = code && titleBase.indexOf(code) !== 0 ? code + " " + titleBase : titleBase || code;
   var siteCover = sanitizeCoverUrl(buildJavdbCdnCoverUrl(javdbId));
-  var covers = buildListCoverBundle(code, siteCover, code ? lookupDmmProbeCover(code) : null);
+  var covers = buildListCoverBundle(code, siteCover);
   var backdrop = sanitizeCoverUrl(covers.backdropPath) || siteCover || "";
   var poster = sanitizeCoverUrl(covers.posterPath) || siteCover || "";
   var desc = [];
@@ -15182,14 +15206,7 @@ function mapStaticRankingEntry(entry, extraDesc) {
 }
 
 async function enrichStaticRankingEntries(rows, params, extraDesc) {
-  var list = rows || [];
-  var codes = [];
-  for (var i = 0; i < list.length; i++) {
-    var code = safeText(list[i] && (list[i].cid || list[i].id));
-    if (code) codes.push(code);
-  }
-  await prefetchDmmProbeCovers(codes, params);
-  return list.map(function (row) {
+  return (rows || []).map(function (row) {
     return mapStaticRankingEntry(row, extraDesc);
   });
 }
