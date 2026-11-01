@@ -1533,11 +1533,11 @@ function categoryModuleParams(options) {
       title: "作品排序",
       type: "enumeration",
       enumOptions: [
-        { title: "最近上架(有磁力)", value: "published_download" },
-        { title: "最高评分(有磁力)", value: "score_download" },
-        { title: "最多收藏(有磁力)", value: "fav_download" },
+        { title: "最近上架", value: "published" },
+        { title: "最高评分", value: "score" },
+        { title: "最多收藏", value: "fav" },
       ],
-      value: "published_download",
+      value: "published",
     },
     { name: "page", title: "作品页码", type: "page", value: "1" },
     { name: "category_kind", title: "分类类型", type: "constant", value: options.kind || "actors" },
@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.10.1",
+  version: "1.10.2",
   requiredVersion: "0.0.2",
   detailCacheDuration: 3600,
   globalParams: [
@@ -2078,7 +2078,8 @@ function shouldUseCategorySearch(movieType) {
 }
 
 function normalizeWorkSortKey(sortBy) {
-  const key = String(sortBy || "published_download").toLowerCase().replace(/_download$/, "");
+  // 兼容旧缓存的 *_download 值，但排序不再隐含有磁力筛选。
+  const key = String(sortBy || "published").toLowerCase().replace(/_download$/, "");
   return SORT_API_MAP[key] ? key : "published";
 }
 
@@ -2112,9 +2113,9 @@ function resolveCategorySearchKeyword(kind, itemId, params) {
 function buildCategoryFilter(kind, itemId, movieType, listFilter) {
   const typePart = MOVIE_TYPE_CODE[movieType || "all"] || "0";
   const id = String(itemId || "").trim();
-  // “作品排序”统一仅显示有磁力作品。基础筛选 p/m/c/s/i/v 保持 JavDB
-  // 原生格式；其余演员/片商/标签筛选都追加 :m。
-  const extra = LIST_FILTER_CODE[listFilter || "magnet"] || "m";
+  // 排序与资源筛选分开：默认显示全部作品，只在显式指定时追加磁力等条件。
+  // all 对应空字符串，不能再用 || "m" 回退，否则仍会强制筛选有磁力。
+  const extra = LIST_FILTER_CODE[listFilter || "all"] || "";
   if (kind === "tags") {
     if (/^[pmcsiv]$/i.test(id)) {
       return typePart + ":0:x:" + id.toLowerCase();
@@ -2133,9 +2134,10 @@ async function fetchSearchMovies(keyword, params) {
     q: keyword,
     page,
     type: "movie",
-    movie_filter_by: "magnet",
     movie_sort_by: resolveSearchSortBy(params.sort_by),
   };
+  // 分类的关键词回退和全局搜索也默认不限制磁力，避免绕回有磁力条件。
+  if (params.list_filter === "magnet") query.movie_filter_by = "magnet";
   if (movieType !== "all") {
     query.movie_type = MOVIE_TYPE_CODE[movieType] || "0";
   }
@@ -3176,7 +3178,7 @@ async function loadPage(params) {
 
     // 标签（含主题/角色等）走 /v1/movies/tags 的 t 类型筛选，避免关键词搜索错位
     if (ctx.kind === "tags") {
-      const filterBy = buildCategoryFilter("tags", ctx.itemId, movieType, params.list_filter || "magnet");
+      const filterBy = buildCategoryFilter("tags", ctx.itemId, movieType, params.list_filter || "all");
       let movies = await fetchCategoryMovies(filterBy, params);
       if (!movies.length && !/^[pmcsiv]$/i.test(String(ctx.itemId))) {
         const keyword = resolveCategorySearchKeyword("tags", ctx.itemId, params);
@@ -3191,7 +3193,7 @@ async function loadPage(params) {
       return enrichListMovies(movies, params);
     }
 
-    const filterBy = buildCategoryFilter(ctx.kind, ctx.itemId, movieType, params.list_filter || "magnet");
+    const filterBy = buildCategoryFilter(ctx.kind, ctx.itemId, movieType, params.list_filter || "all");
     const movies = await fetchCategoryMovies(filterBy, params);
     if (!movies.length && ctx.kind === "makers") {
       const keyword = resolveCategorySearchKeyword(ctx.kind, ctx.itemId, params);
@@ -3213,7 +3215,7 @@ async function searchMovies(params) {
       return [{ id: "tip", type: "text", title: "请输入关键词开始搜索" }];
     }
     const movies = await fetchSearchMovies(keyword, Object.assign({}, params, {
-      sort_by: params.sort_by || "published_download",
+      sort_by: params.sort_by || "published",
     }));
     return enrichListMovies(movies, params);
   } catch (error) {
