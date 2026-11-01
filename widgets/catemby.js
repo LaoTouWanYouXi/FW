@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.10.2",
+  version: "1.10.3",
   requiredVersion: "0.0.2",
   detailCacheDuration: 3600,
   globalParams: [
@@ -3106,7 +3106,7 @@ function buildTrailers(movie, cover) {
 
 async function loadLatest(params) {
   try {
-    params = params || {};
+    params = await ensureGlobalParams(params || {});
     const page = Number(params.page || params.from || 1);
     const filterBy = String(params.filter_by || "all");
     const data = await apiGet("/v1/movies/latest", { page, filter_by: filterBy });
@@ -3119,7 +3119,7 @@ async function loadLatest(params) {
 
 async function loadRecommend(params) {
   try {
-    params = params || {};
+    params = await ensureGlobalParams(params || {});
     const data = await apiGet("/v1/movies/recommend");
     return enrichListMovies(data.movies || []);
   } catch (error) {
@@ -3130,7 +3130,7 @@ async function loadRecommend(params) {
 
 async function loadRankings(params) {
   try {
-    params = params || {};
+    params = await ensureGlobalParams(params || {});
     const period = normalizeRankPeriod(params.period);
     const mode = String(params.rank_mode || "playback").toLowerCase();
     let data = null;
@@ -3170,7 +3170,7 @@ async function loadRankings(params) {
 
 async function loadPage(params) {
   try {
-    params = params || {};
+    params = await ensureGlobalParams(params || {});
     const ctx = resolveCategoryContext(params);
     if (!ctx.itemId) throw new Error("请选择分类项");
 
@@ -3209,7 +3209,7 @@ async function loadPage(params) {
 
 async function searchMovies(params) {
   try {
-    params = params || {};
+    params = await ensureGlobalParams(params || {});
     const keyword = safeText(params.keyword);
     if (!keyword) {
       return [{ id: "tip", type: "text", title: "请输入关键词开始搜索" }];
@@ -3617,7 +3617,6 @@ async function resolveGuangyaTokenAsync(params) {
   } catch (e3) {}
   if (live) {
     params.guangya_token = live;
-    persistGlobalParam("guangya_token", live);
     await persistGlobalParamAsync("guangya_token", live);
   }
   return live;
@@ -3633,8 +3632,6 @@ function persistGlobalParam(name, value) {
 async function persistGlobalParamAsync(name, value) {
   value = normalizeStoreValue(value);
   if (!value) return;
-  writeStore("catemby.global." + name, value);
-  writeStore("javdb.global." + name, value);
   await writeStoreAsync("catemby.global." + name, value);
   await writeStoreAsync("javdb.global." + name, value);
 }
@@ -3690,7 +3687,8 @@ async function ensureGlobalParams(params) {
       params = {};
     }
   }
-  params = syncParams(params || {});
+  // 保留调用方传入的异步值，避免同步归一化用旧缓存覆盖 Promise 参数。
+  params = Object.assign({}, params || {});
   for (var i = 0; i < CATEMBY_GY_GLOBAL_KEYS.length; i++) {
     var key = CATEMBY_GY_GLOBAL_KEYS[i];
     var aliases =
@@ -3714,7 +3712,8 @@ async function ensureGlobalParams(params) {
     }
     if (current) {
       params[key] = current;
-      persistGlobalParam(key, current);
+      // loadDetail 通常只有 link；必须在模块返回前将全局配置写入持久存储。
+      await persistGlobalParamAsync(key, current);
     }
   }
   return params;
@@ -3853,6 +3852,18 @@ function loadMagnetEntry(hash) {
   if (!hash) return null;
   try {
     var raw = readStore(magnetStoreKey(hash));
+    if (!raw) return null;
+    return typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function loadMagnetEntryAsync(hash) {
+  hash = String(hash || "").trim().toLowerCase();
+  if (!hash) return null;
+  try {
+    var raw = await readStorageRawAsync(magnetStoreKey(hash));
     if (!raw) return null;
     return typeof raw === "string" ? JSON.parse(raw) : raw;
   } catch (e) {
@@ -5135,6 +5146,7 @@ async function loadDetail(link, params) {
   if (linkStr.indexOf(MAGNET_LINK_PREFIX) === 0) {
     return await handleGuangyaMagnetSave(linkStr.slice(MAGNET_LINK_PREFIX.length), params);
   }
+  params = await ensureGlobalParams(params);
 
   const movieId = extractMovieId(link);
 
