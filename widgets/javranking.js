@@ -405,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.3.8",
+  version: "1.3.9",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力（作品排序）/ 随机神作与今天冲谁仅有码；封面 DMM 优先；光鸭可设最小保留视频 MB。",
+    "权威榜单 / 神作 / 女优战力（作品排序）/ 随机神作与今天冲谁仅有码非FC2（一次扫描优化）；封面 DMM 优先；光鸭最小保留 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -2326,33 +2326,21 @@ async function loadRandomMasterpiece(params) {
   rememberParams(params);
   try {
     var count = Math.max(6, Math.min(48, Number(params.count || 24) || 24));
-    var rows = await resolveHallOfFameRows(params);
-    // 仅有码：排除 FC2 / 无码（封面头像常缺失）
+    // 直接从索引抽有码非 FC2 池：一次过滤，避免神作榜逐条反查 + HD 探测拖慢
     var index = await getSearchIndex(params);
-    var codeMap = buildCodeMap(index);
-    rows = (rows || []).filter(function (row) {
-      var code = normalizeCode(row && row.code);
-      var meta = (code && codeMap[code]) || null;
-      if (meta) return isPreferredCensoredVideo(meta);
-      // 无索引元数据时至少挡掉 FC2 番号
-      return code && !isFc2LikeCode(code);
+    var poolVideos = (index.videos || []).filter(isPreferredCensoredVideo);
+    if (!poolVideos.length) throw new Error("无可随机的有码神作");
+    // 偏向高战力：取 rank 较好的前段再随机
+    poolVideos = poolVideos.slice().sort(function (a, b) {
+      return Number(a.rank || 1e9) - Number(b.rank || 1e9);
     });
-    if (!rows.length) {
-      rows = (index.videos || [])
-        .filter(isPreferredCensoredVideo)
-        .sort(function (a, b) {
-          return Number(a.rank || 1e9) - Number(b.rank || 1e9);
-        })
-        .slice(0, 300)
-        .map(function (v, idx) {
-          return { rank: idx + 1, code: v.code, title: v.title, videoId: v.videoId };
-        });
-    }
-    if (!rows.length) throw new Error("无可随机的有码神作");
-    var pool = shuffleCopy(rows).slice(0, Math.min(120, rows.length));
-    var picked = shuffleCopy(pool).slice(0, count);
-    // 随机模块不分页：临时覆盖 page
-    return await rankingRowsToItems(picked, Object.assign({}, params, { page: 1 }));
+    var topN = Math.max(count * 8, Math.min(poolVideos.length, 200));
+    var picked = shuffleCopy(poolVideos.slice(0, topN)).slice(0, count);
+    var items = picked.map(function (v) {
+      return mapIndexVideo(v, { rankLabel: "随机神作·有码" });
+    });
+    // 列表用本站封面即可，不做高清 HEAD 探测
+    return items;
   } catch (error) {
     console.error("[javranking][loadRandomMasterpiece] 失败:", error.message || error);
     throw error;
@@ -2387,6 +2375,10 @@ async function loadActressWorksByName(name, index, codeMap, params) {
       seen[id] = true;
       works.push(v);
     });
+  }
+  // 今天冲谁等场景：作品侧也只要有码非 FC2
+  if (params.censoredOnly) {
+    works = works.filter(isPreferredCensoredVideo);
   }
 
   var mapped = [];
@@ -2703,19 +2695,46 @@ function isPreferredCensoredVideo(v) {
   if (!v || !v.videoId) return false;
   if (isFc2LikeCode(v.code)) return false;
   var scope = getText(v.scope).toLowerCase();
+  // 无 scope 时仍排除 FC2；有 scope 则必须 censored
   if (scope && scope !== "censored") return false;
   return true;
 }
 
-function actressHasPreferredCensoredWorks(index, ent) {
-  if (!ent) return false;
-  var keys = [];
-  if (getText(ent.slug)) keys.push(ent.slug);
-  if (getText(ent.name)) keys.push(ent.name);
-  for (var i = 0; i < keys.length; i++) {
-    var works = findActressWorks(index, keys[i]);
-    for (var j = 0; j < works.length; j++) {
-      if (isPreferredCensoredVideo(works[j])) return true;
+/** 一次扫描 videos，建立「有有码非FC2作品」的女优 name/slug 集合（O(V) 缓存） */
+function buildPreferredCensoredActressKeySet(index) {
+  if (!index) return Object.create(null);
+  if (index._jvrCensoredActressKeys) return index._jvrCensoredActressKeys;
+  var keys = Object.create(null);
+  var videos = index.videos || [];
+  for (var i = 0; i < videos.length; i++) {
+    var v = videos[i];
+    if (!isPreferredCensoredVideo(v)) continue;
+    var links = v.actorLinks;
+    if (!Array.isArray(links)) continue;
+    for (var j = 0; j < links.length; j++) {
+      var a = links[j] || {};
+      var gender = getText(a.gender).toLowerCase();
+      if (gender && gender !== "female") continue;
+      var n = getText(a.name).toLowerCase();
+      var slug = getText(a.slug).toLowerCase();
+      if (n) keys[n] = 1;
+      if (slug) keys[slug] = 1;
+    }
+  }
+  index._jvrCensoredActressKeys = keys;
+  return keys;
+}
+
+function actressInCensoredKeySet(ent, keySet) {
+  if (!ent || !keySet) return false;
+  var name = getText(ent.name).toLowerCase();
+  var slug = getText(ent.slug).toLowerCase();
+  if (name && keySet[name]) return true;
+  if (slug && keySet[slug]) return true;
+  if (Array.isArray(ent.aliases)) {
+    for (var i = 0; i < ent.aliases.length; i++) {
+      var al = getText(ent.aliases[i]).toLowerCase();
+      if (al && keySet[al]) return true;
     }
   }
   return false;
@@ -2727,7 +2746,10 @@ function listActressEntities(index, opts) {
   var minScore = Number(opts.minScore || 0) || 0;
   var censoredOnly = !!opts.censoredOnly;
   var requireAvatar = !!opts.requireAvatar;
-  var out = [];
+  var preferAvatar = !!opts.preferAvatar;
+  var keySet = censoredOnly ? buildPreferredCensoredActressKeySet(index) : null;
+  var withAvatar = [];
+  var withoutAvatar = [];
   (index.entities || []).forEach(function (e) {
     if (!isFemaleEntity(e)) return;
     var score = Number(e.score || 0) || 0;
@@ -2738,14 +2760,19 @@ function listActressEntities(index, opts) {
       var aliases = Array.isArray(e.aliases) ? e.aliases.join(" ").toLowerCase() : "";
       if (name.indexOf(kw) < 0 && slug.indexOf(kw) < 0 && aliases.indexOf(kw) < 0) return;
     }
-    if (requireAvatar && !resolveActressAvatar(e, e.slug)) return;
-    if (censoredOnly && !actressHasPreferredCensoredWorks(index, e)) return;
-    out.push(e);
+    if (censoredOnly && !actressInCensoredKeySet(e, keySet)) return;
+    var hasAvatar = !!resolveActressAvatar(e, e.slug);
+    if (requireAvatar && !hasAvatar) return;
+    if (preferAvatar && hasAvatar) withAvatar.push(e);
+    else if (preferAvatar) withoutAvatar.push(e);
+    else withAvatar.push(e);
   });
-  out.sort(function (a, b) {
+  var byScore = function (a, b) {
     return (Number(b.score || 0) || 0) - (Number(a.score || 0) || 0);
-  });
-  return out;
+  };
+  withAvatar.sort(byScore);
+  withoutAvatar.sort(byScore);
+  return withAvatar.concat(withoutAvatar);
 }
 
 function mapActressEntity(ent, extra) {
@@ -3004,30 +3031,23 @@ async function loadTodayWho(params) {
     // rex: 横向人物点击会重开「本模块」并带 peopleId → 必须返回该女友作品，不能再返回看谁列表
     if (peopleId) {
       console.log("[javranking][loadTodayWho] peopleId=", peopleId);
-      // 作品也只保留有码非 FC2，避免点进后仍出现无图片
-      var works = await loadActressWorksByName(peopleId, index, codeMap, params);
-      return (works || []).filter(function (it) {
-        var code = normalizeCode(it && it.id) || normalizeCode(it && it.title);
-        var meta = (code && codeMap[code]) || null;
-        if (meta) return isPreferredCensoredVideo(meta);
-        return code && !isFc2LikeCode(code);
-      });
+      return await loadActressWorksByName(
+        peopleId,
+        index,
+        codeMap,
+        Object.assign({}, params, { censoredOnly: true })
+      );
     }
 
     var count = Math.max(6, Math.min(48, Number(params.count || 24) || 24));
-    // 仅有码关联女优，且尽量有头像
+    // 一次扫描缓存女优集合 + 优先有头像，避免对每位女优全表扫作品
     var pool = listActressEntities(index, {
       minScore: Number(params.minScore || 1) || 1,
       censoredOnly: true,
-      requireAvatar: true,
+      preferAvatar: true,
     });
     if (!pool.length) {
-      pool = listActressEntities(index, {
-        minScore: Number(params.minScore || 1) || 1,
-        censoredOnly: true,
-      });
-    }
-    if (!pool.length) {
+      var keySet = buildPreferredCensoredActressKeySet(index);
       var md = await fetchMarkdown("most-awarded-actors", params);
       var sections = parsePowerSections(md);
       pool = sections
@@ -3041,10 +3061,10 @@ async function loadTodayWho(params) {
           };
         })
         .filter(function (ent) {
-          return resolveActressAvatar(ent, ent.slug) || actressHasPreferredCensoredWorks(index, ent);
+          return actressInCensoredKeySet(ent, keySet) || resolveActressAvatar(ent, ent.slug);
         });
     }
-    var picked = shuffleCopy(pool).slice(0, count);
+    var picked = shuffleCopy(pool.slice(0, Math.max(count * 6, Math.min(pool.length, 120)))).slice(0, count);
     return picked.map(function (ent) {
       return mapActressEntity(ent, { desc: "今天冲谁·有码" });
     });
