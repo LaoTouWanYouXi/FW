@@ -405,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.3.6",
+  version: "1.3.7",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力 / 今天冲谁·冲什么；封面优先 DMM 高清失败回退本站；剧照本站图；光鸭转存可设最小保留视频 MB。",
+    "权威榜单 / 神作 / 女优战力（作品可按代表作/发行日排序）/ 今天冲谁·冲什么；封面 DMM 优先；光鸭转存可设最小保留视频 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -576,6 +576,17 @@ WidgetMetadata = {
           type: "enumeration",
           value: "凉森玲梦",
           enumOptions: ACTRESS_FILTER_OPTIONS,
+        },
+        {
+          name: "works_sort",
+          title: "作品排序",
+          type: "enumeration",
+          value: "score",
+          enumOptions: [
+            { title: "代表作优先", value: "score" },
+            { title: "最新发行", value: "newest" },
+            { title: "最早发行", value: "oldest" },
+          ],
         },
         { name: "page", title: "页码", type: "page", value: "1" },
         { name: "peopleId", title: "人物ID", type: "input", value: "" },
@@ -1579,10 +1590,62 @@ function findActressWorks(index, nameOrSlug) {
       }
     }
   });
-  out.sort(function (a, b) {
-    return Number(a.rank || 1e9) - Number(b.rank || 1e9);
-  });
+  // 默认代表作优先；具体排序由 sortActressWorks 按 works_sort 决定
   return out;
+}
+
+function resolveWorksSort(params) {
+  var raw = getText(params && (params.works_sort || params.sort || params.order)).toLowerCase();
+  if (raw === "newest" || raw === "latest" || raw === "new" || raw === "release_desc") return "newest";
+  if (raw === "oldest" || raw === "earliest" || raw === "old" || raw === "release_asc") return "oldest";
+  // score / representative / rank / 默认：代表作优先（战力分倒序，同分 rank 升序）
+  return "score";
+}
+
+function workReleaseTs(v) {
+  var d = getText((v && (v.releaseDate || v.release_date || v.datePublished)) || "");
+  if (!d) return 0;
+  var t = Date.parse(d.length === 10 ? d + "T00:00:00Z" : d);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function workScoreValue(v) {
+  var s = Number((v && (v.score != null ? v.score : v.rating)) || 0);
+  return Number.isFinite(s) ? s : 0;
+}
+
+function workRankValue(v) {
+  var r = Number((v && v.rank) || 0);
+  return Number.isFinite(r) && r > 0 ? r : 1e9;
+}
+
+/** 对齐站点女优页：代表作优先 / 最新发行 / 最早发行 */
+function sortActressWorks(works, sortMode) {
+  var mode = resolveWorksSort({ works_sort: sortMode });
+  var list = (works || []).slice();
+  list.sort(function (a, b) {
+    if (mode === "newest") {
+      var nb = workReleaseTs(b);
+      var na = workReleaseTs(a);
+      if (nb !== na) return nb - na;
+      return workScoreValue(b) - workScoreValue(a);
+    }
+    if (mode === "oldest") {
+      var oa = workReleaseTs(a);
+      var ob = workReleaseTs(b);
+      // 无日期沉底
+      if (!oa && ob) return 1;
+      if (oa && !ob) return -1;
+      if (oa !== ob) return oa - ob;
+      return workScoreValue(b) - workScoreValue(a);
+    }
+    // 代表作优先：综合战力得分倒排（与站点帮助一致）；同分按 rank 升序
+    var sb = workScoreValue(b);
+    var sa = workScoreValue(a);
+    if (sb !== sa) return sb - sa;
+    return workRankValue(a) - workRankValue(b);
+  });
+  return list;
 }
 
 function applyHdCovers(code, siteCover, sitePoster) {
@@ -2276,6 +2339,8 @@ async function loadRandomMasterpiece(params) {
 }
 
 async function loadActressWorksByName(name, index, codeMap, params) {
+  params = params || {};
+  var sortMode = resolveWorksSort(params);
   var key = normalizePeopleKey(name);
   var ent = findActressEntityInIndex(index, key);
   var lookupKeys = [];
@@ -2305,6 +2370,7 @@ async function loadActressWorksByName(name, index, codeMap, params) {
 
   var mapped = [];
   if (works.length) {
+    works = sortActressWorks(works, sortMode);
     mapped = pageSlice(works, params.page, PAGE_SIZE).map(function (v) {
       return mapIndexVideo(v);
     });
@@ -2313,32 +2379,49 @@ async function loadActressWorksByName(name, index, codeMap, params) {
   if (!mapped.length) {
     var mdName = getText((ent && ent.name) || key);
     var mdWorks = await loadWorksFromActressMarkdown(mdName, params);
-    mapped = pageSlice(
-      mdWorks
-        .map(function (w) {
-          var meta = codeMap[normalizeCode(w.code)];
-          return meta ? mapIndexVideo(meta) : mapRankingRow(w, codeMap, 0);
-        })
-        .filter(function (x) {
-          return x && x.link;
-        }),
-      params.page,
-      PAGE_SIZE
-    );
+    var mdMapped = mdWorks
+      .map(function (w) {
+        var meta = codeMap[normalizeCode(w.code)];
+        return meta || { code: w.code, title: w.title, score: 0, rank: 1e9, releaseDate: "" };
+      })
+      .filter(Boolean);
+    mdMapped = sortActressWorks(mdMapped, sortMode);
+    mapped = pageSlice(mdMapped, params.page, PAGE_SIZE)
+      .map(function (v) {
+        return v.videoId || v.coverUrl ? mapIndexVideo(v) : mapRankingRow(v, codeMap, 0);
+      })
+      .filter(function (x) {
+        return x && x.link;
+      });
   }
 
   // 索引/Markdown 都没有时，抓女优页作品链接（解决 peopleId 只有头像名的问题）
   if (!mapped.length) {
-    mapped = pageSlice(
-      await fetchActressWorksFromActorPage(key, index, codeMap, params),
-      params.page,
-      PAGE_SIZE
-    );
+    var pageItems = await fetchActressWorksFromActorPage(key, index, codeMap, params);
+    // 页面项已是 map 结果；用 rating/releaseDate 再排
+    pageItems = sortActressWorks(
+      pageItems.map(function (it) {
+        return {
+          code: it.id,
+          title: it.title,
+          score: it.rating,
+          rank: 1e9,
+          releaseDate: it.releaseDate,
+          _item: it,
+        };
+      }),
+      sortMode
+    ).map(function (x) {
+      return x._item;
+    });
+    mapped = pageSlice(pageItems, params.page, PAGE_SIZE);
   }
 
   console.log(
     "[javranking][works]",
     key,
+    "sort=",
+    sortMode,
     "→",
     mapped.length,
     "ent=",

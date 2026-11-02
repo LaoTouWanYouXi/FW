@@ -13,10 +13,10 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.4.3",
+  version: "1.4.4",
   requiredVersion: "0.0.1",
   description:
-    "JAV Verse：作品池 / 抽一部 / 千级类别（WebView 过 CF，RSC ?_rsc=）/ 详情 id=标准番号 / 光鸭按目录转存（可设最小保留视频 MB 过滤广告）。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+    "JAV Verse：作品池 / 抽一部 / 千级类别（WebView + HTML 代理过 CF）/ 详情 id=标准番号 / 光鸭按目录转存（可设最小保留视频 MB）。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javverse.com/",
   icon: "https://javverse.com/apple-icon.png",
@@ -29,6 +29,14 @@ WidgetMetadata = {
       value: "",
       placeholder: "jv-gate=1; __suvt=...; __nuvt=...",
       description: "API/类别页 403 时再填；一般可留空",
+    },
+    {
+      name: "html_proxy_worker",
+      title: "HTML 代理 Worker（可选）",
+      type: "input",
+      value: "",
+      placeholder: "https://javverse-html-proxy.<你的子域>.workers.dev",
+      description: "对齐 missav：直连 403 时走 /browse|/html 过 Cloudflare；留空用内置默认",
     },
     {
       name: "page_size",
@@ -317,6 +325,9 @@ var UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 var POOL_CACHE_KEY = "jv_pool_cache_v1";
 var POOL_CACHE_TTL_MS = 5 * 60 * 1000;
+// 对齐 missav：直连 CF 403 时走 Cloudflare Worker（/browse 真浏览器过盾，/html 边缘拉取）
+var HTML_PROXY_WORKER_DEFAULT = "https://javverse-html-proxy.laotou-bcd.workers.dev";
+var HTML_PROXY_TIMEOUT_MS = 55000;
 var GENRE_TITLE_MAP = {"25":"拘束","27":"辱め","28":"羞耻","35":"女性向け","38":"舔阴","48":"制服","81":"複数話","102":"美乳","514":"アクション・格闘","524":"義母","553":"学園もの","555":"恋愛","567":"鬼畜","1001":"OL","1007":"スチュワーデス","1008":"メイド","1013":"护士","1014":"熟女","1015":"女医","1016":"女教师","1018":"女子校生","1019":"女大学生","1020":"少妻","1022":"家庭教師","1025":"未亡人","1026":"职业","1027":"美少女","1028":"黒人男優","1031":"痴女","1032":"お母さん","1033":"姐姐系","1034":"辣妹","1036":"风俗娘","1039":"人妻・主妇","1069":"出轨","1082":"女戦士","2001":"巨乳","2002":"長身","2003":"小柄","2004":"めがね","2005":"贫乳","2006":"苗条","2007":"丰满","2008":"ミニ系","2012":"白人女优","2024":"巨尻","3001":"体操着・ブルマ","3002":"和服・浴衣","3003":"セーラー服","3006":"连裤袜","3007":"ミニスカ","3008":"泳装","3009":"競泳・スクール水着","3011":"学生服","3014":"内衣","3029":"即ハメ","3035":"レオタード","3036":"女装・男の娘","4001":"SM","4002":"近親相姦","4005":"乱交","4006":"搭讪","4007":"企划","4008":"腿控","4009":"乳控","4010":"其他恋物","4011":"臀控","4013":"女同","4014":"处男","4015":"ニューハーフ","4016":"内裤走光","4017":"特写","4018":"スカトロ","4019":"无毛","4020":"户外・露出","4021":"偷拍・偷窥","4022":"西洋・进口","4023":"纪实","4024":"素人","4025":"单体作品","4026":"カーセックス","4028":"妄想","4030":"淫乱・激烈","4031":"角色扮演","4034":"特撮","4057":"姉・妹","4059":"接吻","4096":"スポーツ","4098":"セクシー","4106":"骑乘位","4111":"NTR","4114":"剧情","4116":"着エロ","4118":"偶像・艺人","4119":"美容按摩","4120":"逆ナン","4122":"イタズラ","4123":"情侣","4124":"按摩","4140":"温泉","5001":"中出","5002":"口交","5003":"大量颜射","5004":"手交","5005":"肛交","5006":"振动棒","5008":"自慰","5009":"吞精","5010":"監禁","5011":"放尿・失禁","5012":"飲尿","5013":"脱糞","5014":"浣腸","5015":"ドラッグ","5016":"潮吹","5017":"玩具","5018":"ローター","5019":"乳交","5020":"69","5021":"縛り・緊縛","5022":"3P・4P","5023":"颜射","5025":"淫语","5048":"足コキ","5053":"手指插入","5057":"润滑・精油","5059":"拷問","5060":"母乳","5062":"女同接吻","5063":"POV","5066":"按摩棒","5067":"顔面騎乗","5068":"深喉","5069":"くすぐり","5071":"ハーレム","5073":"巨根","5074":"男性M","5075":"汗だく","5076":"アナルセックス","6002":"POV自拍","6003":"精选・总集篇","6004":"数码马赛克","6005":"投稿","6006":"出道","6012":"4小时以上","6014":"写真偶像","6017":"薄马赛克","6063":"独立制作","6149":"超巨乳","6164":"ビッチ","6533":"高清","6548":"独家配信","6566":"FANZA配信限定","6608":"女优精选","6609":"16時間以上作品","6793":"VR专用","6925":"高画质VR","6937":"ヘルス・ソープ","6941":"ディルド","6945":"女上司","6958":"后入","6967":"M女","6968":"高潮","6995":"妄想族","6996":"エマニエル","7267":"セット商品","79015":"4K","307935":"8K VR","309021":"アナルセックス（男の娘）"};
 var lastRequestParams = null;
 var memoryPool = { at: 0, works: [] };
@@ -587,6 +598,35 @@ function rememberParams(params) {
     if (minMb !== "" && Widget.storage && typeof Widget.storage.set === "function") {
       Widget.storage.set("jv.magnet_min_video_mb", minMb);
     }
+    var proxyBase =
+      getText(params && params.html_proxy_worker) ||
+      getText(params && params.htmlProxyWorker) ||
+      "";
+    if (!proxyBase && params && params.global) {
+      proxyBase =
+        getText(params.global.html_proxy_worker) || getText(params.global.htmlProxyWorker) || "";
+    }
+    if (!proxyBase && params && params.globalParams) {
+      if (Array.isArray(params.globalParams)) {
+        for (var px = 0; px < params.globalParams.length; px++) {
+          var itP = params.globalParams[px];
+          if (!itP) continue;
+          var nP = getText(itP.name || itP.key);
+          if (nP === "html_proxy_worker" || nP === "htmlProxyWorker") {
+            proxyBase = getText(itP.value != null ? itP.value : itP.val);
+            if (proxyBase) break;
+          }
+        }
+      } else {
+        proxyBase =
+          getText(params.globalParams.html_proxy_worker) ||
+          getText(params.globalParams.htmlProxyWorker) ||
+          "";
+      }
+    }
+    if (proxyBase && Widget.storage && typeof Widget.storage.set === "function") {
+      Widget.storage.set("jv.html_proxy_worker", proxyBase.replace(/\/+$/, ""));
+    }
   } catch (e) {}
 }
 
@@ -740,7 +780,118 @@ function isCloudflareChallenge(html) {
 }
 
 function forbidHint(url) {
-  return "请求被拦截(HTTP 403)。可在全局参数填写站点 Cookie 后重试。url=" + url;
+  return (
+    "请求被拦截(HTTP 403)。可填站点 Cookie，或配置 html_proxy_worker 后重试。url=" + url
+  );
+}
+
+function getHtmlProxyWorkerBase() {
+  var base = "";
+  try {
+    base =
+      getText(lastRequestParams && lastRequestParams.html_proxy_worker) ||
+      getText(Widget.storage && Widget.storage.get("jv.html_proxy_worker")) ||
+      getText(Widget.storage && Widget.storage.get("javdb.global.htmlProxyWorker")) ||
+      "";
+  } catch (e) {}
+  if (!base) base = HTML_PROXY_WORKER_DEFAULT;
+  return String(base || "").replace(/\/+$/, "");
+}
+
+function buildHtmlProxyUrl(targetUrl, mode) {
+  var base = getHtmlProxyWorkerBase();
+  if (!base) return "";
+  var path = mode === "browse" ? "/browse" : mode === "fetch" ? "/fetch" : "/html";
+  return base + path + "?url=" + encodeURIComponent(String(targetUrl || ""));
+}
+
+function isProxyErrorPayload(body) {
+  var text = String(body || "").trim();
+  if (!text || text.charAt(0) !== "{") return false;
+  try {
+    var data = JSON.parse(text);
+    return !!(data && data.error);
+  } catch (e) {
+    return false;
+  }
+}
+
+function isUsableProxyHtml(html) {
+  var text = String(html || "");
+  if (!text || text.length < 200) return false;
+  if (isProxyErrorPayload(text) || isCloudflareChallenge(text)) return false;
+  return /work-card|workId|\/work\/\d+|og:title|<html[\s>]/i.test(text);
+}
+
+async function fetchViaHtmlProxy(targetUrl, mode) {
+  var proxyUrl = buildHtmlProxyUrl(targetUrl, mode || "html");
+  if (!proxyUrl) throw new Error("html proxy base missing");
+  var headers = {
+    Accept: "text/html,application/json,*/*",
+    "User-Agent": UA,
+  };
+  var cookie = mergeCookieJar("");
+  if (cookie) headers["X-Upstream-Cookie"] = cookie;
+  // browse 也可把 cookie 挂到 query，兼容 move-html-proxy
+  if ((mode === "browse" || !mode) && cookie) {
+    proxyUrl += "&cookie=" + encodeURIComponent(cookie);
+  }
+  var got = await safeGet(proxyUrl, headers, { timeout: HTML_PROXY_TIMEOUT_MS });
+  var body = typeof got.body === "string" ? got.body : String(got.body || "");
+  if (isProxyErrorPayload(body)) {
+    var msg = "proxy error";
+    try {
+      var pj = JSON.parse(body);
+      msg = pj.message || pj.error || msg;
+    } catch (e2) {}
+    throw new Error(String(msg));
+  }
+  // 代理侧可能透传上游 403，但 body 已是可用 HTML/RSC
+  if ((got.status >= 400 || (got.error && isForbiddenError(got.error))) && !isUsableProxyHtml(body) && body.indexOf("workId") === -1) {
+    throw new Error("proxy HTTP " + (got.status || errorStatus(got.error) || "?") + " via " + (mode || "html"));
+  }
+  if (!isUsableProxyHtml(body) && body.indexOf("workId") === -1) {
+    throw new Error("proxy returned unusable body via " + (mode || "html"));
+  }
+  return body;
+}
+
+async function fetchViaProxyModes(url) {
+  var modes = ["browse", "html", "fetch"];
+  var lastErr = null;
+  for (var i = 0; i < modes.length; i++) {
+    try {
+      var body = await fetchViaHtmlProxy(url, modes[i]);
+      console.log("[javverse] proxy ok via", modes[i], "len=", body.length);
+      return body;
+    } catch (e) {
+      lastErr = e;
+      console.log("[javverse] proxy", modes[i], "fail:", (e && e.message) || e);
+    }
+  }
+  throw lastErr || new Error(forbidHint(url));
+}
+
+async function fetchHtmlWithProxyFallback(pathOrUrl, referer, opt) {
+  opt = opt || {};
+  var url = /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : SITE + pathOrUrl;
+  if (!opt.proxyOnly) {
+    try {
+      return await fetchHtml(url, referer);
+    } catch (directErr) {
+      if (
+        !isForbiddenError(directErr) &&
+        !/403|challenge|拦截/i.test(String((directErr && directErr.message) || directErr))
+      ) {
+        throw directErr;
+      }
+      console.log(
+        "[javverse] direct HTML blocked, try proxy:",
+        (directErr && directErr.message) || directErr
+      );
+    }
+  }
+  return fetchViaProxyModes(url);
 }
 
 async function safeGet(url, headers, opt) {
@@ -1459,6 +1610,23 @@ async function fetchGenreHtmlCards(genreId, page) {
       console.log("[javverse] genre HTML skip:", paths[i], (e && e.message) || e);
     }
   }
+  // 直连全灭：走 HTML 代理 Worker（对齐 missav / move-html-proxy）
+  if (!best.length) {
+    for (var j = 0; j < paths.length; j++) {
+      var proxyUrl = SITE + paths[j];
+      try {
+        var proxied = await fetchHtmlWithProxyFallback(proxyUrl, SITE + "/genres", { proxyOnly: true });
+        var proxiedCards = parseGenreWorkCards(proxied);
+        if (!proxiedCards.length && proxied.indexOf("workId") !== -1) {
+          proxiedCards = parseGenreRscPayload(proxied);
+        }
+        if (proxiedCards.length > best.length) best = proxiedCards;
+        if (best.length >= 8) break;
+      } catch (e3) {
+        console.log("[javverse] genre proxy skip:", paths[j], (e3 && e3.message) || e3);
+      }
+    }
+  }
   return best.length ? best : null;
 }
 
@@ -1610,7 +1778,8 @@ async function loadGenreWorks(params) {
           genreTitleById(genreId) +
           ") 第 " +
           page +
-          " 页加载失败。可在全局参数填写站点 Cookie 后重试。"
+          " 页加载失败（直连/代理均被 Cloudflare 拦截）。请用浏览器打开 javverse.com 过人机验证后，把含 cf_clearance 的 Cookie 填入全局「站点 Cookie」，必要时确认 html_proxy_worker=" +
+          getHtmlProxyWorkerBase()
       );
     }
 
