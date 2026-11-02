@@ -13,10 +13,10 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.3.4",
+  version: "1.3.5",
   requiredVersion: "0.0.1",
   description:
-    "JAV Verse：作品池 / 千级类别筛选（RSC） / 横版列表 / 富详情（id=番号）；相似作品磁力一键光鸭转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+    "JAV Verse：作品池 / 千级类别筛选（RSC） / 横版列表 / 富详情（id=番号，link 内嵌番号供聚合）；相似作品磁力一键光鸭转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javverse.com/",
   icon: "https://javverse.com/apple-icon.png",
@@ -328,8 +328,11 @@ function pageSize(params) {
   return Math.min(48, Math.max(1, Math.floor(n)));
 }
 
-function buildOwnedLink(workId) {
-  return LINK_PREFIX + String(workId);
+function buildOwnedLink(workId, code) {
+  var id = String(workId || "").replace(/[^\d]/g, "");
+  if (!id) return "";
+  var c = normalizeCode(code) || getText(code).toUpperCase();
+  return LINK_PREFIX + id + (c ? ":" + encodeURIComponent(c) : "");
 }
 
 function parseOwnedLink(raw) {
@@ -346,15 +349,61 @@ function parseOwnedLink(raw) {
     };
   }
   if (s.indexOf(LINK_PREFIX) === 0) {
-    var id = s.slice(LINK_PREFIX.length).split("?")[0].split("#")[0];
-    if (/^\d+$/.test(id)) return { kind: "work", workId: id, link: buildOwnedLink(id) };
-    return null;
+    var rest = s.slice(LINK_PREFIX.length).split("?")[0].split("#")[0];
+    var parts = rest.split(":");
+    var workId = String(parts[0] || "").replace(/[^\d]/g, "");
+    if (!workId) return null;
+    var codeHint = "";
+    if (parts.length > 1) {
+      try {
+        codeHint = decodeURIComponent(parts.slice(1).join(":"));
+      } catch (e) {
+        codeHint = parts.slice(1).join(":");
+      }
+    }
+    return {
+      kind: "work",
+      workId: workId,
+      code: normalizeCode(codeHint) || getText(codeHint).toUpperCase(),
+      link: buildOwnedLink(workId, codeHint),
+    };
   }
   var m = s.match(
     /^https?:\/\/(?:www\.)?javverse\.com(?:\/(?:zh-CN|zh-Hant|en|ja))?\/work\/(\d+)/i
   );
-  if (m) return { kind: "work", workId: m[1], link: buildOwnedLink(m[1]) };
+  if (m) return { kind: "work", workId: m[1], code: "", link: buildOwnedLink(m[1]) };
+  // 兼容聚合/宿主只传番号
+  var asCode = normalizeCode(s);
+  if (asCode && /^[A-Z0-9]+-\d+[A-Z]?$/.test(asCode)) {
+    return { kind: "code", code: asCode, workId: "", link: "" };
+  }
   return null;
+}
+
+function codeFromCoverUrl(url) {
+  var u = getText(url);
+  if (!u) return "";
+  var m = u.match(/\/([0-9]?[a-z]+)(\d+)(?:[a-z]*)?(?:pl|ps|jm)?\.(?:jpg|webp)/i);
+  if (!m) m = u.match(/\/(?:digital\/video\/)?([0-9]?[a-z]+)0*(\d+)\//i);
+  if (!m) return "";
+  return normalizeCode(m[1] + m[2]) || normalizeCode(m[1] + "-" + m[2]);
+}
+
+function resolveItemCode(row) {
+  row = row || {};
+  var code =
+    normalizeCode(row.code) ||
+    normalizeCode(row.code_display) ||
+    normalizeCode(row.number) ||
+    getText(row.code).toUpperCase();
+  if (code && /^JV:\d+/i.test(code)) code = "";
+  if (!code) code = codeFromCoverUrl(row.coverUrl || row.cover || row.cover_url || "");
+  if (!code) {
+    var title = getText(row.title || row.title_zh || row.originalTitle);
+    var tm = title.match(/\b([A-Z]{2,10})[-_ ]?(\d{2,5}[A-Z]?)\b/i);
+    if (tm) code = normalizeCode(tm[1] + "-" + tm[2]);
+  }
+  return code || "";
 }
 
 function extractMagnetHash(magnet) {
@@ -747,24 +796,26 @@ function buildCoverBundle(cover) {
 }
 
 function toVideoItem(row) {
-  var workId = String(row.workId);
-  var link = buildOwnedLink(workId);
-  var code = normalizeCode(row.code) || getText(row.code);
+  var workId = String(row.workId || "").replace(/[^\d]/g, "");
+  var code = resolveItemCode(row);
+  var link = buildOwnedLink(workId, code);
   var title = getText(row.title) || code || "作品 " + workId;
-  if (code && title.indexOf(code) !== 0) title = code + " " + title;
+  if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var covers = buildCoverBundle(row.coverUrl || row.cover || "");
+  // 聚合工具依赖 id=番号；站点内部 workId 放 videoId / link
   return {
-    id: code || link,
+    id: code || workId,
     type: "url",
     mediaType: "movie",
     title: title,
     originalTitle: code || title,
+    videoId: workId || undefined,
     coverUrl: covers.coverUrl,
     posterPath: covers.posterPath,
     detailPoster: covers.detailPoster,
     backdropPath: covers.backdropPath,
     releaseDate: getText(row.releaseDate) || undefined,
-    description: row.description || undefined,
+    description: row.description || (code ? "番号: " + code : undefined),
     link: link,
   };
 }
@@ -1220,21 +1271,59 @@ async function loadMagnetDetail(owned, params) {
 
 async function loadDetail(link, params) {
   try {
-    rememberParams(params || lastRequestParams);
-    var owned = parseOwnedLink(link);
+    params = params || lastRequestParams || {};
+    rememberParams(params);
+    var owned = parseOwnedLink(link != null ? link : params.link || params.id);
     if (!owned) return null;
     if (owned.kind === "magnet") {
-      return await loadMagnetDetail(owned, params || lastRequestParams);
+      return await loadMagnetDetail(owned, params);
     }
-    if (!owned.workId) return null;
-    var workId = owned.workId;
 
-    var card = await fetchCardsDetail(workId);
-    if (!card) return null;
+    var workId = owned.workId || "";
+    var card = null;
+    if (workId) {
+      card = await fetchCardsDetail(workId);
+    }
+    if (!card && owned.code) {
+      // 宿主/聚合只传了番号：从作品池反查 workId
+      try {
+        var pool = await fetchRandomPoolWorks(false);
+        var hit = null;
+        var want = owned.code;
+        for (var pi = 0; pi < pool.length; pi++) {
+          var pw = pool[pi] || {};
+          var pc = resolveItemCode(pw);
+          if (pc && pc === want) {
+            hit = pw;
+            break;
+          }
+        }
+        if (hit && hit.id) {
+          workId = String(hit.id);
+          card = await fetchCardsDetail(workId);
+          if (!card) {
+            card = {
+              code: hit.code_display || hit.code || want,
+              title: hit.title_zh || hit.title || want,
+              cover: hit.cover_url || hit.cover || "",
+            };
+          }
+        }
+      } catch (e0) {
+        console.log("[javverse] code→workId skip:", (e0 && e0.message) || e0);
+      }
+    }
+    if (!card || !workId) return null;
 
-    var code = normalizeCode(card.code || "") || getText(card.code);
+    var code =
+      resolveItemCode({
+        code: card.code || card.code_display || owned.code || params.id || params.code,
+        title: card.title_zh || card.title,
+        coverUrl: card.cover,
+      }) || owned.code || "";
     var title = card.title_zh || card.title || code;
     var covers = buildCoverBundle(card.cover || "");
+    var ownedLink = buildOwnedLink(workId, code);
 
     var html = "";
     try {
@@ -1274,6 +1363,7 @@ async function loadDetail(link, params) {
     }
 
     var descParts = [];
+    if (code) descParts.push("番号: " + code);
     if (makerName) descParts.push("片商: " + makerName);
     if (magnets.length) descParts.push("磁力×" + magnets.length + "（相似作品区点击转存光鸭）");
     if (actresses.length) {
@@ -1289,12 +1379,13 @@ async function loadDetail(link, params) {
     }
 
     return {
-      id: code || owned.link,
+      id: code || workId,
       type: "url",
       mediaType: "movie",
-      title: code && String(title).indexOf(code) !== 0 ? code + " " + title : title,
+      title: code && String(title).toUpperCase().indexOf(code) !== 0 ? code + " " + title : title,
       originalTitle: code || title,
-      link: owned.link,
+      videoId: workId,
+      link: ownedLink,
       coverUrl: covers.coverUrl,
       posterPath: covers.posterPath,
       detailPoster: covers.detailPoster,
@@ -1429,7 +1520,15 @@ async function loadResource(params) {
     var raw = params.link != null ? params.link : params.id;
     var owned = parseOwnedLink(raw);
     // 仅本站 jv: 作品；不按番号去光鸭网盘搜索
-    if (!owned || owned.kind === "magnet" || !owned.workId) return [];
+    if (!owned || owned.kind === "magnet") return [];
+    if (!owned.workId && owned.kind === "code") {
+      // 详情 id 为番号时，宿主可能把 id 当作 link 传入
+      try {
+        var detail = await loadDetail(owned.code, params);
+        if (detail && detail.link) owned = parseOwnedLink(detail.link);
+      } catch (e) {}
+    }
+    if (!owned || !owned.workId) return [];
 
     var sess;
     try {

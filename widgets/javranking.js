@@ -409,7 +409,7 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.2.6",
+  version: "1.2.7",
   requiredVersion: "0.0.1",
   description:
     "权威榜单 / 神作 / 女优战力（女友下拉筛选）/ 今天冲谁·冲什么；相似作品磁力按体积排序并光鸭转存。",
@@ -597,8 +597,8 @@ var STATIC_ORIGIN = "https://static.javranking.cc";
 var LINK_PREFIX = "jvr:";
 var MAGNET_LINK_PREFIX = "gy:";
 var PAGE_SIZE = 24;
-var SEARCH_INDEX_CACHE_KEY = "jvr_search_index_v4";
-var SEARCH_INDEX_TS_KEY = "jvr_search_index_ts_v4";
+var SEARCH_INDEX_CACHE_KEY = "jvr_search_index_v5";
+var SEARCH_INDEX_TS_KEY = "jvr_search_index_ts_v5";
 var SEARCH_INDEX_TTL_MS = 6 * 60 * 60 * 1000;
 var MAGNET_STORE_PREFIX = "jvr.magnet.v1.";
 var UA =
@@ -1435,8 +1435,18 @@ function findVideosByKeyword(index, keyword) {
   return out;
 }
 
+function normalizePeopleKey(raw) {
+  var s = getText(raw);
+  if (!s) return "";
+  try {
+    s = decodeURIComponent(s);
+  } catch (e) {}
+  s = s.replace(/^jvr:actress:/i, "").replace(/^actress:/i, "");
+  return getText(s);
+}
+
 function findActressWorks(index, nameOrSlug) {
-  var target = getText(nameOrSlug).toLowerCase();
+  var target = normalizePeopleKey(nameOrSlug).toLowerCase();
   if (!target) return [];
   var out = [];
   (index.videos || []).forEach(function (v) {
@@ -1447,7 +1457,12 @@ function findActressWorks(index, nameOrSlug) {
       var slug = getText(a.slug).toLowerCase();
       var gender = getText(a.gender).toLowerCase();
       if (gender && gender !== "female") continue;
-      if (n === target || slug === target || (n && n.indexOf(target) >= 0)) {
+      if (
+        n === target ||
+        slug === target ||
+        (n && (n.indexOf(target) >= 0 || target.indexOf(n) >= 0)) ||
+        (slug && slug.indexOf(target) >= 0)
+      ) {
         out.push(v);
         return;
       }
@@ -1942,7 +1957,7 @@ async function loadWorksFromActressMarkdown(name, params) {
   try {
     var md = await fetchMarkdown("most-awarded-actors", params);
     var sections = parsePowerSections(md);
-    var target = getText(name).toLowerCase();
+    var target = normalizePeopleKey(name).toLowerCase();
     for (var i = 0; i < sections.length; i++) {
       var secName = getText(sections[i].name).toLowerCase();
       if (secName === target || secName.indexOf(target) >= 0 || target.indexOf(secName) >= 0) {
@@ -1953,40 +1968,88 @@ async function loadWorksFromActressMarkdown(name, params) {
   return [];
 }
 
+async function fetchActressWorksFromActorPage(slugOrName, index, codeMap, params) {
+  var key = normalizePeopleKey(slugOrName);
+  if (!key) return [];
+  var ent = findActressEntityInIndex(index, key);
+  var slug = getText((ent && ent.slug) || (/^actor-/i.test(key) ? key : ""));
+  if (!slug) return [];
+  var locale = localeOf(params);
+  var url = SITE_ORIGIN + "/" + locale + "/actors/" + slug + "/";
+  var html = "";
+  try {
+    html = responseToText(await httpGet(url));
+  } catch (e) {
+    console.warn("[javranking] 女优页获取失败:", e && e.message);
+    return [];
+  }
+  if (!html) return [];
+  var rows = [];
+  var seen = {};
+  var re = /href=["'][^"']*\/videos\/(\d+)\/?["'][^>]*>([\s\S]*?)<\/a>/gi;
+  var m;
+  while ((m = re.exec(html))) {
+    var videoId = String(m[1] || "").replace(/[^\d]/g, "");
+    var text = getText(String(m[2] || "").replace(/<[^>]+>/g, ""));
+    var code = "";
+    var cm = text.match(/\b([A-Z]{2,15}-?\d{2,8}[A-Z]?)\b/i);
+    if (cm) code = normalizeCode(cm[1]);
+    var uniq = code || videoId;
+    if (!uniq || seen[uniq]) continue;
+    seen[uniq] = true;
+    rows.push({ videoId: videoId, code: code, title: text });
+  }
+  return rows
+    .map(function (row) {
+      if (row.code && codeMap[row.code]) return mapIndexVideo(codeMap[row.code]);
+      var byId = null;
+      (index.videos || []).some(function (v) {
+        if (String(v.videoId) === String(row.videoId)) {
+          byId = v;
+          return true;
+        }
+        return false;
+      });
+      if (byId) return mapIndexVideo(byId);
+      if (!row.videoId && !row.code) return null;
+      return {
+        id: row.code || row.videoId,
+        type: "url",
+        mediaType: "movie",
+        title: (row.code ? row.code + " " : "") + (row.title || row.videoId),
+        link: buildVideoLink(row.videoId, row.code),
+        coverUrl: siteCoverUrl(row.videoId) || undefined,
+        posterPath: siteCoverUrl(row.videoId) || undefined,
+        backdropPath: siteOgUrl(row.videoId) || siteCoverUrl(row.videoId) || undefined,
+      };
+    })
+    .filter(function (x) {
+      return x && x.link;
+    });
+}
+
 async function loadActressDetail(owned, params) {
+  params = params || {};
   var index = await getSearchIndex(params);
   var codeMap = buildCodeMap(index);
+  var key = normalizePeopleKey(owned.name);
+  // 点进女优时优先直接返回作品列表（App 对 loadDetail 数组会按列表展示）
+  var works = await loadActressWorksByName(key, index, codeMap, params);
+  if (works && works.length) return works;
+
   var entityMap = buildEntityMap(index);
-  var works = findActressWorks(index, owned.name).slice(0, 60);
-  var related = works.map(function (v) {
-    return mapIndexVideo(v);
-  });
-  if (!related.length) {
-    var mdWorks = await loadWorksFromActressMarkdown(owned.name, params);
-    related = mdWorks
-      .map(function (w) {
-        var meta = codeMap[normalizeCode(w.code)];
-        return meta ? mapIndexVideo(meta) : mapRankingRow(w, codeMap, 0);
-      })
-      .filter(function (item) {
-        return item && item.link;
-      })
-      .slice(0, 60);
-  }
-  var ent = findActressEntity(entityMap, owned.name);
-  var cover = resolveActressAvatar(ent, (ent && ent.slug) || owned.name);
+  var ent = findActressEntityInIndex(index, key) || findActressEntity(entityMap, key);
+  var cover = resolveActressAvatar(ent, (ent && ent.slug) || key);
   return {
-    id: getText((ent && ent.slug) || owned.name),
+    id: getText((ent && ent.slug) || key),
     type: "url",
     mediaType: "person",
-    title: owned.name,
-    link: buildActressLink((ent && ent.slug) || owned.name),
-    description: related.length ? "代表作 " + related.length + " 部" : "",
+    title: getText((ent && ent.name) || key),
+    description: "暂无代表作数据",
     coverUrl: cover || undefined,
     posterPath: cover || undefined,
     backdropPath: cover || undefined,
     avatar: cover || undefined,
-    relatedItems: related,
   };
 }
 
@@ -2059,7 +2122,7 @@ async function loadRandomMasterpiece(params) {
 }
 
 async function loadActressWorksByName(name, index, codeMap, params) {
-  var key = getText(name);
+  var key = normalizePeopleKey(name);
   var ent = findActressEntityInIndex(index, key);
   var lookupKeys = [];
   if (key) lookupKeys.push(key);
@@ -2086,10 +2149,17 @@ async function loadActressWorksByName(name, index, codeMap, params) {
     });
   }
 
-  if (!works.length) {
+  var mapped = [];
+  if (works.length) {
+    mapped = pageSlice(works, params.page, PAGE_SIZE).map(function (v) {
+      return mapIndexVideo(v);
+    });
+  }
+
+  if (!mapped.length) {
     var mdName = getText((ent && ent.name) || key);
     var mdWorks = await loadWorksFromActressMarkdown(mdName, params);
-    return pageSlice(
+    mapped = pageSlice(
       mdWorks
         .map(function (w) {
           var meta = codeMap[normalizeCode(w.code)];
@@ -2102,9 +2172,25 @@ async function loadActressWorksByName(name, index, codeMap, params) {
       PAGE_SIZE
     );
   }
-  return pageSlice(works, params.page, PAGE_SIZE).map(function (v) {
-    return mapIndexVideo(v);
-  });
+
+  // 索引/Markdown 都没有时，抓女优页作品链接（解决 peopleId 只有头像名的问题）
+  if (!mapped.length) {
+    mapped = pageSlice(
+      await fetchActressWorksFromActorPage(key, index, codeMap, params),
+      params.page,
+      PAGE_SIZE
+    );
+  }
+
+  console.log(
+    "[javranking][works]",
+    key,
+    "→",
+    mapped.length,
+    "ent=",
+    ent && ent.name
+  );
+  return mapped;
 }
 
 function resolvePeopleIdFromParams(params) {
@@ -2117,7 +2203,7 @@ function resolvePeopleIdFromParams(params) {
     params.PeopleId,
   ];
   for (var i = 0; i < candidates.length; i++) {
-    var v = getText(candidates[i]);
+    var v = normalizePeopleKey(candidates[i]);
     if (v) return v;
   }
   return "";
@@ -2313,7 +2399,7 @@ function mapActressEntity(ent, extra) {
     type: "url",
     mediaType: "person",
     title: name,
-    link: buildActressLink(slug || name),
+    // 不设 link：横向人物点击走 peopleId 重开列表；避免只打开空女优详情
     rating: score,
     description: descParts.join(" · "),
     coverUrl: avatar || undefined,
@@ -2337,7 +2423,7 @@ function mapPowerSectionToPerson(sec, entityMap, index) {
     type: "url",
     mediaType: "person",
     title: displayName,
-    link: buildActressLink(peopleKey),
+    // 不设 link：横向人物点击注入 peopleId 返回作品列表
     rating: Number((ent && ent.score) || sec.score || 0) || 0,
     description:
       "战力 " +
