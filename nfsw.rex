@@ -8,6 +8,7 @@
       "title": "JavRanking",
       "description": "JavRanking",
       "requiredVersion": "0.0.1",
+      "version": "1.0.0",
       "author": "老头",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javranking.js"
     },
@@ -16,6 +17,7 @@
       "title": "JAV Verse",
       "description": "JAV Verse",
       "requiredVersion": "0.0.1",
+      "version": "1.0.0",
       "author": "老头",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javverse.js"
     },
