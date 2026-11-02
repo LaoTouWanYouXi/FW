@@ -14,10 +14,6 @@
  */
 var ACTRESS_FILTER_OPTIONS = [
   {
-    "title": "全部",
-    "value": ""
-  },
-  {
     "title": "凉森玲梦 · 17,576",
     "value": "凉森玲梦"
   },
@@ -409,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.2.7",
+  version: "1.2.8",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力（女友下拉筛选）/ 今天冲谁·冲什么；相似作品磁力按体积排序并光鸭转存。",
+    "权威榜单 / 神作 / 女优战力（必选女友看影片）/ 今天冲谁·冲什么；相似作品磁力按体积排序并光鸭转存。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -565,14 +561,13 @@ WidgetMetadata = {
       id: "loadActressPower",
       title: "女优战力总榜",
       functionName: "loadActressPower",
-      // peopleId 点击会重开本模块；不可长缓存，否则标题已是女友、列表仍是战力人物卡
       cacheDuration: 0,
       params: [
         {
           name: "actress",
           title: "筛选女友",
           type: "enumeration",
-          value: "",
+          value: "凉森玲梦",
           enumOptions: ACTRESS_FILTER_OPTIONS,
         },
         { name: "page", title: "页码", type: "page", value: "1" },
@@ -2214,49 +2209,17 @@ async function loadActressPower(params) {
   try {
     var peopleId = resolvePeopleIdFromParams(params);
     var actress = getText(params.actress || "");
+    var focus = peopleId || actress;
+    // 必须先选女友：未选择时不返回人物总榜
+    if (!focus) {
+      console.warn("[javranking][loadActressPower] 未选择筛选女友");
+      return [];
+    }
+
     var index = await getSearchIndex(params);
     var codeMap = buildCodeMap(index);
-    var entityMap = buildEntityMap(index);
-
-    // rex: 横向人物/详情 peoples 点击会重开本模块并注入 peopleId → 必须返回该女友作品
-    if (peopleId) {
-      console.log("[javranking][loadActressPower] peopleId=", peopleId);
-      return await loadActressWorksByName(peopleId, index, codeMap, params);
-    }
-
-    var md = await fetchMarkdown("most-awarded-actors", params);
-    var sections = parsePowerSections(md);
-
-    // 下拉筛选女友：与「全部」同样返回人物卡+女优头像，不改成影片封面
-    if (actress) {
-      var matched = sections.filter(function (sec) {
-        var n = getText(sec.name).toLowerCase();
-        var a = actress.toLowerCase();
-        if (n === a || n.indexOf(a) >= 0 || a.indexOf(n) >= 0) return true;
-        var ent = findActressEntityInIndex(index, sec.name, sec.score);
-        if (!ent) return false;
-        if (getText(ent.slug).toLowerCase() === a) return true;
-        if (getText(ent.name).toLowerCase() === a) return true;
-        if (Array.isArray(ent.aliases) && ent.aliases.some(function (x) {
-          return getText(x).toLowerCase() === a;
-        })) return true;
-        return false;
-      });
-      if (!matched.length) {
-        var entOnly = findActressEntityInIndex(index, actress);
-        if (entOnly) {
-          return [mapActressEntity(entOnly)];
-        }
-      }
-      return matched.map(function (sec) {
-        return mapPowerSectionToPerson(sec, entityMap, index);
-      });
-    }
-
-    var pageSections = pageSlice(sections, params.page, PAGE_SIZE);
-    return pageSections.map(function (sec) {
-      return mapPowerSectionToPerson(sec, entityMap, index);
-    });
+    console.log("[javranking][loadActressPower] focus=", focus);
+    return await loadActressWorksByName(focus, index, codeMap, params);
   } catch (error) {
     console.error("[javranking][loadActressPower] 失败:", error.message || error);
     throw error;

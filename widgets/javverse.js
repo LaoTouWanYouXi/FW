@@ -13,10 +13,10 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.3.5",
+  version: "1.3.6",
   requiredVersion: "0.0.1",
   description:
-    "JAV Verse：作品池 / 千级类别筛选（RSC） / 横版列表 / 富详情（id=番号，link 内嵌番号供聚合）；相似作品磁力一键光鸭转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+    "JAV Verse：作品池 / 千级类别筛选（RSC） / 列表横图位展示 / 富详情（id=番号，link 内嵌番号供聚合）；相似作品磁力一键光鸭转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javverse.com/",
   icon: "https://javverse.com/apple-icon.png",
@@ -783,14 +783,23 @@ function stillsFromCover(cover, maxN) {
   return out;
 }
 
-function buildCoverBundle(cover) {
+function buildCoverBundle(cover, mode) {
   var landscape = toLandscapeCover(cover) || cleanImage(cover);
   var portrait = toPortraitCover(cover) || landscape;
-  // 列表强制横版：poster/backdrop/cover 均用横图
+  // 列表横图位：只填 backdropPath/coverUrl，不填 posterPath，避免走竖图位海报墙
+  if (mode === "list") {
+    return {
+      coverUrl: landscape || undefined,
+      backdropPath: landscape || undefined,
+      posterPath: undefined,
+      detailPoster: undefined,
+    };
+  }
+  // 详情：顶部横图位 + 可选竖海报
   return {
     coverUrl: landscape || undefined,
     backdropPath: landscape || undefined,
-    posterPath: landscape || undefined,
+    posterPath: portrait || landscape || undefined,
     detailPoster: portrait || landscape || undefined,
   };
 }
@@ -801,8 +810,9 @@ function toVideoItem(row) {
   var link = buildOwnedLink(workId, code);
   var title = getText(row.title) || code || "作品 " + workId;
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
-  var covers = buildCoverBundle(row.coverUrl || row.cover || "");
+  var covers = buildCoverBundle(row.coverUrl || row.cover || "", "list");
   // 聚合工具依赖 id=番号；站点内部 workId 放 videoId / link
+  // 列表一律横图位：backdropPath → coverUrl（不设 posterPath）
   return {
     id: code || workId,
     type: "url",
@@ -811,8 +821,6 @@ function toVideoItem(row) {
     originalTitle: code || title,
     videoId: workId || undefined,
     coverUrl: covers.coverUrl,
-    posterPath: covers.posterPath,
-    detailPoster: covers.detailPoster,
     backdropPath: covers.backdropPath,
     releaseDate: getText(row.releaseDate) || undefined,
     description: row.description || (code ? "番号: " + code : undefined),
@@ -969,6 +977,7 @@ function buildMagnetRelatedItems(items, ctx) {
       cover: cover || "",
       workId: ctx.workId || "",
     });
+    var magCover = toLandscapeCover(cover) || cleanImage(cover) || undefined;
     out.push({
       id: hash,
       type: "url",
@@ -976,9 +985,8 @@ function buildMagnetRelatedItems(items, ctx) {
       title: name,
       description: sizeText || undefined,
       link: MAGNET_LINK_PREFIX + hash,
-      coverUrl: cover || undefined,
-      backdropPath: cover || undefined,
-      posterPath: cover || undefined,
+      coverUrl: magCover,
+      backdropPath: magCover,
     });
   }
   return out;
@@ -1257,15 +1265,15 @@ async function loadMagnetDetail(owned, params) {
   }
   var cached = readMagnetCache(owned.hash);
   if (!cached || !cached.magnet) return null;
+  var magCover = toLandscapeCover(cached.cover) || cleanImage(cached.cover) || undefined;
   return {
     id: owned.hash,
     type: "url",
     title: cached.name || cached.code || "磁力",
     link: MAGNET_LINK_PREFIX + owned.hash,
     description: getText(cached.size) || undefined,
-    coverUrl: cached.cover || undefined,
-    backdropPath: cached.cover || undefined,
-    posterPath: cached.cover || undefined,
+    coverUrl: magCover,
+    backdropPath: magCover,
   };
 }
 
@@ -1322,7 +1330,7 @@ async function loadDetail(link, params) {
         coverUrl: card.cover,
       }) || owned.code || "";
     var title = card.title_zh || card.title || code;
-    var covers = buildCoverBundle(card.cover || "");
+    var covers = buildCoverBundle(card.cover || "", "detail");
     var ownedLink = buildOwnedLink(workId, code);
 
     var html = "";
