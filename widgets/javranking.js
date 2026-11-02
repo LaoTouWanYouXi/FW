@@ -14,6 +14,10 @@
  */
 var ACTRESS_FILTER_OPTIONS = [
   {
+    "title": "全部（横向人物）",
+    "value": ""
+  },
+  {
     "title": "凉森玲梦 · 17,576",
     "value": "凉森玲梦"
   },
@@ -405,10 +409,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.2.8",
+  version: "1.3.0",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力（必选女友看影片）/ 今天冲谁·冲什么；相似作品磁力按体积排序并光鸭转存。",
+    "权威榜单 / 神作 / 女优战力（横向人物+下拉选片）/ 今天冲谁·冲什么；相似作品磁力按体积排序并光鸭转存。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -567,7 +571,7 @@ WidgetMetadata = {
           name: "actress",
           title: "筛选女友",
           type: "enumeration",
-          value: "凉森玲梦",
+          value: "",
           enumOptions: ACTRESS_FILTER_OPTIONS,
         },
         { name: "page", title: "页码", type: "page", value: "1" },
@@ -2209,17 +2213,29 @@ async function loadActressPower(params) {
   try {
     var peopleId = resolvePeopleIdFromParams(params);
     var actress = getText(params.actress || "");
-    var focus = peopleId || actress;
-    // 必须先选女友：未选择时不返回人物总榜
-    if (!focus) {
-      console.warn("[javranking][loadActressPower] 未选择筛选女友");
-      return [];
-    }
-
     var index = await getSearchIndex(params);
     var codeMap = buildCodeMap(index);
-    console.log("[javranking][loadActressPower] focus=", focus);
-    return await loadActressWorksByName(focus, index, codeMap, params);
+    var entityMap = buildEntityMap(index);
+
+    // 1) 横向人物点击 → peopleId → 该女友影片
+    if (peopleId) {
+      console.log("[javranking][loadActressPower] peopleId=", peopleId);
+      return await loadActressWorksByName(peopleId, index, codeMap, params);
+    }
+
+    // 2) 下拉选中具体女友 → 直接出该女友影片
+    if (actress) {
+      console.log("[javranking][loadActressPower] actress=", actress);
+      return await loadActressWorksByName(actress, index, codeMap, params);
+    }
+
+    // 3) 筛选=全部 → 热门人物-横向：人物卡片（无 link，点击走 peopleId）
+    var md = await fetchMarkdown("most-awarded-actors", params);
+    var sections = parsePowerSections(md);
+    var pageSections = pageSlice(sections, params.page, PAGE_SIZE);
+    return pageSections.map(function (sec) {
+      return mapPowerSectionToPerson(sec, entityMap, index);
+    });
   } catch (error) {
     console.error("[javranking][loadActressPower] 失败:", error.message || error);
     throw error;
@@ -2982,49 +2998,220 @@ async function saveMagnetToGuangya(magnet, cfg) {
   throw lastErr || new Error("光鸭转存失败");
 }
 
-function resolveGuangyaTokenFromParams(params) {
-  params = params || {};
-  var token =
-    gyNormalizeToken(params.guangya_token) ||
-    gyNormalizeToken(params.refresh_token) ||
-    "";
-  if (!token && params.global) {
-    token =
-      gyNormalizeToken(params.global.guangya_token) ||
-      gyNormalizeToken(params.global.refresh_token) ||
-      "";
+var GY_TOKEN_ALIASES = [
+  "guangya_token",
+  "GUANGYA_REFRESH_TOKEN",
+  "guangya_refresh_token",
+  "guangyaRefreshToken",
+  "refresh_token",
+];
+var GY_PARENT_ALIASES = [
+  "guangya_parent_id",
+  "GUANGYA_PARENT_ID",
+  "guangyaParentId",
+  "parentId",
+  "parent_id",
+];
+
+function gyIsPromiseLike(val) {
+  return !!(val && typeof val === "object" && typeof val.then === "function");
+}
+
+function gyScanRefreshToken(text) {
+  var m = String(text || "").match(/gy\.[A-Za-z0-9_\-\.~+/=]{8,}/);
+  return m ? m[0] : "";
+}
+
+function gyNormalizeParamValue(val) {
+  if (val === undefined || val === null) return "";
+  if (typeof val === "string") return val.trim();
+  if (typeof val === "number" || typeof val === "boolean") return String(val).trim();
+  if (typeof val === "object") {
+    if (gyIsPromiseLike(val)) return "";
+    if (typeof val.value === "string" && val.value.trim()) return val.value.trim();
+    if (typeof val.token === "string" && val.token.trim()) return val.token.trim();
+    if (typeof val.refresh_token === "string" && val.refresh_token.trim()) return val.refresh_token.trim();
   }
-  try {
-    if (!token && typeof Widget !== "undefined" && Widget.globalParams) {
-      var gp = Widget.globalParams;
-      if (typeof gp.then !== "function") {
-        token =
-          gyNormalizeToken(gp.guangya_token) ||
-          gyNormalizeToken(gp.refresh_token) ||
-          "";
+  return "";
+}
+
+function gyPickFromObject(obj, aliases) {
+  if (!obj || typeof obj !== "object" || gyIsPromiseLike(obj)) return "";
+  if (Array.isArray(obj)) {
+    for (var a = 0; a < aliases.length; a++) {
+      var want = String(aliases[a] || "");
+      if (!want) continue;
+      for (var i = 0; i < obj.length; i++) {
+        var item = obj[i];
+        if (!item || typeof item !== "object") continue;
+        var itemName = String(item.name || item.key || item.id || "").trim();
+        if (itemName !== want) continue;
+        var fromItem = gyNormalizeParamValue(
+          item.value !== undefined ? item.value : item.val !== undefined ? item.val : item.data
+        );
+        if (fromItem) return fromItem;
       }
     }
-  } catch (e) {}
-  if (!token) {
-    token =
-      gyNormalizeToken(gyReadStore("jvr.guangya_token")) ||
-      gyNormalizeToken(gyReadStore("guangya_refresh_token")) ||
-      gyNormalizeToken(gyReadStore("javranking.cc.globalParams.guangya_token")) ||
-      "";
+    return "";
+  }
+  for (var j = 0; j < aliases.length; j++) {
+    if (obj[aliases[j]] === undefined || obj[aliases[j]] === null) continue;
+    var val = gyNormalizeParamValue(obj[aliases[j]]);
+    if (val) return val;
+  }
+  return "";
+}
+
+function gyPickFromParamsTree(params, aliases) {
+  params = params || {};
+  return (
+    gyPickFromObject(params, aliases) ||
+    gyPickFromObject(params.global, aliases) ||
+    gyPickFromObject(params.globalParams, aliases) ||
+    gyPickFromObject(params.settings, aliases) ||
+    ""
+  );
+}
+
+function gyWidgetId() {
+  try {
+    return (WidgetMetadata && WidgetMetadata.id) || "javranking.cc";
+  } catch (e) {
+    return "javranking.cc";
+  }
+}
+
+function gyStorageKeysFor(name) {
+  var id = gyWidgetId();
+  return [
+    id + ".globalParams." + name,
+    id + ".global." + name,
+    "forward." + id + ".globalParams." + name,
+    "jvr.guangya_token",
+    "jvr." + name,
+    "guangya_refresh_token",
+    name,
+  ];
+}
+
+function gyReadStorageBlob(key) {
+  try {
+    var raw = Widget.storage.get(key);
+    if (raw == null || raw === "") return null;
+    if (typeof raw === "string") {
+      try {
+        return JSON.parse(raw);
+      } catch (e) {
+        return null;
+      }
+    }
+    if (typeof raw === "object" && !gyIsPromiseLike(raw)) return raw;
+  } catch (e2) {}
+  return null;
+}
+
+function gyPickFromStorage(aliases) {
+  var id = gyWidgetId();
+  var blobKeys = [id + ".globalParams", id + ".global", "globalParams", "forward." + id + ".globalParams"];
+  var b;
+  for (var i = 0; i < blobKeys.length; i++) {
+    b = gyReadStorageBlob(blobKeys[i]);
+    var hit = gyPickFromObject(b, aliases);
+    if (hit) return hit;
+  }
+  for (var a = 0; a < aliases.length; a++) {
+    var keys = gyStorageKeysFor(aliases[a]);
+    for (var k = 0; k < keys.length; k++) {
+      var v = gyNormalizeParamValue(gyReadStore(keys[k]));
+      if (v) return v;
+    }
+  }
+  return "";
+}
+
+async function gyAwaitMaybe(val) {
+  if (gyIsPromiseLike(val)) {
+    try {
+      return await val;
+    } catch (e) {
+      return null;
+    }
+  }
+  return val;
+}
+
+async function resolveGuangyaTokenAsync(params) {
+  params = params || {};
+  var raw =
+    gyPickFromParamsTree(params, GY_TOKEN_ALIASES) ||
+    "";
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && typeof Widget.getGlobalParams === "function") {
+        var all = await gyAwaitMaybe(Widget.getGlobalParams());
+        raw = gyPickFromObject(all, GY_TOKEN_ALIASES);
+      }
+    } catch (e) {}
+  }
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && Widget.globalParams) {
+        var gp = await gyAwaitMaybe(Widget.globalParams);
+        raw = gyPickFromObject(gp, GY_TOKEN_ALIASES);
+      }
+    } catch (e2) {}
+  }
+  if (!raw) raw = gyPickFromStorage(GY_TOKEN_ALIASES);
+  var token = gyNormalizeToken(raw) || gyNormalizeToken(gyScanRefreshToken(raw));
+  if (token) {
+    try {
+      Widget.storage.set("jvr.guangya_token", token);
+    } catch (e3) {}
   }
   return token;
 }
 
-function resolveGuangyaParentId(params) {
+async function resolveGuangyaParentIdAsync(params) {
   params = params || {};
-  var pid = gySafeText(params.guangya_parent_id || params.parentId);
-  if (pid) return pid;
-  try {
-    if (typeof Widget !== "undefined" && Widget.globalParams && typeof Widget.globalParams.then !== "function") {
-      pid = gySafeText(Widget.globalParams.guangya_parent_id || Widget.globalParams.parentId);
-    }
-  } catch (e) {}
-  return pid || "";
+  var raw =
+    gyPickFromParamsTree(params, GY_PARENT_ALIASES) ||
+    "";
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && typeof Widget.getGlobalParams === "function") {
+        var all = await gyAwaitMaybe(Widget.getGlobalParams());
+        raw = gyPickFromObject(all, GY_PARENT_ALIASES);
+      }
+    } catch (e) {}
+  }
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && Widget.globalParams) {
+        var gp = await gyAwaitMaybe(Widget.globalParams);
+        raw = gyPickFromObject(gp, GY_PARENT_ALIASES);
+      }
+    } catch (e2) {}
+  }
+  if (!raw) raw = gyPickFromStorage(GY_PARENT_ALIASES);
+  return gySafeText(raw);
+}
+
+// 兼容旧调用名
+function resolveGuangyaTokenFromParams(params) {
+  // sync 尽力取；真正转存走 async
+  return (
+    gyNormalizeToken(gyPickFromParamsTree(params || {}, GY_TOKEN_ALIASES)) ||
+    gyNormalizeToken(gyPickFromStorage(GY_TOKEN_ALIASES)) ||
+    ""
+  );
+}
+
+function resolveGuangyaParentId(params) {
+  return (
+    gySafeText(gyPickFromParamsTree(params || {}, GY_PARENT_ALIASES)) ||
+    gySafeText(gyPickFromStorage(GY_PARENT_ALIASES)) ||
+    ""
+  );
 }
 
 async function handleGuangyaMagnetSave(hash, params) {
@@ -3051,13 +3238,22 @@ async function handleGuangyaMagnetSave(hash, params) {
       link: link,
     };
   }
-  var token = resolveGuangyaTokenFromParams(params);
+  // loadDetail 通常不带 params，必须从 Widget.globalParams / storage 异步取参
+  var token = await resolveGuangyaTokenAsync(params);
+  var parentId = await resolveGuangyaParentIdAsync(params);
+  console.log(
+    "[javranking][guangya] token?",
+    token ? "yes(" + token.slice(0, 6) + "...)" : "no",
+    "parentId?",
+    parentId || "(root)"
+  );
   if (!token) {
     return {
       id: hash,
       type: "url",
       title: "未配置光鸭",
-      description: "请在模块全局参数填写光鸭 refresh_token（gy. 开头），然后重新点击该磁力转存",
+      description:
+        "未读到光鸭 refresh_token。请在模块「全局参数」填写 guangya_token（gy. 开头），保存后重新打开详情再点磁力转存。",
       link: link,
       coverUrl: entry.cover || undefined,
       backdropPath: entry.cover || undefined,
@@ -3066,7 +3262,7 @@ async function handleGuangyaMagnetSave(hash, params) {
   try {
     var result = await saveMagnetToGuangya(entry.magnet, {
       guangya_token: token,
-      guangya_parent_id: resolveGuangyaParentId(params),
+      guangya_parent_id: parentId,
     });
     return {
       id: hash,
@@ -3077,6 +3273,8 @@ async function handleGuangyaMagnetSave(hash, params) {
         (entry.name || entry.code || hash) +
         "\n体积: " +
         (entry.size || "-") +
+        "\n目录: " +
+        (parentId || "根目录") +
         "\n保留文件: " +
         result.keptCount +
         "\n过滤: " +
