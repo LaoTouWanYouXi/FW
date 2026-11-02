@@ -14,10 +14,6 @@
  */
 var ACTRESS_FILTER_OPTIONS = [
   {
-    "title": "全部（横向人物）",
-    "value": ""
-  },
-  {
     "title": "凉森玲梦 · 17,576",
     "value": "凉森玲梦"
   },
@@ -409,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.3.0",
+  version: "1.3.2",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力（横向人物+下拉选片）/ 今天冲谁·冲什么；相似作品磁力按体积排序并光鸭转存。",
+    "权威榜单 / 神作 / 女优战力（必选女友看影片）/ 今天冲谁·冲什么；相似作品磁力按体积排序并光鸭转存。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -571,7 +567,7 @@ WidgetMetadata = {
           name: "actress",
           title: "筛选女友",
           type: "enumeration",
-          value: "",
+          value: "凉森玲梦",
           enumOptions: ACTRESS_FILTER_OPTIONS,
         },
         { name: "page", title: "页码", type: "page", value: "1" },
@@ -596,6 +592,7 @@ var STATIC_ORIGIN = "https://static.javranking.cc";
 var LINK_PREFIX = "jvr:";
 var MAGNET_LINK_PREFIX = "gy:";
 var PAGE_SIZE = 24;
+var lastRequestParams = null;
 var SEARCH_INDEX_CACHE_KEY = "jvr_search_index_v5";
 var SEARCH_INDEX_TS_KEY = "jvr_search_index_ts_v5";
 var SEARCH_INDEX_TTL_MS = 6 * 60 * 60 * 1000;
@@ -2054,7 +2051,7 @@ async function loadActressDetail(owned, params) {
 
 async function loadMagnetDetail(owned, params) {
   if (typeof handleGuangyaMagnetSave === "function") {
-    return await handleGuangyaMagnetSave(owned.hash, params || {});
+    return await handleGuangyaMagnetSave(owned.hash, params || lastRequestParams || {});
   }
   var cached = readMagnetCache(owned.hash);
   if (!cached || !cached.magnet) return null;
@@ -2080,6 +2077,7 @@ async function loadMagnetDetail(owned, params) {
 
 async function loadRanking(params) {
   params = params || {};
+  rememberParams(params);
   try {
     var slug = getText(params.ranking || params.slug || "javdb-top250");
     var md = await fetchMarkdown("rankings/" + slug, params);
@@ -2094,6 +2092,7 @@ async function loadRanking(params) {
 
 async function loadHallOfFame(params) {
   params = params || {};
+  rememberParams(params);
   try {
     var rows = await resolveHallOfFameRows(params);
     if (!rows.length) throw new Error("神作总榜为空");
@@ -2106,6 +2105,7 @@ async function loadHallOfFame(params) {
 
 async function loadRandomMasterpiece(params) {
   params = params || {};
+  rememberParams(params);
   try {
     var count = Math.max(6, Math.min(48, Number(params.count || 24) || 24));
     var rows = await resolveHallOfFameRows(params);
@@ -2208,34 +2208,93 @@ function resolvePeopleIdFromParams(params) {
   return "";
 }
 
+function rememberParams(params) {
+  if (params && typeof params === "object") lastRequestParams = params;
+  // 对齐 javverse：列表请求时把全局光鸭参数落到 storage，供 loadDetail(仅 link) 使用
+  try {
+    var token =
+      getText(params && params.guangya_token) ||
+      getText(params && params.refresh_token) ||
+      "";
+    if (!token && params && params.global) {
+      token = getText(params.global.guangya_token) || getText(params.global.refresh_token) || "";
+    }
+    if (!token && params && params.globalParams) {
+      if (Array.isArray(params.globalParams)) {
+        for (var i = 0; i < params.globalParams.length; i++) {
+          var it = params.globalParams[i];
+          if (!it) continue;
+          var n = getText(it.name || it.key);
+          if (n === "guangya_token" || n === "refresh_token") {
+            token = getText(it.value != null ? it.value : it.val);
+            if (token) break;
+          }
+        }
+      } else {
+        token = getText(params.globalParams.guangya_token) || getText(params.globalParams.refresh_token) || "";
+      }
+    }
+    if (token && Widget.storage && typeof Widget.storage.set === "function") {
+      Widget.storage.set("jvr.guangya_token", token);
+    }
+    var parentId =
+      getText(params && params.guangya_parent_id) ||
+      getText(params && params.parentId) ||
+      getText(params && params.parent_id) ||
+      "";
+    if (!parentId && params && params.global) {
+      parentId =
+        getText(params.global.guangya_parent_id) ||
+        getText(params.global.parentId) ||
+        getText(params.global.parent_id) ||
+        "";
+    }
+    if (!parentId && params && params.globalParams) {
+      if (Array.isArray(params.globalParams)) {
+        for (var j = 0; j < params.globalParams.length; j++) {
+          var it2 = params.globalParams[j];
+          if (!it2) continue;
+          var n2 = getText(it2.name || it2.key);
+          if (n2 === "guangya_parent_id" || n2 === "parentId" || n2 === "parent_id") {
+            parentId = getText(it2.value != null ? it2.value : it2.val);
+            if (parentId) break;
+          }
+        }
+      } else {
+        parentId =
+          getText(params.globalParams.guangya_parent_id) ||
+          getText(params.globalParams.parentId) ||
+          getText(params.globalParams.parent_id) ||
+          "";
+      }
+    }
+    if (parentId && Widget.storage && typeof Widget.storage.set === "function") {
+      Widget.storage.set("jvr.guangya_parent_id", parentId);
+    }
+  } catch (e) {}
+}
+
+function mergeRequestParams(params) {
+  // Forward 常传空对象 {}，不能用 || 回退；与上次列表参数合并
+  return Object.assign({}, lastRequestParams || {}, params || {});
+}
+
 async function loadActressPower(params) {
   params = params || {};
+  rememberParams(params);
   try {
     var peopleId = resolvePeopleIdFromParams(params);
     var actress = getText(params.actress || "");
+    var focus = peopleId || actress;
+    // 必须选择筛选女友（或 peopleId）后返回该女友影片
+    if (!focus) {
+      console.warn("[javranking][loadActressPower] 未选择筛选女友");
+      return [];
+    }
     var index = await getSearchIndex(params);
     var codeMap = buildCodeMap(index);
-    var entityMap = buildEntityMap(index);
-
-    // 1) 横向人物点击 → peopleId → 该女友影片
-    if (peopleId) {
-      console.log("[javranking][loadActressPower] peopleId=", peopleId);
-      return await loadActressWorksByName(peopleId, index, codeMap, params);
-    }
-
-    // 2) 下拉选中具体女友 → 直接出该女友影片
-    if (actress) {
-      console.log("[javranking][loadActressPower] actress=", actress);
-      return await loadActressWorksByName(actress, index, codeMap, params);
-    }
-
-    // 3) 筛选=全部 → 热门人物-横向：人物卡片（无 link，点击走 peopleId）
-    var md = await fetchMarkdown("most-awarded-actors", params);
-    var sections = parsePowerSections(md);
-    var pageSections = pageSlice(sections, params.page, PAGE_SIZE);
-    return pageSections.map(function (sec) {
-      return mapPowerSectionToPerson(sec, entityMap, index);
-    });
+    console.log("[javranking][loadActressPower] focus=", focus);
+    return await loadActressWorksByName(focus, index, codeMap, params);
   } catch (error) {
     console.error("[javranking][loadActressPower] 失败:", error.message || error);
     throw error;
@@ -2243,7 +2302,9 @@ async function loadActressPower(params) {
 }
 
 async function loadDetail(link, params) {
-  params = params || {};
+  // 对齐 javverse：详情常只有 link / 空对象，合并上次列表请求参数
+  params = mergeRequestParams(params);
+  rememberParams(params);
   try {
     var raw = getText(link);
     var owned = parseOwnedLink(raw);
@@ -2258,7 +2319,12 @@ async function loadDetail(link, params) {
     }
     if (owned.kind === "video") return await loadVideoDetail(owned, params);
     if (owned.kind === "actress") return await loadActressDetail(owned, params);
-    if (owned.kind === "magnet") return await loadMagnetDetail(owned, params);
+    if (owned.kind === "magnet") {
+      if (typeof handleGuangyaMagnetSave === "function") {
+        return await handleGuangyaMagnetSave(owned.hash, params || lastRequestParams || {});
+      }
+      return await loadMagnetDetail(owned, params);
+    }
     return null;
   } catch (error) {
     console.error("[javranking][loadDetail] 失败:", error.message || error);
@@ -2267,7 +2333,8 @@ async function loadDetail(link, params) {
 }
 
 async function loadResource(params) {
-  params = params || {};
+  params = params || lastRequestParams || {};
+  rememberParams(params);
   try {
     var raw = params.link != null ? params.link : params.id;
     var owned = parseOwnedLink(raw);
@@ -2613,6 +2680,7 @@ async function enrichDetailFromHtml(base, videoId, params) {
 
 async function loadTodayWho(params) {
   params = params || {};
+  rememberParams(params);
   try {
     var peopleId = resolvePeopleIdFromParams(params);
     var index = await getSearchIndex(params);
@@ -2645,6 +2713,7 @@ async function loadTodayWho(params) {
 
 async function loadTodayWhat(params) {
   params = params || {};
+  rememberParams(params);
   try {
     var count = Math.max(6, Math.min(48, Number(params.count || 24) || 24));
     var scope = getText(params.scope || "all").toLowerCase();
@@ -2976,8 +3045,11 @@ async function saveMagnetToGuangya(magnet, cfg) {
     { url: resolvedUrl, parentId: parentId, newName: taskName, fileIndexes: indexes.length ? indexes : null },
     { url: resolvedUrl, parentId: parentId, newName: taskName, fileIndexes: null },
     { url: magnet, parentId: parentId, newName: taskName, fileIndexes: null },
-    { url: magnet, parentId: "", newName: "", fileIndexes: null },
   ];
+  // 仅当未配置目录时才允许落到根目录；避免“填了目录 ID 却存到根”
+  if (!parentId) {
+    attempts.push({ url: magnet, parentId: "", newName: "", fileIndexes: null });
+  }
   var lastErr = null;
   for (var i = 0; i < attempts.length; i++) {
     try {
@@ -2987,6 +3059,7 @@ async function saveMagnetToGuangya(magnet, cfg) {
           ok: true,
           keptCount: filtered.kept.length || 1,
           blockedCount: filtered.blocked.length,
+          parentId: parentId || "",
           task: task,
         };
       }
@@ -2998,6 +3071,7 @@ async function saveMagnetToGuangya(magnet, cfg) {
   throw lastErr || new Error("光鸭转存失败");
 }
 
+// 对齐 javverse 已修复版：异步多源取参 + rememberParams 落盘；详情常不带 params
 var GY_TOKEN_ALIASES = [
   "guangya_token",
   "GUANGYA_REFRESH_TOKEN",
@@ -3083,15 +3157,21 @@ function gyWidgetId() {
 
 function gyStorageKeysFor(name) {
   var id = gyWidgetId();
-  return [
+  var keys = [
     id + ".globalParams." + name,
     id + ".global." + name,
     "forward." + id + ".globalParams." + name,
-    "jvr.guangya_token",
     "jvr." + name,
-    "guangya_refresh_token",
     name,
   ];
+  // 仅 token 别名额外查兼容旧 key；勿把 token key 混进 parent 查询
+  if (/token|refresh/i.test(name)) {
+    keys.push("jvr.guangya_token", "guangya_refresh_token");
+  }
+  if (/parent/i.test(name)) {
+    keys.push("jvr.guangya_parent_id");
+  }
+  return keys;
 }
 
 function gyReadStorageBlob(key) {
@@ -3141,10 +3221,8 @@ async function gyAwaitMaybe(val) {
 }
 
 async function resolveGuangyaTokenAsync(params) {
-  params = params || {};
-  var raw =
-    gyPickFromParamsTree(params, GY_TOKEN_ALIASES) ||
-    "";
+  params = mergeRequestParams(params);
+  var raw = gyPickFromParamsTree(params, GY_TOKEN_ALIASES) || "";
   if (!raw) {
     try {
       if (typeof Widget !== "undefined" && typeof Widget.getGlobalParams === "function") {
@@ -3172,10 +3250,8 @@ async function resolveGuangyaTokenAsync(params) {
 }
 
 async function resolveGuangyaParentIdAsync(params) {
-  params = params || {};
-  var raw =
-    gyPickFromParamsTree(params, GY_PARENT_ALIASES) ||
-    "";
+  params = mergeRequestParams(params);
+  var raw = gyPickFromParamsTree(params, GY_PARENT_ALIASES) || "";
   if (!raw) {
     try {
       if (typeof Widget !== "undefined" && typeof Widget.getGlobalParams === "function") {
@@ -3193,14 +3269,18 @@ async function resolveGuangyaParentIdAsync(params) {
     } catch (e2) {}
   }
   if (!raw) raw = gyPickFromStorage(GY_PARENT_ALIASES);
-  return gySafeText(raw);
+  raw = gySafeText(raw);
+  if (raw) {
+    try {
+      Widget.storage.set("jvr.guangya_parent_id", raw);
+    } catch (e3) {}
+  }
+  return raw;
 }
 
-// 兼容旧调用名
 function resolveGuangyaTokenFromParams(params) {
-  // sync 尽力取；真正转存走 async
   return (
-    gyNormalizeToken(gyPickFromParamsTree(params || {}, GY_TOKEN_ALIASES)) ||
+    gyNormalizeToken(gyPickFromParamsTree(mergeRequestParams(params), GY_TOKEN_ALIASES)) ||
     gyNormalizeToken(gyPickFromStorage(GY_TOKEN_ALIASES)) ||
     ""
   );
@@ -3208,7 +3288,7 @@ function resolveGuangyaTokenFromParams(params) {
 
 function resolveGuangyaParentId(params) {
   return (
-    gySafeText(gyPickFromParamsTree(params || {}, GY_PARENT_ALIASES)) ||
+    gySafeText(gyPickFromParamsTree(mergeRequestParams(params), GY_PARENT_ALIASES)) ||
     gySafeText(gyPickFromStorage(GY_PARENT_ALIASES)) ||
     ""
   );
@@ -3218,6 +3298,7 @@ async function handleGuangyaMagnetSave(hash, params) {
   hash = String(hash || "")
     .trim()
     .toLowerCase();
+  params = mergeRequestParams(params);
   var entry = null;
   try {
     if (typeof readMagnetCache === "function") entry = readMagnetCache(hash);

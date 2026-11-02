@@ -13,10 +13,10 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.3.6",
+  version: "1.3.8",
   requiredVersion: "0.0.1",
   description:
-    "JAV Verse：作品池 / 千级类别筛选（RSC） / 列表横图位展示 / 富详情（id=番号，link 内嵌番号供聚合）；相似作品磁力一键光鸭转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+    "JAV Verse：作品池 / 千级类别筛选（RSC） / 列表横图位 / 详情 id=番号（link=jv:work:id:番号，避免误解析成 JV-数字）/ 光鸭磁力按目录 ID 转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javverse.com/",
   icon: "https://javverse.com/apple-icon.png",
@@ -332,7 +332,14 @@ function buildOwnedLink(workId, code) {
   var id = String(workId || "").replace(/[^\d]/g, "");
   if (!id) return "";
   var c = normalizeCode(code) || getText(code).toUpperCase();
-  return LINK_PREFIX + id + (c ? ":" + encodeURIComponent(c) : "");
+  // 必须用 jv:work:数字:番号（对齐 javranking 的 jvr:video:）
+  // 若写成 jv:数字:番号，聚合工具会把 jv:数字 误识别成番号 JV-数字
+  return LINK_PREFIX + "work:" + id + (c ? ":" + encodeURIComponent(c) : "");
+}
+
+function buildCodeLink(code) {
+  var c = normalizeCode(code) || getText(code).toUpperCase();
+  return c ? LINK_PREFIX + "code:" + encodeURIComponent(c) : "";
 }
 
 function parseOwnedLink(raw) {
@@ -348,17 +355,19 @@ function parseOwnedLink(raw) {
       link: MAGNET_LINK_PREFIX + mag[1].toLowerCase(),
     };
   }
-  if (s.indexOf(LINK_PREFIX) === 0) {
-    var rest = s.slice(LINK_PREFIX.length).split("?")[0].split("#")[0];
-    var parts = rest.split(":");
-    var workId = String(parts[0] || "").replace(/[^\d]/g, "");
-    if (!workId) return null;
+
+  // jv:work:123:CODE 或兼容旧版 jv:123:CODE
+  var work =
+    s.match(/^jv:work:(\d+)(?::(.+))?$/i) ||
+    s.match(/^jv:(\d+)(?::(.+))?$/i);
+  if (work) {
+    var workId = work[1];
     var codeHint = "";
-    if (parts.length > 1) {
+    if (work[2]) {
       try {
-        codeHint = decodeURIComponent(parts.slice(1).join(":"));
+        codeHint = decodeURIComponent(work[2]);
       } catch (e) {
-        codeHint = parts.slice(1).join(":");
+        codeHint = work[2];
       }
     }
     return {
@@ -368,6 +377,17 @@ function parseOwnedLink(raw) {
       link: buildOwnedLink(workId, codeHint),
     };
   }
+
+  var codeOnly = s.match(/^jv:code:(.+)$/i);
+  if (codeOnly) {
+    var decoded = codeOnly[1];
+    try {
+      decoded = decodeURIComponent(codeOnly[1]);
+    } catch (e2) {}
+    var asOwnedCode = normalizeCode(decoded) || getText(decoded).toUpperCase();
+    return { kind: "code", code: asOwnedCode, workId: "", link: buildCodeLink(asOwnedCode) };
+  }
+
   var m = s.match(
     /^https?:\/\/(?:www\.)?javverse\.com(?:\/(?:zh-CN|zh-Hant|en|ja))?\/work\/(\d+)/i
   );
@@ -375,7 +395,7 @@ function parseOwnedLink(raw) {
   // 兼容聚合/宿主只传番号
   var asCode = normalizeCode(s);
   if (asCode && /^[A-Z0-9]+-\d+[A-Z]?$/.test(asCode)) {
-    return { kind: "code", code: asCode, workId: "", link: "" };
+    return { kind: "code", code: asCode, workId: "", link: buildCodeLink(asCode) };
   }
   return null;
 }
@@ -396,7 +416,8 @@ function resolveItemCode(row) {
     normalizeCode(row.code_display) ||
     normalizeCode(row.number) ||
     getText(row.code).toUpperCase();
-  if (code && /^JV:\d+/i.test(code)) code = "";
+  // 过滤误解析：jv:数字 / JV-数字 不是真实番号
+  if (code && /^JV[:\-]?\d+/i.test(code)) code = "";
   if (!code) code = codeFromCoverUrl(row.coverUrl || row.cover || row.cover_url || "");
   if (!code) {
     var title = getText(row.title || row.title_zh || row.originalTitle);
@@ -434,13 +455,68 @@ function readMagnetCache(hash) {
 function rememberParams(params) {
   if (params && typeof params === "object") lastRequestParams = params;
   if (params && getText(params.site_cookie)) persistSiteCookie(params.site_cookie);
-  if (params && getText(params.guangya_token)) {
-    try {
-      if (Widget.storage && typeof Widget.storage.set === "function") {
-        Widget.storage.set("jv.guangya_token", getText(params.guangya_token));
+  // 列表请求时把全局光鸭参数落到 storage，供 loadDetail(仅 link) 转存使用
+  try {
+    var token =
+      getText(params && params.guangya_token) ||
+      getText(params && params.refresh_token) ||
+      "";
+    if (!token && params && params.global) {
+      token = getText(params.global.guangya_token) || getText(params.global.refresh_token) || "";
+    }
+    if (!token && params && params.globalParams) {
+      if (Array.isArray(params.globalParams)) {
+        for (var i = 0; i < params.globalParams.length; i++) {
+          var it = params.globalParams[i];
+          if (!it) continue;
+          var n = getText(it.name || it.key);
+          if (n === "guangya_token" || n === "refresh_token") {
+            token = getText(it.value != null ? it.value : it.val);
+            if (token) break;
+          }
+        }
+      } else {
+        token =
+          getText(params.globalParams.guangya_token) ||
+          getText(params.globalParams.refresh_token) ||
+          "";
       }
-    } catch (e) {}
-  }
+    }
+    if (token && Widget.storage && typeof Widget.storage.set === "function") {
+      Widget.storage.set("jv.guangya_token", token);
+    }
+    var parentId =
+      getText(params && params.guangya_parent_id) ||
+      getText(params && params.parentId) ||
+      "";
+    if (!parentId && params && params.global) {
+      parentId =
+        getText(params.global.guangya_parent_id) ||
+        getText(params.global.parentId) ||
+        "";
+    }
+    if (!parentId && params && params.globalParams) {
+      if (Array.isArray(params.globalParams)) {
+        for (var j = 0; j < params.globalParams.length; j++) {
+          var it2 = params.globalParams[j];
+          if (!it2) continue;
+          var n2 = getText(it2.name || it2.key);
+          if (n2 === "guangya_parent_id" || n2 === "parentId" || n2 === "parent_id") {
+            parentId = getText(it2.value != null ? it2.value : it2.val);
+            if (parentId) break;
+          }
+        }
+      } else {
+        parentId =
+          getText(params.globalParams.guangya_parent_id) ||
+          getText(params.globalParams.parentId) ||
+          "";
+      }
+    }
+    if (parentId && Widget.storage && typeof Widget.storage.set === "function") {
+      Widget.storage.set("jv.guangya_parent_id", parentId);
+    }
+  } catch (e) {}
 }
 
 function getSiteCookie() {
@@ -811,10 +887,12 @@ function toVideoItem(row) {
   var title = getText(row.title) || code || "作品 " + workId;
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var covers = buildCoverBundle(row.coverUrl || row.cover || "", "list");
-  // 聚合工具依赖 id=番号；站点内部 workId 放 videoId / link
+  // 聚合工具依赖 id=纯番号（不能是 jv:…）；站点内部 workId 放 videoId / link
   // 列表一律横图位：backdropPath → coverUrl（不设 posterPath）
+  var itemId = code || "";
+  if (!itemId || /^(jv:|JV[:\-])/i.test(itemId)) itemId = workId;
   return {
-    id: code || workId,
+    id: itemId,
     type: "url",
     mediaType: "movie",
     title: title,
@@ -1386,8 +1464,10 @@ async function loadDetail(link, params) {
       );
     }
 
+    var detailId = code || "";
+    if (!detailId || /^(jv:|JV[:\-])/i.test(detailId)) detailId = workId;
     return {
-      id: code || workId,
+      id: detailId,
       type: "url",
       mediaType: "movie",
       title: code && String(title).toUpperCase().indexOf(code) !== 0 ? code + " " + title : title,
@@ -1880,8 +1960,11 @@ async function saveMagnetToGuangya(magnet, cfg) {
     { url: resolvedUrl, parentId: parentId, newName: taskName, fileIndexes: indexes.length ? indexes : null },
     { url: resolvedUrl, parentId: parentId, newName: taskName, fileIndexes: null },
     { url: magnet, parentId: parentId, newName: taskName, fileIndexes: null },
-    { url: magnet, parentId: "", newName: "", fileIndexes: null },
   ];
+  // 仅当未配置目录时才允许落到根目录；避免“填了目录 ID 却存到根”
+  if (!parentId) {
+    attempts.push({ url: magnet, parentId: "", newName: "", fileIndexes: null });
+  }
   var lastErr = null;
   for (var i = 0; i < attempts.length; i++) {
     try {
@@ -1891,6 +1974,7 @@ async function saveMagnetToGuangya(magnet, cfg) {
           ok: true,
           keptCount: filtered.kept.length || 1,
           blockedCount: filtered.blocked.length,
+          parentId: parentId || "",
           task: task,
         };
       }
@@ -1902,49 +1986,226 @@ async function saveMagnetToGuangya(magnet, cfg) {
   throw lastErr || new Error("光鸭转存失败");
 }
 
-function resolveGuangyaTokenFromParams(params) {
-  params = params || {};
-  var token =
-    gyNormalizeToken(params.guangya_token) ||
-    gyNormalizeToken(params.refresh_token) ||
-    "";
-  if (!token && params.global) {
-    token =
-      gyNormalizeToken(params.global.guangya_token) ||
-      gyNormalizeToken(params.global.refresh_token) ||
-      "";
+var GY_TOKEN_ALIASES = [
+  "guangya_token",
+  "GUANGYA_REFRESH_TOKEN",
+  "guangya_refresh_token",
+  "guangyaRefreshToken",
+  "refresh_token",
+];
+var GY_PARENT_ALIASES = [
+  "guangya_parent_id",
+  "GUANGYA_PARENT_ID",
+  "guangyaParentId",
+  "parentId",
+  "parent_id",
+];
+
+function gyIsPromiseLike(val) {
+  return !!(val && typeof val === "object" && typeof val.then === "function");
+}
+
+function gyScanRefreshToken(text) {
+  var m = String(text || "").match(/gy\.[A-Za-z0-9_\-\.~+/=]{8,}/);
+  return m ? m[0] : "";
+}
+
+function gyNormalizeParamValue(val) {
+  if (val === undefined || val === null) return "";
+  if (typeof val === "string") return val.trim();
+  if (typeof val === "number" || typeof val === "boolean") return String(val).trim();
+  if (typeof val === "object") {
+    if (gyIsPromiseLike(val)) return "";
+    if (typeof val.value === "string" && val.value.trim()) return val.value.trim();
+    if (typeof val.token === "string" && val.token.trim()) return val.token.trim();
+    if (typeof val.refresh_token === "string" && val.refresh_token.trim()) return val.refresh_token.trim();
   }
-  try {
-    if (!token && typeof Widget !== "undefined" && Widget.globalParams) {
-      var gp = Widget.globalParams;
-      if (typeof gp.then !== "function") {
-        token =
-          gyNormalizeToken(gp.guangya_token) ||
-          gyNormalizeToken(gp.refresh_token) ||
-          "";
+  return "";
+}
+
+function gyPickFromObject(obj, aliases) {
+  if (!obj || typeof obj !== "object" || gyIsPromiseLike(obj)) return "";
+  if (Array.isArray(obj)) {
+    for (var a = 0; a < aliases.length; a++) {
+      var want = String(aliases[a] || "");
+      if (!want) continue;
+      for (var i = 0; i < obj.length; i++) {
+        var item = obj[i];
+        if (!item || typeof item !== "object") continue;
+        var itemName = String(item.name || item.key || item.id || "").trim();
+        if (itemName !== want) continue;
+        var fromItem = gyNormalizeParamValue(
+          item.value !== undefined ? item.value : item.val !== undefined ? item.val : item.data
+        );
+        if (fromItem) return fromItem;
       }
     }
-  } catch (e) {}
-  if (!token) {
-    token =
-      gyNormalizeToken(gyReadStore("jv.guangya_token")) ||
-      gyNormalizeToken(gyReadStore("guangya_refresh_token")) ||
-      gyNormalizeToken(gyReadStore("javverse.catalog.globalParams.guangya_token")) ||
-      "";
+    return "";
+  }
+  for (var j = 0; j < aliases.length; j++) {
+    if (obj[aliases[j]] === undefined || obj[aliases[j]] === null) continue;
+    var val = gyNormalizeParamValue(obj[aliases[j]]);
+    if (val) return val;
+  }
+  return "";
+}
+
+function gyPickFromParamsTree(params, aliases) {
+  params = params || {};
+  return (
+    gyPickFromObject(params, aliases) ||
+    gyPickFromObject(params.global, aliases) ||
+    gyPickFromObject(params.globalParams, aliases) ||
+    gyPickFromObject(params.settings, aliases) ||
+    ""
+  );
+}
+
+function gyWidgetId() {
+  try {
+    return (WidgetMetadata && WidgetMetadata.id) || "javverse.catalog";
+  } catch (e) {
+    return "javverse.catalog";
+  }
+}
+
+function gyStorageKeysFor(name) {
+  var id = gyWidgetId();
+  var keys = [
+    id + ".globalParams." + name,
+    id + ".global." + name,
+    "forward." + id + ".globalParams." + name,
+    "jv." + name,
+    name,
+  ];
+  // 仅 token 别名额外查兼容旧 key；勿把 token key 混进 parent 查询
+  if (/token|refresh/i.test(name)) {
+    keys.push("jv.guangya_token", "guangya_refresh_token");
+  }
+  if (/parent/i.test(name)) {
+    keys.push("jv.guangya_parent_id");
+  }
+  return keys;
+}
+
+function gyReadStorageBlob(key) {
+  try {
+    var raw = Widget.storage.get(key);
+    if (raw == null || raw === "") return null;
+    if (typeof raw === "string") {
+      try {
+        return JSON.parse(raw);
+      } catch (e) {
+        return null;
+      }
+    }
+    if (typeof raw === "object" && !gyIsPromiseLike(raw)) return raw;
+  } catch (e2) {}
+  return null;
+}
+
+function gyPickFromStorage(aliases) {
+  var id = gyWidgetId();
+  var blobKeys = [id + ".globalParams", id + ".global", "globalParams", "forward." + id + ".globalParams"];
+  var b;
+  for (var i = 0; i < blobKeys.length; i++) {
+    b = gyReadStorageBlob(blobKeys[i]);
+    var hit = gyPickFromObject(b, aliases);
+    if (hit) return hit;
+  }
+  for (var a = 0; a < aliases.length; a++) {
+    var keys = gyStorageKeysFor(aliases[a]);
+    for (var k = 0; k < keys.length; k++) {
+      var v = gyNormalizeParamValue(gyReadStore(keys[k]));
+      if (v) return v;
+    }
+  }
+  return "";
+}
+
+async function gyAwaitMaybe(val) {
+  if (gyIsPromiseLike(val)) {
+    try {
+      return await val;
+    } catch (e) {
+      return null;
+    }
+  }
+  return val;
+}
+
+async function resolveGuangyaTokenAsync(params) {
+  params = params || {};
+  var raw = gyPickFromParamsTree(params, GY_TOKEN_ALIASES) || "";
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && typeof Widget.getGlobalParams === "function") {
+        var all = await gyAwaitMaybe(Widget.getGlobalParams());
+        raw = gyPickFromObject(all, GY_TOKEN_ALIASES);
+      }
+    } catch (e) {}
+  }
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && Widget.globalParams) {
+        var gp = await gyAwaitMaybe(Widget.globalParams);
+        raw = gyPickFromObject(gp, GY_TOKEN_ALIASES);
+      }
+    } catch (e2) {}
+  }
+  if (!raw) raw = gyPickFromStorage(GY_TOKEN_ALIASES);
+  var token = gyNormalizeToken(raw) || gyNormalizeToken(gyScanRefreshToken(raw));
+  if (token) {
+    try {
+      Widget.storage.set("jv.guangya_token", token);
+    } catch (e3) {}
   }
   return token;
 }
 
-function resolveGuangyaParentId(params) {
+async function resolveGuangyaParentIdAsync(params) {
   params = params || {};
-  var pid = gySafeText(params.guangya_parent_id || params.parentId);
-  if (pid) return pid;
-  try {
-    if (typeof Widget !== "undefined" && Widget.globalParams && typeof Widget.globalParams.then !== "function") {
-      pid = gySafeText(Widget.globalParams.guangya_parent_id || Widget.globalParams.parentId);
-    }
-  } catch (e) {}
-  return pid || "";
+  var raw = gyPickFromParamsTree(params, GY_PARENT_ALIASES) || "";
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && typeof Widget.getGlobalParams === "function") {
+        var all = await gyAwaitMaybe(Widget.getGlobalParams());
+        raw = gyPickFromObject(all, GY_PARENT_ALIASES);
+      }
+    } catch (e) {}
+  }
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && Widget.globalParams) {
+        var gp = await gyAwaitMaybe(Widget.globalParams);
+        raw = gyPickFromObject(gp, GY_PARENT_ALIASES);
+      }
+    } catch (e2) {}
+  }
+  if (!raw) raw = gyPickFromStorage(GY_PARENT_ALIASES);
+  raw = gySafeText(raw);
+  if (raw) {
+    try {
+      Widget.storage.set("jv.guangya_parent_id", raw);
+    } catch (e3) {}
+  }
+  return raw;
+}
+
+function resolveGuangyaTokenFromParams(params) {
+  return (
+    gyNormalizeToken(gyPickFromParamsTree(params || {}, GY_TOKEN_ALIASES)) ||
+    gyNormalizeToken(gyPickFromStorage(GY_TOKEN_ALIASES)) ||
+    ""
+  );
+}
+
+function resolveGuangyaParentId(params) {
+  return (
+    gySafeText(gyPickFromParamsTree(params || {}, GY_PARENT_ALIASES)) ||
+    gySafeText(gyPickFromStorage(GY_PARENT_ALIASES)) ||
+    ""
+  );
 }
 
 async function handleGuangyaMagnetSave(hash, params) {
@@ -1971,13 +2232,22 @@ async function handleGuangyaMagnetSave(hash, params) {
       link: link,
     };
   }
-  var token = resolveGuangyaTokenFromParams(params);
+  // loadDetail 通常不带 params，必须从 Widget.globalParams / storage 异步取参
+  var token = await resolveGuangyaTokenAsync(params);
+  var parentId = await resolveGuangyaParentIdAsync(params);
+  console.log(
+    "[javverse][guangya] token?",
+    token ? "yes(" + token.slice(0, 6) + "...)" : "no",
+    "parentId?",
+    parentId || "(root)"
+  );
   if (!token) {
     return {
       id: hash,
       type: "url",
       title: "未配置光鸭",
-      description: "请在模块全局参数填写光鸭 refresh_token（gy. 开头），然后重新点击该磁力转存",
+      description:
+        "未读到光鸭 refresh_token。请在模块「全局参数」填写 guangya_token（gy. 开头），保存后重新打开详情再点磁力转存。",
       link: link,
       coverUrl: entry.cover || undefined,
       backdropPath: entry.cover || undefined,
@@ -1986,7 +2256,7 @@ async function handleGuangyaMagnetSave(hash, params) {
   try {
     var result = await saveMagnetToGuangya(entry.magnet, {
       guangya_token: token,
-      guangya_parent_id: resolveGuangyaParentId(params),
+      guangya_parent_id: parentId,
     });
     return {
       id: hash,
@@ -1997,6 +2267,8 @@ async function handleGuangyaMagnetSave(hash, params) {
         (entry.name || entry.code || hash) +
         "\n体积: " +
         (entry.size || "-") +
+        "\n目录: " +
+        (parentId || "根目录") +
         "\n保留文件: " +
         result.keptCount +
         "\n过滤: " +
