@@ -3,7 +3,7 @@
  * 站点: https://javverse.com/
  *
  * 列表/搜索/播放优先 JSON API；类别页无公开列表 API，按需抓取 /genre/{id}。
- * - GET  /api/works/random-pool
+ * - GET  /api/works/random-pool（首页「抽一部 / 今晚看什么」同源）
  * - GET  /api/cards?w=
  * - GET  /api/works/{id}/magnets（可选）
  * - POST /api/video/sessions → 代理 m3u8（direct=1）
@@ -13,10 +13,10 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.3.9",
+  version: "1.4.1",
   requiredVersion: "0.0.1",
   description:
-    "JAV Verse：作品池 / 千级类别筛选（RSC） / 列表横图位 / 详情 id=标准番号（FANZA cid→PIYO-241）/ 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+    "JAV Verse：作品池 / 抽一部 / 千级类别（RSC+HTML 实页，禁止作品池弱回退）/ 详情 id=标准番号 / 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javverse.com/",
   icon: "https://javverse.com/apple-icon.png",
@@ -82,10 +82,24 @@ WidgetMetadata = {
     },
     {
       id: "loadRandom",
-      title: "今晚看什么",
+      title: "今晚看什么·抽一部",
       functionName: "loadRandom",
       cacheDuration: 0,
-      params: [{ name: "count", title: "数量", type: "count", value: "24" }],
+      params: [
+        {
+          name: "count",
+          title: "抽取数量",
+          type: "enumeration",
+          value: "1",
+          enumOptions: [
+            { title: "抽 1 部", value: "1" },
+            { title: "抽 6 部", value: "6" },
+            { title: "抽 12 部", value: "12" },
+            { title: "抽 24 部", value: "24" },
+          ],
+          description: "对齐官网「抽一部」：每次刷新从 random-pool 重新抽取",
+        },
+      ],
     },
     {
       id: "loadGenre",
@@ -771,36 +785,57 @@ function rscHeaders(referer) {
   });
 }
 
+function decodeRscText(text) {
+  return String(text || "")
+    .replace(/\\u002f/gi, "/")
+    .replace(/\\\//g, "/");
+}
+
 function parseGenreRscPayload(text) {
-  text = String(text || "");
+  text = decodeRscText(text);
   var items = [];
   var seen = {};
-  var re =
-    /"workId":(\d+),"cover":"([^"]+)","scope":"list"[\s\S]{0,700}?"code":"([^"]+)"/g;
+  var meta = {};
+
+  // 先建立 workId → cover/code 索引（字段顺序/嵌套不固定）
   var m;
-  while ((m = re.exec(text))) {
-    var workId = m[1];
-    if (seen[workId]) continue;
-    seen[workId] = true;
+  var reCover = /"workId":(\d+)[\s\S]{0,240}?"cover":"([^"]+)"/g;
+  while ((m = reCover.exec(text))) {
+    var id1 = m[1];
+    if (!meta[id1]) meta[id1] = {};
+    if (!meta[id1].cover) meta[id1].cover = cleanImage(m[2]);
+  }
+  var reCode = /"workId":(\d+)[\s\S]{0,2200}?"code":"([^"]+)"/g;
+  while ((m = reCode.exec(text))) {
+    var id2 = m[1];
+    if (!meta[id2]) meta[id2] = {};
+    if (!meta[id2].code) meta[id2].code = m[2];
+  }
+  // 列表主路径：出现 scope=list 的 work-card
+  var reList = /"className":"work-card"[^\{]{0,80}"workId":(\d+)/g;
+  while ((m = reList.exec(text))) {
+    var wid = m[1];
+    if (seen[wid]) continue;
+    seen[wid] = true;
+    var info = meta[wid] || {};
     items.push({
-      workId: workId,
-      coverUrl: cleanImage(m[2].replace(/\\u002f/g, "/")),
-      code: m[3],
+      workId: wid,
+      coverUrl: info.cover || "",
+      code: info.code || "",
       title: "",
       playable: false,
     });
   }
   if (items.length) return items;
 
-  // 宽松回退：只抽 workId + cover
-  var re2 = /"workId":(\d+),"cover":"([^"]+)"/g;
-  while ((m = re2.exec(text))) {
-    if (seen[m[1]]) continue;
-    seen[m[1]] = true;
+  // 兜底：所有 workId+cover
+  for (var id in meta) {
+    if (!meta[id] || !meta[id].cover || seen[id]) continue;
+    seen[id] = true;
     items.push({
-      workId: m[1],
-      coverUrl: cleanImage(m[2].replace(/\\u002f/g, "/")),
-      code: "",
+      workId: id,
+      coverUrl: meta[id].cover || "",
+      code: meta[id].code || "",
       title: "",
       playable: false,
     });
@@ -808,42 +843,57 @@ function parseGenreRscPayload(text) {
   return items;
 }
 
-async function fetchGenreRsc(genreId, page) {
-  var path =
-    "/genre/" +
-    encodeURIComponent(genreId) +
-    (page > 1 ? "?page=" + page : "");
-  var url = SITE + path;
-  await softBrowseGate();
-  var got = await safeGet(url, rscHeaders(SITE + "/genres"));
-  if (got.status === 403 || isCloudflareChallenge(got.body) || (got.error && isForbiddenError(got.error))) {
-    await softBrowseGate();
-    got = await safeGet(url, rscHeaders(SITE + "/genre/" + genreId));
-  }
-  var body = typeof got.body === "string" ? got.body : String(got.body || "");
-  if (got.status === 403 || isCloudflareChallenge(body) || (got.error && isForbiddenError(got.error))) {
-    return null;
-  }
-  if (!body || body.length < 80) return null;
-  var items = parseGenreRscPayload(body);
-  return items.length ? items : null;
+function genrePathCandidates(genreId, page) {
+  var q = page > 1 ? "?page=" + page : "";
+  var id = encodeURIComponent(genreId);
+  return [
+    "/genre/" + id + q,
+    "/zh-CN/genre/" + id + q,
+    "/zh-Hant/genre/" + id + q,
+  ];
 }
 
-async function loadGenreFallbackFromPool(params, genreId) {
-  var title = genreTitleById(genreId);
-  var works = await fetchRandomPoolWorks(false);
-  var filtered = works;
-  if (title && title !== genreId) {
-    filtered = filterWorksByKeyword(works, title);
-    if (!filtered.length) {
-      works = await fetchRandomPoolWorks(true);
-      filtered = filterWorksByKeyword(works, title);
+async function fetchGenreRsc(genreId, page) {
+  var paths = genrePathCandidates(genreId, page);
+  var headerSets = [
+    rscHeaders(SITE + "/genres"),
+    rscHeaders(SITE + "/genre/" + genreId),
+    apiHeaders({
+      Accept: "text/x-component,*/*",
+      RSC: "1",
+      Referer: SITE + "/genre/" + genreId,
+      "Next-Url": "/genre/" + genreId,
+    }),
+  ];
+  var best = [];
+  await softBrowseGate();
+  for (var p = 0; p < paths.length; p++) {
+    for (var h = 0; h < headerSets.length; h++) {
+      var got = await safeGet(SITE + paths[p], headerSets[h]);
+      var body = typeof got.body === "string" ? got.body : "";
+      if (!body && got.body != null && typeof got.body === "object") {
+        try {
+          body = JSON.stringify(got.body);
+        } catch (e0) {
+          body = "";
+        }
+      }
+      if (
+        got.status === 403 ||
+        isCloudflareChallenge(body) ||
+        (got.error && isForbiddenError(got.error)) ||
+        !body ||
+        body.length < 80
+      ) {
+        continue;
+      }
+      if (body.indexOf("workId") === -1) continue;
+      var items = parseGenreRscPayload(body);
+      if (items.length > best.length) best = items;
+      if (best.length >= 24) return best;
     }
   }
-  if (!filtered.length) filtered = works;
-  var size = pageSize(params);
-  var page = pageNum(params);
-  return itemsFromPool(filtered, (page - 1) * size, size);
+  return best.length ? best : null;
 }
 
 /**
@@ -1023,10 +1073,67 @@ async function fetchRandomPoolWorks(force) {
     var cached = readPoolCache();
     if (cached && cached.length) return cached;
   }
-  var json = await fetchJson("/api/works/random-pool");
+  // 官网「抽一部」即打此接口；加时间戳降低网关短时复用同一份池
+  var json = await fetchJson("/api/works/random-pool?t=" + Date.now());
   var works = (json && json.works) || [];
   writePoolCache(works);
   return works;
+}
+
+function shuffleInPlace(list) {
+  var arr = list || [];
+  for (var i = arr.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
+}
+
+function readRecentDrawIds() {
+  try {
+    var raw = Widget.storage && Widget.storage.get("jv.random.recent.v1");
+    var arr = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Array.isArray(arr) ? arr.map(String) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function writeRecentDrawIds(ids) {
+  try {
+    if (Widget.storage && typeof Widget.storage.set === "function") {
+      Widget.storage.set("jv.random.recent.v1", JSON.stringify((ids || []).slice(0, 60)));
+    }
+  } catch (e) {}
+}
+
+/** 对齐官网抽一部：从 random-pool 客户端随机抽 N 部，尽量避开刚抽过的 */
+function pickRandomWorks(works, count) {
+  works = (works || []).slice();
+  if (!works.length) return [];
+  count = Math.max(1, Math.min(48, Number(count) || 1));
+  var recent = readRecentDrawIds();
+  var recentSet = {};
+  for (var r = 0; r < recent.length; r++) recentSet[recent[r]] = 1;
+
+  shuffleInPlace(works);
+  var preferred = [];
+  var fallback = [];
+  for (var i = 0; i < works.length; i++) {
+    var w = works[i] || {};
+    var id = String(w.id || "");
+    if (!id) continue;
+    if (recentSet[id]) fallback.push(w);
+    else preferred.push(w);
+  }
+  var picked = preferred.concat(fallback).slice(0, count);
+  var pickedIds = picked.map(function (w) {
+    return String(w.id);
+  });
+  writeRecentDrawIds(pickedIds.concat(recent));
+  return picked;
 }
 
 async function fetchCardsDetail(workId) {
@@ -1159,35 +1266,49 @@ function extractStillsFromHtml(html) {
 }
 
 function parseGenreWorkCards(html) {
+  html = String(html || "");
   var items = [];
   var seen = {};
-  var re =
-    /class="work-card"[\s\S]*?data-work-playable="(true|false)"[\s\S]*?href="\/work\/(\d+)"[\s\S]{0,800}?alt="([^"]*?)"[\s\S]{0,600}?src="([^"]+)"/gi;
   var m;
+
+  // 标准卡片：属性顺序以官网为准，但放宽匹配
+  var re =
+    /<a\b([^>]*\bwork-card\b[^>]*)>([\s\S]*?)<\/a>/gi;
   while ((m = re.exec(html))) {
-    var workId = m[2];
+    var attrs = m[1] || "";
+    var inner = m[2] || "";
+    var hm = attrs.match(/href="\/(?:(?:zh-CN|zh-Hant|en|ja)\/)?work\/(\d+)"/i);
+    if (!hm) continue;
+    var workId = hm[1];
     if (seen[workId]) continue;
     seen[workId] = true;
-    var alt = getText(m[3]).replace(/\s*封面$/, "");
+    var playable = /data-work-playable="true"/i.test(attrs);
+    var alt = "";
+    var am = inner.match(/alt="([^"]*?)"/i);
+    if (am) alt = getText(am[1]).replace(/\s*封面$/, "");
     var code = "";
     var title = alt;
-    var cm = alt.match(/^([A-Z0-9]+-\d+)\s*(.*)$/i);
+    var cm = alt.match(/^([A-Z0-9]+-\d+[A-Z]?)\s*(.*)$/i);
     if (cm) {
-      code = cm[1];
+      code = normalizeCode(cm[1]) || cm[1];
       title = getText(cm[2]) || alt;
     }
+    var src = "";
+    var sm = inner.match(/src="(https?:\/\/[^"]+)"/i);
+    if (sm) src = cleanImage(sm[1]);
     items.push({
       workId: workId,
       code: code,
       title: title || code || "作品 " + workId,
-      coverUrl: cleanImage(m[4]),
-      playable: m[1] === "true",
+      coverUrl: src,
+      playable: playable,
     });
   }
   if (items.length) return items;
 
   // fallback: href + cover nearby
-  var re2 = /href="\/work\/(\d+)"[\s\S]{0,500}?src="(https?:\/\/[^"]+?(?:pl|ps)\.jpg[^"]*)"/gi;
+  var re2 =
+    /href="\/(?:(?:zh-CN|zh-Hant|en|ja)\/)?work\/(\d+)"[\s\S]{0,800}?src="(https?:\/\/[^"]+?(?:pl|ps)\.jpg[^"]*)"/gi;
   while ((m = re2.exec(html))) {
     if (seen[m[1]]) continue;
     seen[m[1]] = true;
@@ -1200,6 +1321,22 @@ function parseGenreWorkCards(html) {
     });
   }
   return items;
+}
+
+async function fetchGenreHtmlCards(genreId, page) {
+  var paths = genrePathCandidates(genreId, page);
+  var best = [];
+  for (var i = 0; i < paths.length; i++) {
+    try {
+      var html = await fetchHtml(paths[i], SITE + "/genres");
+      var cards = parseGenreWorkCards(html);
+      if (cards.length > best.length) best = cards;
+      if (best.length >= 24) return best;
+    } catch (e) {
+      console.log("[javverse] genre HTML skip:", paths[i], (e && e.message) || e);
+    }
+  }
+  return best.length ? best : null;
 }
 
 function genreTitleById(id) {
@@ -1279,9 +1416,22 @@ async function loadRandom(params) {
   try {
     params = params || {};
     rememberParams(params);
-    var count = Math.max(1, Math.min(48, Number(params.count || 24) || 24));
+    var count = Math.max(1, Math.min(48, Number(params.count || 1) || 1));
+    // 与官网「抽一部」同源：每次强制拉 random-pool，再客户端随机抽取
     var works = await fetchRandomPoolWorks(true);
-    return itemsFromPool(works, 0, count);
+    var picked = pickRandomWorks(works, count);
+    return dedupeItems(
+      picked.map(function (w) {
+        return toVideoItem({
+          workId: w.id,
+          code: w.code_display || w.code,
+          title: w.title_zh || w.title,
+          coverUrl: w.cover_url || w.cover,
+          releaseDate: w.delivery_date,
+          description: "今晚看什么 · 抽一部",
+        });
+      })
+    );
   } catch (error) {
     console.error("[javverse/loadRandom] 失败:", error.message || error);
     throw error;
@@ -1294,34 +1444,51 @@ async function loadGenreWorks(params) {
     rememberParams(params);
     var genreId = resolveGenreId(params);
     if (!genreId) {
-      return await loadApiPage(params);
+      console.warn("[javverse/loadGenreWorks] 未选择类别");
+      return [];
     }
     var page = pageNum(params);
     var cards = null;
 
-    // 1) 优先 RSC（避免 HTML Cloudflare 403）
+    // 1) RSC（官网类别页同源）
     try {
       cards = await fetchGenreRsc(genreId, page);
+      console.log(
+        "[javverse] genre RSC id=",
+        genreId,
+        "page=",
+        page,
+        "n=",
+        cards ? cards.length : 0
+      );
     } catch (e) {
       console.log("[javverse] genre RSC skip:", (e && e.message) || e);
     }
 
-    // 2) HTML 回退
-    if (!cards || !cards.length) {
+    // 2) HTML 回退（多语言路径）
+    if (!cards || cards.length < 8) {
       try {
-        var path = "/genre/" + encodeURIComponent(genreId) + (page > 1 ? "?page=" + page : "");
-        var html = await fetchHtml(path, SITE + "/genres");
-        cards = parseGenreWorkCards(html);
+        var htmlCards = await fetchGenreHtmlCards(genreId, page);
+        if (htmlCards && htmlCards.length > (cards ? cards.length : 0)) {
+          cards = htmlCards;
+          console.log("[javverse] genre HTML id=", genreId, "n=", cards.length);
+        }
       } catch (e2) {
         console.log("[javverse] genre HTML skip:", (e2 && e2.message) || e2);
-        cards = null;
       }
     }
 
-    // 3) 仍失败：作品池按类别名弱过滤，保证可加载
+    // 不再用 random-pool 按类别名关键词弱过滤（只会得到四五部，误导用户）
     if (!cards || !cards.length) {
-      console.log("[javverse] genre fallback pool, id=", genreId);
-      return await loadGenreFallbackFromPool(params, genreId);
+      throw new Error(
+        "类别 " +
+          genreId +
+          "(" +
+          genreTitleById(genreId) +
+          ") 第 " +
+          page +
+          " 页加载失败。可在全局参数填写站点 Cookie 后重试。"
+      );
     }
 
     try {
@@ -1352,20 +1519,14 @@ async function loadGenreWorks(params) {
           code: row.code,
           title: row.title || row.code || "作品 " + row.workId,
           coverUrl: row.coverUrl,
+          description: "类别: " + genreTitleById(genreId),
         })
       );
     }
     return dedupeItems(items);
   } catch (error) {
     console.error("[javverse/loadGenreWorks] 失败:", error.message || error);
-    // 最后兜底，避免整页 403 白屏
-    try {
-      var gid = resolveGenreId(params || {});
-      if (gid) return await loadGenreFallbackFromPool(params || {}, gid);
-      return await loadApiPage(params || {});
-    } catch (e4) {
-      throw error;
-    }
+    throw error;
   }
 }
 

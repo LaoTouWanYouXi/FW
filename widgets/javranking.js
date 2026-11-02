@@ -405,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.3.2",
+  version: "1.3.5",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力（必选女友看影片）/ 今天冲谁·冲什么；相似作品磁力按体积排序并光鸭转存。",
+    "权威榜单 / 神作 / 女优战力（必选女友看影片）/ 今天冲谁·冲什么；封面优先 DMM 高清失败回退本站；剧照用本站图；磁力光鸭转存。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -616,12 +616,13 @@ var DEFAULT_HEADERS = {
  * - Prestige 系列使用 MGStage 高清图片
  * - 其他番号继续使用 JavDB 接口/CDN 图片
  *
- * 这里不再调用 dmm-cover Probe Worker。
+ * 高清候选需 HEAD 校验；不可用时回退 javranking 站点封面，避免 Rex 因 404 图加载失败。
  */
 
 var JAVDB_CDN_BASE = "https://c0.jdbstatic.com";
-var HD_IMAGE_REQUEST_TIMEOUT_MS = 1200;
-var HD_IMAGE_BATCH_BUDGET_MS = 4000;
+var HD_IMAGE_REQUEST_TIMEOUT_MS = 1500;
+var HD_IMAGE_ITEM_BUDGET_MS = 3500;
+var HD_IMAGE_BATCH_BUDGET_MS = 12000;
 var HD_IMAGE_MIN_CONTENT_LENGTH = 3000;
 var HD_IMAGE_AVAILABLE_CACHE = {};
 var HD_IMAGE_PENDING_REQUESTS = {};
@@ -1053,7 +1054,15 @@ function chooseFirstCandidate(candidates, fallback) {
     var value = sanitizeCoverUrl(candidates[i]);
     if (value) return value;
   }
-  return sanitizeCoverUrl(fallback) || "";
+  return sanitizeCoverUrl(fallback) || String(fallback || "").trim() || "";
+}
+
+function resolveSiteCoverFallback(url) {
+  var cleaned = sanitizeCoverUrl(url);
+  if (cleaned) return cleaned;
+  var raw = String(url || "").trim();
+  if (!raw || isInvalidCoverTarget(raw)) return "";
+  return raw;
 }
 
 function buildCoverBundleFromUrls(poster, backdrop) {
@@ -1066,17 +1075,116 @@ function buildCoverBundleFromUrls(poster, backdrop) {
   };
 }
 
+async function isHdImageAvailable(url) {
+  var clean = sanitizeCoverUrl(url) || String(url || "").trim();
+  if (!clean || isInvalidCoverTarget(clean)) return false;
+  if (Object.prototype.hasOwnProperty.call(HD_IMAGE_AVAILABLE_CACHE, clean)) {
+    return !!HD_IMAGE_AVAILABLE_CACHE[clean];
+  }
+  if (HD_IMAGE_PENDING_REQUESTS[clean]) {
+    return await HD_IMAGE_PENDING_REQUESTS[clean];
+  }
+  var pending = (async function () {
+    try {
+      if (!Widget.http) {
+        HD_IMAGE_AVAILABLE_CACHE[clean] = false;
+        return false;
+      }
+      var headers = {
+        "User-Agent": UA,
+        Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        Referer: /mgstage\.com/i.test(clean) ? "https://www.mgstage.com/" : "https://www.dmm.co.jp/",
+      };
+      var resp = null;
+      if (typeof Widget.http.head === "function") {
+        resp = await Widget.http.head(clean, { headers: headers, timeout: HD_IMAGE_REQUEST_TIMEOUT_MS });
+      } else if (typeof Widget.http.get === "function") {
+        resp = await Widget.http.get(clean, { headers: headers, timeout: HD_IMAGE_REQUEST_TIMEOUT_MS });
+      } else {
+        HD_IMAGE_AVAILABLE_CACHE[clean] = false;
+        return false;
+      }
+      var status = Number((resp && (resp.statusCode != null ? resp.statusCode : resp.status)) || 0);
+      if (status >= 400) {
+        HD_IMAGE_AVAILABLE_CACHE[clean] = false;
+        return false;
+      }
+      var hdrs = (resp && resp.headers) || {};
+      var contentLength = parseInt(
+        hdrs["content-length"] || hdrs["Content-Length"] || hdrs["content_length"] || "0",
+        10
+      );
+      if (contentLength > 0 && contentLength < HD_IMAGE_MIN_CONTENT_LENGTH) {
+        HD_IMAGE_AVAILABLE_CACHE[clean] = false;
+        return false;
+      }
+      HD_IMAGE_AVAILABLE_CACHE[clean] = true;
+      return true;
+    } catch (e) {
+      HD_IMAGE_AVAILABLE_CACHE[clean] = false;
+      return false;
+    } finally {
+      delete HD_IMAGE_PENDING_REQUESTS[clean];
+    }
+  })();
+  HD_IMAGE_PENDING_REQUESTS[clean] = pending;
+  return await pending;
+}
+
+async function chooseFirstAvailableCandidate(candidates, fallback) {
+  var list = candidates || [];
+  var started = Date.now();
+  for (var i = 0; i < list.length; i++) {
+    if (Date.now() - started > HD_IMAGE_ITEM_BUDGET_MS) break;
+    var value = sanitizeCoverUrl(list[i]) || String(list[i] || "").trim();
+    if (!value) continue;
+    if (await isHdImageAvailable(value)) return value;
+  }
+  // 高清全部失败 → 本站兜底
+  return resolveSiteCoverFallback(fallback) || "";
+}
+
 function buildListCoverBundle(code, siteFallback, sitePosterFallback) {
-  var fallback = sanitizeCoverUrl(siteFallback);
+  var fallback = resolveSiteCoverFallback(siteFallback);
+  var sitePoster =
+    resolveSiteCoverFallback(sitePosterFallback) ||
+    (fallback ? fallback.replace(/\/covers\//, "/small_covers/") : "") ||
+    fallback;
   var candidates = buildImageCandidatesFromValue(code);
+  // 同步路径仅作占位：优先拼高清候选地址；真正选用由 async 校验决定
+  // 若同步结果直接给 Rex，enrich 前会先用本站图，避免未校验 404
+  if (candidates.strategy === "direct-dmm" || candidates.strategy === "mgstage") {
+    if (fallback || sitePoster) {
+      return buildCoverBundleFromUrls(sitePoster || fallback, fallback || sitePoster);
+    }
+    var poster = chooseFirstCandidate(candidates.posterCandidates, "");
+    var backdrop = chooseFirstCandidate(candidates.backdropCandidates, "");
+    return buildCoverBundleFromUrls(poster, backdrop || poster);
+  }
+  return buildCoverBundleFromUrls(sitePoster || fallback, fallback || sitePoster);
+}
+
+async function buildListCoverBundleAsync(code, siteFallback, sitePosterFallback) {
+  var fallback = resolveSiteCoverFallback(siteFallback);
+  var sitePoster =
+    resolveSiteCoverFallback(sitePosterFallback) ||
+    (fallback ? fallback.replace(/\/covers\//, "/small_covers/") : "") ||
+    fallback;
+  var candidates = buildImageCandidatesFromValue(code);
+  // 非 DMM/MGStage：直接本站
   if (candidates.strategy !== "direct-dmm" && candidates.strategy !== "mgstage") {
-    // 对齐可视化版：非高清策略优先用接口竖图，缺失时由 covers 路径转为 small_covers。
-    var sitePoster = sanitizeCoverUrl(sitePosterFallback) || fallback.replace(/\/covers\//, "/small_covers/");
     return buildCoverBundleFromUrls(sitePoster || fallback, fallback || sitePoster);
   }
-  var poster = chooseFirstCandidate(candidates.posterCandidates, fallback);
-  var backdrop = chooseFirstCandidate(candidates.backdropCandidates, fallback);
-  return buildCoverBundleFromUrls(poster || fallback, backdrop || fallback || poster);
+  // 优先高清：校验通过用 DMM/MGStage，失败再回退本站
+  var poster = await chooseFirstAvailableCandidate(candidates.posterCandidates, sitePoster || fallback);
+  var backdrop = await chooseFirstAvailableCandidate(
+    candidates.backdropCandidates,
+    fallback || sitePoster || poster
+  );
+  return buildCoverBundleFromUrls(
+    poster || sitePoster || fallback,
+    backdrop || fallback || sitePoster || poster
+  );
 }
 
 function buildDetailCoverBundle(code, siteFallback, sitePosterFallback) {
@@ -1476,14 +1584,54 @@ function applyHdCovers(code, siteCover, sitePoster) {
       return buildListCoverBundle(code, siteCover, sitePoster);
     }
   } catch (e) {}
-  var c = sanitizeCoverUrl ? sanitizeCoverUrl(siteCover) : siteCover;
-  var p = sanitizeCoverUrl ? sanitizeCoverUrl(sitePoster || siteCover) : sitePoster || siteCover;
+  var c = resolveSiteCoverFallback(siteCover);
+  var p = resolveSiteCoverFallback(sitePoster || siteCover);
   return {
     coverUrl: c || p,
     posterPath: p || c,
     detailPoster: p || c,
     backdropPath: c || p,
   };
+}
+
+async function applyHdCoversAsync(code, siteCover, sitePoster) {
+  try {
+    if (typeof buildListCoverBundleAsync === "function") {
+      return await buildListCoverBundleAsync(code, siteCover, sitePoster);
+    }
+  } catch (e) {}
+  return applyHdCovers(code, siteCover, sitePoster);
+}
+
+async function enrichItemsWithVerifiedHdCovers(items) {
+  items = items || [];
+  if (!items.length) return items;
+  var started = Date.now();
+  var tasks = items.map(function (item) {
+    return (async function () {
+      if (!item) return item;
+      // 批量总预算：超时后剩余条目保留本站图，已开始的仍会跑完优先高清逻辑
+      if (Date.now() - started > HD_IMAGE_BATCH_BUDGET_MS) return item;
+      var code = normalizeCode(item.id) || normalizeCode(item.title) || "";
+      if (!code) return item;
+      var site =
+        resolveSiteCoverFallback(item.posterPath) ||
+        resolveSiteCoverFallback(item.coverUrl) ||
+        resolveSiteCoverFallback(item.backdropPath) ||
+        "";
+      // 优先 DMM/MGStage 高清；失败回退本站
+      var covers = await applyHdCoversAsync(code, site, site);
+      if (covers.coverUrl) item.coverUrl = covers.coverUrl;
+      if (covers.posterPath) item.posterPath = covers.posterPath;
+      if (covers.detailPoster) item.detailPoster = covers.detailPoster;
+      if (covers.backdropPath) item.backdropPath = covers.backdropPath;
+      return item;
+    })();
+  });
+  try {
+    await Promise.all(tasks);
+  } catch (e) {}
+  return items;
 }
 
 function mapIndexVideo(v, extra) {
@@ -1664,7 +1812,7 @@ async function rankingRowsToItems(rows, params) {
     }
     if (item.link) items.push(item);
   }
-  return items;
+  return await enrichItemsWithVerifiedHdCovers(items);
 }
 
 async function resolveHallOfFameRows(params) {
@@ -2189,7 +2337,7 @@ async function loadActressWorksByName(name, index, codeMap, params) {
     "ent=",
     ent && ent.name
   );
-  return mapped;
+  return await enrichItemsWithVerifiedHdCovers(mapped);
 }
 
 function resolvePeopleIdFromParams(params) {
@@ -2596,7 +2744,7 @@ async function enrichDetailFromHtml(base, videoId, params) {
   var title = getText(ld.name || base.title || code);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var siteCover = siteCoverUrl(videoId) || getText(ld.image) || base.coverUrl || "";
-  var covers = applyHdCovers(code || title, siteCover, siteCover);
+  var covers = await applyHdCoversAsync(code || title, siteCover, siteCover);
   var preview = (ld.video && (ld.video.contentUrl || ld.video.url)) || sitePreviewUrl(videoId) || base.previewUrl;
   var rating = (ld.aggregateRating && Number(ld.aggregateRating.ratingValue)) || base.rating || 0;
   var durationMin = durationFromIso(ld.duration) || base.duration || 0;
@@ -2611,17 +2759,13 @@ async function enrichDetailFromHtml(base, videoId, params) {
   var peoples = peopleFromLd(ld, entityMap);
   if (!peoples.length && base.peoples) peoples = base.peoples;
 
-  var hdGallery = [];
-  try {
-    if (typeof buildHighResGallery === "function") hdGallery = buildHighResGallery(code, 12) || [];
-  } catch (e4) {}
+  // 剧照直接用本站/页面图，不做 DMM 高清探测，加快详情加载
   var backdropPaths = [];
   stills.forEach(function (u) {
     if (u && backdropPaths.indexOf(u) < 0) backdropPaths.push(u);
   });
-  hdGallery.forEach(function (u) {
-    if (u && backdropPaths.indexOf(u) < 0) backdropPaths.push(u);
-  });
+  var siteOg = siteOgUrl(videoId);
+  if (siteOg && backdropPaths.indexOf(siteOg) < 0) backdropPaths.unshift(siteOg);
 
   if (maker && !genres.some(function (g) {
     return g.id === maker;
@@ -2733,9 +2877,10 @@ async function loadTodayWhat(params) {
     });
     var topN = Math.max(count * 4, Math.min(pool.length, Math.ceil(pool.length * 0.4)));
     var picked = shuffleCopy(pool.slice(0, topN)).slice(0, count);
-    return picked.map(function (v) {
+    var items = picked.map(function (v) {
       return mapIndexVideo(v, { rankLabel: "今天冲什么" });
     });
+    return await enrichItemsWithVerifiedHdCovers(items);
   } catch (error) {
     console.error("[javranking][loadTodayWhat] 失败:", error.message || error);
     throw error;
