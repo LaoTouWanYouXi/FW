@@ -405,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.3.5",
+  version: "1.3.6",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力（必选女友看影片）/ 今天冲谁·冲什么；封面优先 DMM 高清失败回退本站；剧照用本站图；磁力光鸭转存。",
+    "权威榜单 / 神作 / 女优战力 / 今天冲谁·冲什么；封面优先 DMM 高清失败回退本站；剧照本站图；光鸭转存可设最小保留视频 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -437,6 +437,13 @@ WidgetMetadata = {
       type: "input",
       value: "",
       description: "可选，离线任务保存到指定目录；留空用根目录",
+    },
+    {
+      name: "magnet_min_video_mb",
+      title: "最小保留视频 MB",
+      type: "input",
+      value: "0",
+      description: "对齐 javdb：过滤广告等小文件；0=仅按相对体积判断小广告片",
     },
   ],
   modules: [
@@ -2419,6 +2426,34 @@ function rememberParams(params) {
     if (parentId && Widget.storage && typeof Widget.storage.set === "function") {
       Widget.storage.set("jvr.guangya_parent_id", parentId);
     }
+    var minMb =
+      getText(params && params.magnet_min_video_mb) ||
+      getText(params && params.min_video_mb) ||
+      "";
+    if (!minMb && params && params.global) {
+      minMb = getText(params.global.magnet_min_video_mb) || getText(params.global.min_video_mb) || "";
+    }
+    if (!minMb && params && params.globalParams) {
+      if (Array.isArray(params.globalParams)) {
+        for (var m = 0; m < params.globalParams.length; m++) {
+          var it3 = params.globalParams[m];
+          if (!it3) continue;
+          var n3 = getText(it3.name || it3.key);
+          if (n3 === "magnet_min_video_mb" || n3 === "min_video_mb") {
+            minMb = getText(it3.value != null ? it3.value : it3.val);
+            if (minMb) break;
+          }
+        }
+      } else {
+        minMb =
+          getText(params.globalParams.magnet_min_video_mb) ||
+          getText(params.globalParams.min_video_mb) ||
+          "";
+      }
+    }
+    if (minMb !== "" && Widget.storage && typeof Widget.storage.set === "function") {
+      Widget.storage.set("jvr.magnet_min_video_mb", minMb);
+    }
   } catch (e) {}
 }
 
@@ -3117,16 +3152,216 @@ function gyIsVideoName(name) {
   return !!GY_VIDEO_EXTS[ext];
 }
 
-function gyFilterVideoFiles(entries) {
+// 对齐 javdb：广告/小文件过滤
+var GY_DEFAULT_BLOCK_PATTERNS = [
+  "广告|推广|宣传|加群|更多资源|最新地址|影视大站|草榴|91porn|91\\.tv|1024\\.org|1024la|直播|社[區区]|情[報报]|信誉|uu美少女",
+  "(?:^|[/\\\\_.\\-\\s])(?:sample|preview|trailer|预告|预览|样片|精彩花絮)(?:[/\\\\_.\\-\\s]|\\.|$)",
+  "\\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent)$",
+];
+
+function gyParseRegexSource(raw) {
+  var s = String(raw || "").trim();
+  if (!s) return null;
+  if (s.charAt(0) === "/") {
+    var last = s.lastIndexOf("/");
+    if (last > 0) {
+      try {
+        return new RegExp(s.slice(1, last), s.slice(last + 1) || "i");
+      } catch (e) {}
+    }
+  }
+  try {
+    return new RegExp(s, "i");
+  } catch (e2) {
+    return null;
+  }
+}
+
+function gyParseBlockPatterns(cfg) {
+  var raw = String((cfg && cfg.magnet_block_patterns) || "").trim();
+  var sources = raw
+    ? raw
+        .split(/[;|]/)
+        .map(function (x) {
+          return String(x || "").trim();
+        })
+        .filter(Boolean)
+    : GY_DEFAULT_BLOCK_PATTERNS.slice();
+  var patterns = [];
+  for (var i = 0; i < sources.length; i++) {
+    var re = gyParseRegexSource(sources[i]);
+    if (re) patterns.push(re);
+  }
+  return patterns;
+}
+
+function gyBasename(name) {
+  var s = String(name || "").replace(/\\/g, "/");
+  var idx = s.lastIndexOf("/");
+  return idx >= 0 ? s.slice(idx + 1) : s;
+}
+
+function gyIsObviousJunk(name) {
+  return /\.(txt|url|nfo|htm|html|jpg|jpeg|png|gif|exe|apk|torrent|srt|ass)$/i.test(gyBasename(name));
+}
+
+function gyIsLikelyVideo(entry) {
+  if (gyIsVideoName(entry && entry.name)) return true;
+  if (Number((entry && entry.size) || 0) >= 50 * 1024 * 1024) return true;
+  return false;
+}
+
+function gyMaxVideoSize(entries) {
+  var max = 0;
+  for (var i = 0; i < (entries || []).length; i++) {
+    if (!gyIsLikelyVideo(entries[i])) continue;
+    max = Math.max(max, Number(entries[i].size || 0));
+  }
+  return max;
+}
+
+function gyIsMultiPartName(name) {
+  var n = String(name || "").toLowerCase();
+  return (
+    /(?:^|[\._\-])p(?:art)?[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])cd[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])disc[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /(?:^|[\._\-])vol[\._\-]?\d+(?:[\._\-]|$)/.test(n) ||
+    /分段|第[\d一二三四五六七八九十]+[部分集段]/.test(n)
+  );
+}
+
+function gyShouldBlock(entry, patterns, minVideoMb, videoOnly, maxVideoSize) {
+  var name = String((entry && entry.name) || "");
+  if (gyIsObviousJunk(name)) return { blocked: true, reason: "junk" };
+  for (var i = 0; i < patterns.length; i++) {
+    if (patterns[i].test(name)) return { blocked: true, reason: "pattern" };
+  }
+  if (videoOnly && name && !gyIsLikelyVideo(entry)) return { blocked: true, reason: "non-video" };
+  var size = Number((entry && entry.size) || 0);
+  var isVideo = gyIsLikelyVideo(entry);
+  if (isVideo && size > 0 && maxVideoSize > 0 && size < maxVideoSize * 0.12 && !gyIsMultiPartName(name)) {
+    return { blocked: true, reason: "small-video" };
+  }
+  if (
+    minVideoMb > 0 &&
+    isVideo &&
+    size > 0 &&
+    maxVideoSize > 0 &&
+    size < minVideoMb * 1024 * 1024 &&
+    size < maxVideoSize * 0.35
+  ) {
+    return { blocked: true, reason: "size" };
+  }
+  return { blocked: false, reason: "" };
+}
+
+function gyPruneDominantVideo(kept, blocked) {
+  if (kept.length <= 1) return { kept: kept, blocked: blocked };
+  var videos = kept.filter(gyIsLikelyVideo);
+  if (videos.length <= 1) return { kept: kept, blocked: blocked };
+  var hasMultipart = videos.some(function (e) {
+    return gyIsMultiPartName(e.name);
+  });
+  var maxSize = Math.max.apply(
+    null,
+    videos.map(function (e) {
+      return Number(e.size || 0);
+    })
+  );
+  var floor = hasMultipart ? maxSize * 0.45 : maxSize * 0.3;
+  var survivors = kept.filter(function (e) {
+    if (!gyIsLikelyVideo(e)) return true;
+    return gyIsMultiPartName(e.name) || Number(e.size || 0) >= floor;
+  });
+  if (survivors.length >= kept.length) return { kept: kept, blocked: blocked };
+  var survivorMap = {};
+  survivors.forEach(function (e) {
+    survivorMap[e.index] = 1;
+  });
+  var newBlocked = blocked.slice();
+  kept.forEach(function (e) {
+    if (!survivorMap[e.index]) newBlocked.push({ entry: e, reason: "pruned" });
+  });
+  return { kept: survivors, blocked: newBlocked };
+}
+
+function gyPickVideoFallback(entries, patterns) {
+  var candidates = [];
+  for (var i = 0; i < (entries || []).length; i++) {
+    var entry = entries[i];
+    var name = String((entry && entry.name) || "");
+    if (gyIsObviousJunk(name)) continue;
+    var hit = false;
+    for (var p = 0; p < patterns.length; p++) {
+      if (patterns[p].test(name)) {
+        hit = true;
+        break;
+      }
+    }
+    if (hit) continue;
+    candidates.push(entry);
+  }
+  if (!candidates.length) candidates = (entries || []).filter(gyIsLikelyVideo);
+  if (!candidates.length) candidates = (entries || []).slice();
+  candidates.sort(function (a, b) {
+    return Number(b.size || 0) - Number(a.size || 0);
+  });
+  return candidates[0] || null;
+}
+
+function gyFilterResolvedFiles(entries, cfg) {
+  cfg = cfg || {};
+  var patterns = gyParseBlockPatterns(cfg);
+  var minVideoMb = Number(cfg.magnet_min_video_mb || 0);
+  if (!Number.isFinite(minVideoMb) || minVideoMb < 0) minVideoMb = 0;
+  var videoOnly = String(cfg.magnet_video_only || "1") !== "0";
+  var maxVideoSize = gyMaxVideoSize(entries);
   var kept = [];
   var blocked = [];
-  (entries || []).forEach(function (e) {
-    if (!e) return;
-    if (gyIsVideoName(e.name) || !e.name) kept.push(e);
-    else blocked.push(e);
-  });
-  if (!kept.length && entries && entries.length) kept = entries.slice();
-  return { kept: kept, blocked: blocked };
+  for (var i = 0; i < (entries || []).length; i++) {
+    var verdict = gyShouldBlock(entries[i], patterns, minVideoMb, videoOnly, maxVideoSize);
+    if (verdict.blocked) blocked.push({ entry: entries[i], reason: verdict.reason });
+    else kept.push(entries[i]);
+  }
+  if (!kept.length && entries && entries.length) {
+    var fallback = gyPickVideoFallback(entries, patterns);
+    if (fallback) {
+      kept = [fallback];
+      blocked = entries
+        .filter(function (e) {
+          return e.index !== fallback.index;
+        })
+        .map(function (e) {
+          return { entry: e, reason: "fallback" };
+        });
+    }
+  }
+  return gyPruneDominantVideo(kept, blocked);
+}
+
+// 兼容旧调用名
+function gyFilterVideoFiles(entries, cfg) {
+  return gyFilterResolvedFiles(entries, cfg || {});
+}
+
+function resolveMagnetMinVideoMb(params) {
+  params = mergeRequestParams(params);
+  var raw =
+    gySafeText(gyPickFromParamsTree(params, ["magnet_min_video_mb", "min_video_mb"])) ||
+    gySafeText(gyReadStore("jvr.magnet_min_video_mb")) ||
+    gySafeText(gyReadStore("javranking.cc.globalParams.magnet_min_video_mb")) ||
+    "";
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && Widget.globalParams && typeof Widget.globalParams.then !== "function") {
+        raw = gySafeText(gyPickFromObject(Widget.globalParams, ["magnet_min_video_mb", "min_video_mb"]));
+      }
+    } catch (e) {}
+  }
+  var n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) n = 0;
+  return n;
 }
 
 async function gyResolveResource(accessToken, did, magnet) {
@@ -3173,7 +3408,14 @@ async function saveMagnetToGuangya(magnet, cfg) {
   } catch (e) {
     console.warn("[javranking][guangya] resolve 失败，尝试直接提交:", e && e.message);
   }
-  var filtered = entries.length ? gyFilterVideoFiles(entries) : { kept: [], blocked: [] };
+  var filtered = entries.length
+    ? gyFilterResolvedFiles(entries, {
+        magnet_min_video_mb: cfg.magnet_min_video_mb,
+        magnet_block_patterns: cfg.magnet_block_patterns,
+        magnet_video_only: cfg.magnet_video_only,
+      })
+    : { kept: [], blocked: [] };
+  if (entries.length && !filtered.kept.length) throw new Error("过滤后没有可转存文件");
   var resolvedUrl = gySafeText(resolved && resolved.data && resolved.data.url) || magnet;
   var taskName =
     gySafeText(resolved && resolved.data && resolved.data.btResInfo && resolved.data.btResInfo.fileName) ||
@@ -3205,6 +3447,7 @@ async function saveMagnetToGuangya(magnet, cfg) {
           keptCount: filtered.kept.length || 1,
           blockedCount: filtered.blocked.length,
           parentId: parentId || "",
+          minVideoMb: Number(cfg.magnet_min_video_mb || 0) || 0,
           task: task,
         };
       }
@@ -3467,11 +3710,14 @@ async function handleGuangyaMagnetSave(hash, params) {
   // loadDetail 通常不带 params，必须从 Widget.globalParams / storage 异步取参
   var token = await resolveGuangyaTokenAsync(params);
   var parentId = await resolveGuangyaParentIdAsync(params);
+  var minVideoMb = resolveMagnetMinVideoMb(params);
   console.log(
     "[javranking][guangya] token?",
     token ? "yes(" + token.slice(0, 6) + "...)" : "no",
     "parentId?",
-    parentId || "(root)"
+    parentId || "(root)",
+    "minMb?",
+    minVideoMb
   );
   if (!token) {
     return {
@@ -3489,6 +3735,8 @@ async function handleGuangyaMagnetSave(hash, params) {
     var result = await saveMagnetToGuangya(entry.magnet, {
       guangya_token: token,
       guangya_parent_id: parentId,
+      magnet_min_video_mb: minVideoMb,
+      magnet_video_only: "1",
     });
     return {
       id: hash,
@@ -3501,6 +3749,8 @@ async function handleGuangyaMagnetSave(hash, params) {
         (entry.size || "-") +
         "\n目录: " +
         (parentId || "根目录") +
+        "\n最小保留: " +
+        (minVideoMb > 0 ? minVideoMb + " MB" : "相对体积") +
         "\n保留文件: " +
         result.keptCount +
         "\n过滤: " +
