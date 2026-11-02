@@ -14,901 +14,9 @@
  * 图片：复用“解密javdb.可视化.js”的 direct-dmm / MGStage 高清候选策略
  * 详情：按番号生成高清封面/剧照；简介含剧情+短评；trailers 预告片模块
  * 磁力：relatedItems 合并 JavDB API / 短评；展示体积·特征·来源，简介含文件名与转存说明
+ * 播放：loadResource(stream) 按番号匹配光鸭网盘文件直链
+ * 浏览：可视化厂牌/分类 + 榜单（热播/有码/无码/FC2/欧美/女优等）；已移除全量演员/系列/标签/片商枚举
  */
-
-/* ===== module: 01-category-options.js ===== */
-
-/**
- * [SKIP UNLESS NEEDED] 静态分类枚举 ~64KB
- * AI/协作者：未要求更新演员/系列/标签/片商时，禁止读取或重写本文件。
- */
-/* @category-options-begin — 由 build-javdb-categories.js 生成，勿手改 */
-// 重新生成: node build-javdb-categories.js
-var JAVDB_ACTOR_OPTIONS = [
-  { title: "\u963f\u90e8\u4e43\u7f8e\u4e45", value: "/actors/Qkdq" },
-  { title: "\u7231\u6fd1\u7f8e\u5e0c", value: "/actors/n4PV" },
-  { title: "\u7231\u4e16\u68a6\u7f57", value: "/actors/PGqE" },
-  { title: "\u7231\u7530\u98de\u9e1f", value: "/actors/b97d" },
-  { title: "\u7231\u7530\u5948\u5948", value: "/actors/JP4B" },
-  { title: "\u7231\u987b\u5fc3\u4e9a", value: "/actors/Jd4z" },
-  { title: "\u7231\u97f3\u9ebb\u91cc\u4e9a", value: "/actors/Ng03" },
-  { title: "\u5b89\u90e8\u672a\u534e\u5b50", value: "/actors/RA0m" },
-  { title: "\u5b89\u4f4d\u85b0", value: "/actors/2amxZ" },
-  { title: "\u5b89\u658b\u62c9\u62c9", value: "/actors/DXE5" },
-  { title: "\u5965\u7530\u54b2", value: "/actors/wVVz" },
-  { title: "\u516b\u4e43\u7ffc", value: "/actors/OMAz" },
-  { title: "\u767d\u5cf0\u7f8e\u7fbd", value: "/actors/W1wee" },
-  { title: "\u767d\u6728\u4f18\u5b50", value: "/actors/OEdK" },
-  { title: "\u767d\u77f3\u8309\u8389\u5948", value: "/actors/0YZq" },
-  { title: "\u767d\u77f3\u672a\u592e", value: "/actors/20PP" },
-  { title: "\u767d\u77f3\u94c3", value: "/actors/gKGy" },
-  { title: "\u767d\u6843\u82b1", value: "/actors/Xa1G" },
-  { title: "\u767d\u54b2\u67da\u5b50", value: "/actors/Z5BA" },
-  { title: "\u767e\u5408\u5ddd\u96c5", value: "/actors/vRpp" },
-  { title: "\u5742\u9053\u7f8e\u7409", value: "/actors/vd5z" },
-  { title: "\u5742\u54b2\u7f8e\u7a57", value: "/actors/DNb3" },
-  { title: "\u6ee8\u5d0e\u771f\u7dd6", value: "/actors/6v9D" },
-  { title: "\u4fdd\u5742\u60e0\u91cc", value: "/actors/a8Vg" },
-  { title: "\u5b9d\u751f\u8389\u8389", value: "/actors/Q0YG" },
-  { title: "\u5b9d\u7530\u8420\u5948\u7f8e", value: "/actors/GWkD" },
-  { title: "\u5317\u5ddd\u67da\u5b50", value: "/actors/ppB" },
-  { title: "\u5317\u6761\u9ebb\u5983", value: "/actors/9D1q" },
-  { title: "\u5317\u91ce\u671b", value: "/actors/72Z" },
-  { title: "\u672c\u7530\u5cac", value: "/actors/qOA9" },
-  { title: "\u672c\u771f\u53cb\u91cc", value: "/actors/E4bx" },
-  { title: "\u672c\u5e84\u94c3", value: "/actors/BzpA" },
-  { title: "\u672c\u5e84\u4f18\u82b1", value: "/actors/pknw" },
-  { title: "\u78a7\u5fd7\u4e43", value: "/actors/WAPK" },
-  { title: "\u7add\u6728\u5854\u5b50", value: "/actors/ZpqJ" },
-  { title: "\u6ce2\u591a\u91ce\u7ed3\u8863", value: "/actors/R2Vg" },
-  { title: "\u6ce2\u6728\u9065", value: "/actors/p7Nw" },
-  { title: "\u5f69\u7f8e\u65ec\u679c", value: "/actors/5Dya" },
-  { title: "\u4ed3\u591a\u771f\u592e", value: "/actors/WZGR" },
-  { title: "\u4ed3\u6728\u8bd7\u7ec7", value: "/actors/8PrK" },
-  { title: "\u6210\u5bab\u8272\u53f6", value: "/actors/ZdX7" },
-  { title: "\u8d64\u57ce\u78a7", value: "/actors/2GGP" },
-  { title: "\u8d64\u6e15\u83b2", value: "/actors/6x39" },
-  { title: "\u51b2\u7530\u674f\u68a8", value: "/actors/pDeZ" },
-  { title: "\u521d\u5ddd\u5357", value: "/actors/E6MM" },
-  { title: "\u521d\u7f8e\u6c99\u5e0c", value: "/actors/J6Rx" },
-  { title: "\u521d\u97f3\u5b9e", value: "/actors/QWB8" },
-  { title: "\u96cf\u83ca\u7ffc", value: "/actors/YE1d" },
-  { title: "\u5ddd\u83dc\u7f8e\u94c3", value: "/actors/J4mB" },
-  { title: "\u5ddd\u6751\u771f\u77e2", value: "/actors/zM6E" },
-  { title: "\u5ddd\u4e0a\u5948\u5948\u7f8e", value: "/actors/pPBw" },
-  { title: "\u690e\u540d\u7a7a", value: "/actors/NO1N" },
-  { title: "\u6625\u83dc\u534e", value: "/actors/0J0q" },
-  { title: "\u6625\u54b2\u51c9", value: "/actors/y7xb" },
-  { title: "\u6625\u539f\u672a\u6765", value: "/actors/X5AJ" },
-  { title: "\u693f\u7ec7\u91cc\u7f8e", value: "/actors/VXw3" },
-  { title: "\u51d1\u8389\u4e45", value: "/actors/QnE8" },
-  { title: "\u6751\u4e0a\u51c9\u5b50", value: "/actors/RYXD" },
-  { title: "\u5927\u573a\u552f", value: "/actors/ZY7V" },
-  { title: "\u5927\u5c9b\u4f18\u9999", value: "/actors/ZdQv" },
-  { title: "\u5927\u69fb\u54cd", value: "/actors/BKMM" },
-  { title: "\u5927\u6d66\u771f\u5948\u7f8e", value: "/actors/9N9V" },
-  { title: "\u7a3b\u573a\u6d41\u82b1", value: "/actors/vNKW" },
-  { title: "\u8482\u4e9a", value: "/actors/9dQE" },
-  { title: "\u51ac\u6708\u67ab", value: "/actors/Arq0" },
-  { title: "\u4e1c\u51db", value: "/actors/y8Mv" },
-  { title: "\u4e1c\u6761\u590f", value: "/actors/A6zy" },
-  { title: "\u4e8c\u5bab\u548c\u9999", value: "/actors/1ERn" },
-  { title: "\u5983\u6708\u7559\u8863", value: "/actors/MbzQ" },
-  { title: "\u98de\u9e1f\u94c3", value: "/actors/Rp08" },
-  { title: "\u98ce\u95f4\u7531\u7f8e", value: "/actors/82m3" },
-  { title: "\u67ab\u771f\u8863", value: "/actors/2k0w" },
-  { title: "\u9022\u6cfd\u771f\u91cc\u4e9a", value: "/actors/nWJ9" },
-  { title: "\u9ad8\u5d0e\u5723\u5b50", value: "/actors/x4MV" },
-  { title: "\u9ad8\u6749\u9ebb\u91cc", value: "/actors/vOMb" },
-  { title: "\u6839\u5c3e\u6731\u91cc", value: "/actors/kGQP" },
-  { title: "\u5bab\u5d0e\u5f69", value: "/actors/eKgR" },
-  { title: "\u5bab\u4e0b\u534e\u5948", value: "/actors/xv1V" },
-  { title: "\u5bab\u6cfd\u7531\u9999\u91cc", value: "/actors/YnO8" },
-  { title: "\u8c37\u539f\u5e0c\u7f8e", value: "/actors/GJvg" },
-  { title: "\u5173\u6839\u5948\u7f8e", value: "/actors/YOMK" },
-  { title: "\u5e7f\u6fd1\u6d77", value: "/actors/ymrd" },
-  { title: "\u6cb3\u5317\u5f69\u82b1", value: "/actors/EvkJ" },
-  { title: "\u6cb3\u5408\u660e\u65e5\u83dc", value: "/actors/69A0" },
-  { title: "\u6cb3\u5357\u5b9e\u91cc", value: "/actors/zkJ7" },
-  { title: "\u6cb3\u897f\u4e9a\u7f8e", value: "/actors/94V6" },
-  { title: "\u9ed1\u5ddd\u7eb1\u91cc\u5948", value: "/actors/Nmbw" },
-  { title: "\u6a2a\u5c71\u7f8e\u73b2", value: "/actors/ynWg" },
-  { title: "\u540e\u85e4\u91cc\u9999", value: "/actors/5rr9" },
-  { title: "\u80e1\u6843\u6cfd\u6843\u5b50", value: "/actors/y3pg" },
-  { title: "\u6237\u7530\u771f\u7434", value: "/actors/36Qa" },
-  { title: "\u82b1\u54b2\u4e00\u674f", value: "/actors/eWG1" },
-  { title: "\u51f0\u9999\u5948\u82bd", value: "/actors/y43v" },
-  { title: "\u59ec\u5ddd\u4f18\u5948", value: "/actors/zMyQ" },
-  { title: "\u8ff9\u7f8e\u73e0\u91cc", value: "/actors/3Jdb" },
-  { title: "\u5409\u5ddd\u7231\u7f8e", value: "/actors/5Xx6" },
-  { title: "\u5409\u5ddd\u83b2", value: "/actors/kyGz" },
-  { title: "\u5409\u9ad8\u5b81\u5b81", value: "/actors/rPrR" },
-  { title: "\u5409\u6839\u67da\u8389\u7231", value: "/actors/0Bw3" },
-  { title: "\u5409\u6cfd\u660e\u6b65", value: "/actors/0yVv" },
-  { title: "\u4f73\u82d7\u7409\u534e", value: "/actors/O1bD" },
-  { title: "\u5cac\u5948\u5948\u7f8e", value: "/actors/QNen" },
-  { title: "\u698e\u672c\u7f8e\u54b2", value: "/actors/dDy5" },
-  { title: "\u67b6\u4e43\u7531\u7f57", value: "/actors/p50Z" },
-  { title: "\u83c5\u91ce\u677e\u96ea", value: "/actors/rngN" },
-  { title: "\u6c5f\u4e0a\u5fd7\u4fdd", value: "/actors/5rPM" },
-  { title: "\u7686\u5ddd\u5343\u9065", value: "/actors/bJJg" },
-  { title: "\u7ed3\u57ce\u4e43\u4e43", value: "/actors/8GYx" },
-  { title: "\u7ed3\u6708\u606d\u5b50", value: "/actors/B4Ga" },
-  { title: "\u7ed3\u771f\u5e0c\u5948", value: "/actors/KW5m" },
-  { title: "\u4eca\u4e95\u771f\u7531\u7f8e", value: "/actors/RPN8" },
-  { title: "\u84f3\u7f8e\u9999", value: "/actors/WPr7" },
-  { title: "\u4e95\u4e0a\u7eeb\u5b50", value: "/actors/kPEN" },
-  { title: "\u4e5d\u91cd\u73af\u5948", value: "/actors/EKz4" },
-  { title: "\u541b\u5c9b\u7f8e\u7dd6", value: "/actors/96AR" },
-  { title: "\u8475\u5343\u60e0", value: "/actors/1q3n" },
-  { title: "\u8475\u53f8", value: "/actors/A5yq" },
-  { title: "\u6fd1\u540d\u5149\u8389", value: "/actors/2a7m" },
-  { title: "\u857e", value: "/actors/M6mA" },
-  { title: "\u91cc\u7f8e\u5c24\u5229\u5a05", value: "/actors/dxqQ" },
-  { title: "\u7acb\u82b1\u7460\u8389", value: "/actors/2wQW" },
-  { title: "\u83b2\u5b9e\u514b\u857e\u513f", value: "/actors/B0nG" },
-  { title: "\u51c9\u5ddd\u7eda\u97f3", value: "/actors/mmyZ" },
-  { title: "\u51c9\u5bab\u7434\u97f3", value: "/actors/V1Gn" },
-  { title: "\u51c9\u6d77\u7f8e\u6c99", value: "/actors/AyRe" },
-  { title: "\u51c9\u68ee\u73b2\u68a6", value: "/actors/KxPb" },
-  { title: "\u6797\u7f8e\u73b2", value: "/actors/bdpe" },
-  { title: "\u6797\u7531\u5948", value: "/actors/qPer" },
-  { title: "\u51db\u97f3\u6843\u82b1", value: "/actors/Xzr5" },
-  { title: "\u94c3\u6751\u7231\u91cc", value: "/actors/nRKm" },
-  { title: "\u94c3\u6728\u5fc3\u6625", value: "/actors/b7A0" },
-  { title: "\u94c3\u6728\u771f\u5915", value: "/actors/MEYQ" },
-  { title: "\u94c3\u539f\u7231\u871c\u8389", value: "/actors/98Yp" },
-  { title: "\u67f3\u7f8e\u5fe7", value: "/actors/N20b" },
-  { title: "\u82a6\u540d\u5c24\u8389\u5a05", value: "/actors/4vyE" },
-  { title: "\u9ebb\u4ed3\u5fe7", value: "/actors/exkz" },
-  { title: "\u9ebb\u91cc\u68a8\u590f", value: "/actors/G9P5" },
-  { title: "\u9ebb\u7f8e\u7531\u771f", value: "/actors/ex3z" },
-  { title: "\u9ebb\u751f\u5e0c", value: "/actors/dx6M" },
-  { title: "\u7f8e\u6ce2\u6c99\u8036", value: "/actors/QB6K" },
-  { title: "\u7f8e\u8c37\u6731\u91cc", value: "/actors/gyRE" },
-  { title: "\u7f8e\u54b2\u4f73\u5948", value: "/actors/8Nqa" },
-  { title: "\u7f8e\u7af9\u94c3", value: "/actors/z407" },
-  { title: "\u68a6\u4e43\u7231\u534e", value: "/actors/AbBK" },
-  { title: "\u5f25\u751f\u7f8e\u6708", value: "/actors/Jekq" },
-  { title: "\u660e\u91cc\u53cb\u9999", value: "/actors/06nE" },
-  { title: "\u660e\u91cc\u4337", value: "/actors/M4Q7" },
-  { title: "\u660e\u65e5\u82b1\u7eee\u7f57", value: "/actors/wm9B" },
-  { title: "\u6728\u5357\u65e5\u83dc", value: "/actors/W1xR" },
-  { title: "\u7267\u6751\u5f69\u9999", value: "/actors/Qka8" },
-  { title: "\u5357\u68a8\u592e\u5948", value: "/actors/QvZ4" },
-  { title: "\u4e03\u6d77\u8482\u5a1c", value: "/actors/gbbZ" },
-  { title: "\u4e03\u6d77\u5c24\u4e9a", value: "/actors/Akb0" },
-  { title: "\u4e03\u6fd1\u7231\u91cc", value: "/actors/5BeM" },
-  { title: "\u4e03\u68ee\u8389\u8389", value: "/actors/Ewa2" },
-  { title: "\u4e03\u5b9e\u91cc\u83dc", value: "/actors/PwOE" },
-  { title: "\u4e03\u6cfd\u7f8e\u4e9a", value: "/actors/NPD3" },
-  { title: "\u9f50\u85e4\u7f8e\u4f18", value: "/actors/peAb" },
-  { title: "\u7948\u91cc\u5e0c\u6f84", value: "/actors/ZPaV" },
-  { title: "\u5343\u4e43\u674f\u7f8e", value: "/actors/kq86" },
-  { title: "\u5e72\u7acb\u590f", value: "/actors/g7ym" },
-  { title: "\u6d45\u7530\u7ed3\u68a8", value: "/actors/pV3E" },
-  { title: "\u6865\u672c\u4e3d\u534e", value: "/actors/Nq7B" },
-  { title: "\u9752\u5c71\u534e", value: "/actors/RZPR" },
-  { title: "\u6e05\u57ce\u96ea", value: "/actors/bx2E" },
-  { title: "\u4e18\u54b2\u7231\u7c73\u8389", value: "/actors/NgYx" },
-  { title: "\u79cb\u5c71\u7965\u5b50", value: "/actors/eVGM" },
-  { title: "\u6cc9\u6c34\u5170", value: "/actors/kPa6" },
-  { title: "\u4ec1\u7f8e\u5706\u9999", value: "/actors/de29" },
-  { title: "\u65e5\u83dc\u83dc\u82b1\u97f3", value: "/actors/58DY" },
-  { title: "\u65e5\u5411\u771f\u51db", value: "/actors/4rw3" },
-  { title: "\u8363\u5ddd\u4e43\u4e9a", value: "/actors/5rkM" },
-  { title: "\u82e5\u83dc\u5948\u592e", value: "/actors/w49n" },
-  { title: "\u82e5\u6708\u7f8e\u8863\u5948", value: "/actors/gDAy" },
-  { title: "\u82e5\u6708\u739b\u4e3d\u4e9a", value: "/actors/zVJb" },
-  { title: "\u4e09\u5c9b\u5948\u6d25\u5b50", value: "/actors/pk1m" },
-  { title: "\u4e09\u6d66\u6b65\u7f8e", value: "/actors/19yv" },
-  { title: "\u4e09\u6d66\u60e0\u7406\u5b50", value: "/actors/pkOm" },
-  { title: "\u4e09\u4e0a\u60a0\u4e9a", value: "/actors/Av2e" },
-  { title: "\u4e09\u539f\u7a57\u9999", value: "/actors/g40m" },
-  { title: "\u6da9\u8c37\u679c\u6b65", value: "/actors/R1GK" },
-  { title: "\u68ee\u5ddd\u674f\u5948", value: "/actors/3d9" },
-  { title: "\u68ee\u6cfd\u4f73\u5948", value: "/actors/A0Qy" },
-  { title: "\u7eb1\u7eb1\u539f\u767e\u5408", value: "/actors/9ZAR" },
-  { title: "\u7eb1\u4ed3\u771f\u83dc", value: "/actors/J9dd" },
-  { title: "\u5c71\u5cb8\u9022\u82b1", value: "/actors/8BDW" },
-  { title: "\u4e0a\u539f\u745e\u7a57", value: "/actors/m7Vn" },
-  { title: "\u4e0a\u539f\u4e9a\u8863", value: "/actors/2D6w" },
-  { title: "\u6df1\u7530\u5948\u5948", value: "/actors/M8kX" },
-  { title: "\u6df1\u7530\u548f\u7f8e", value: "/actors/pRMq" },
-  { title: "\u795e\u5742\u670b\u5b50", value: "/actors/0317" },
-  { title: "\u795e\u6ce2\u591a\u4e00\u82b1", value: "/actors/N74b" },
-  { title: "\u795e\u5bab\u5bfa\u5948\u7dd6", value: "/actors/ZzNm" },
-  { title: "\u795e\u8c37\u5145\u5e0c", value: "/actors/V933" },
-  { title: "\u795e\u5c71\u5948\u5948", value: "/actors/bRe6" },
-  { title: "\u795e\u54b2\u8bd7\u7ec7", value: "/actors/vynb" },
-  { title: "\u795e\u54b2\u821e", value: "/actors/9kJV" },
-  { title: "\u795e\u96ea", value: "/actors/gPQQ" },
-  { title: "\u77f3\u539f\u8389\u5948", value: "/actors/Oqd0" },
-  { title: "\u8fbb\u672c\u674f", value: "/actors/5J58" },
-  { title: "\u5e02\u5ddd\u96c5\u7f8e", value: "/actors/7a4P" },
-  { title: "\u67a2\u6728\u8475", value: "/actors/zAmz" },
-  { title: "\u53cc\u53f6\u826f\u9999", value: "/actors/M4G1" },
-  { title: "\u6c34\u535c\u6a31", value: "/actors/0edE" },
-  { title: "\u6c34\u83dc\u4e3d", value: "/actors/de9B" },
-  { title: "\u6c34\u5ddd\u84f3", value: "/actors/g7WA" },
-  { title: "\u6c34\u65e0\u6fd1\u4f18\u590f", value: "/actors/2VpB" },
-  { title: "\u6c34\u54b2\u5361\u83b2", value: "/actors/xvZ8" },
-  { title: "\u6c34\u54b2\u841d\u62c9", value: "/actors/OpzD" },
-  { title: "\u6c34\u91ce\u671d\u9633", value: "/actors/35re" },
-  { title: "\u6c34\u6cfd\u4e43\u4e43", value: "/actors/qDOx" },
-  { title: "\u677e\u672c\u83dc\u5948\u5b9e", value: "/actors/YZyp" },
-  { title: "\u677e\u672c\u82bd\u4f9d", value: "/actors/94m6" },
-  { title: "\u677e\u672c\u4e00\u9999", value: "/actors/AOqm" },
-  { title: "\u677e\u4e0b\u7eb1\u8363\u5b50", value: "/actors/6qA7" },
-  { title: "\u677e\u96ea\u4f73\u82d7", value: "/actors/eOBz" },
-  { title: "\u6843\u8c37\u7ed8\u91cc\u9999", value: "/actors/gwE" },
-  { title: "\u6843\u4e43\u6728\u9999\u5948", value: "/actors/0dKX" },
-  { title: "\u6843\u54b2\u4f18\u91cc\u83dc", value: "/actors/7x1" },
-  { title: "\u85e4\u5ddd\u73b2\u5948", value: "/actors/gDRQ" },
-  { title: "\u85e4\u6d66\u60e0", value: "/actors/BWy1" },
-  { title: "\u7b39\u4ed3\u674f", value: "/actors/6Pra" },
-  { title: "\u5929\u6d77\u7ffc", value: "/actors/N4YG" },
-  { title: "\u5929\u6728\u60a0", value: "/actors/e8gp" },
-  { title: "\u5929\u4f7f\u8420", value: "/actors/5Oyz" },
-  { title: "\u5929\u91ce\u7f8e\u4f18", value: "/actors/RZBg" },
-  { title: "\u7530\u4e2d\u67e0\u6aac", value: "/actors/kzx6" },
-  { title: "\u901a\u91ce\u672a\u5e06", value: "/actors/05OX" },
-  { title: "\u6850\u5d8b\u8389\u4e43", value: "/actors/ne2M" },
-  { title: "\u6850\u8c37\u5948\u7eea", value: "/actors/vDN9" },
-  { title: "\u63a8\u5ddd\u60a0\u91cc", value: "/actors/ZqB6" },
-  { title: "\u671b\u6708\u5f69\u82b1", value: "/actors/NxGN" },
-  { title: "\u552f\u4e95\u771f\u5bfb", value: "/actors/nAnV" },
-  { title: "\u5c3e\u4e0a\u82e5\u53f6", value: "/actors/WyDQ" },
-  { title: "\u4e94\u5341\u5c9a\u661f\u5170", value: "/actors/y3ma" },
-  { title: "\u6b66\u85e4\u5f69\u9999", value: "/actors/yAW" },
-  { title: "\u821e\u5c9b\u660e\u91cc", value: "/actors/YnK" },
-  { title: "\u821e\u54b2\u7f8e\u5a1c", value: "/actors/7bnR" },
-  { title: "\u96fe\u5c9b\u91cc\u7dd6\u83dc", value: "/actors/1z5J" },
-  { title: "\u96fe\u5c9b\u6a31", value: "/actors/bAra" },
-  { title: "\u5915\u7f8e\u7d2b\u82d1", value: "/actors/wBND" },
-  { title: "\u897f\u5bab\u68a6", value: "/actors/7BX1" },
-  { title: "\u897f\u5bab\u6728\u4e43\u5b9e", value: "/actors/ARE0" },
-  { title: "\u897f\u7530\u5361\u8389\u5a1c", value: "/actors/B4br" },
-  { title: "\u897f\u6761\u6c99\u7f57", value: "/actors/yzda" },
-  { title: "\u897f\u6761\u7409\u7483", value: "/actors/gDWg" },
-  { title: "\u897f\u91ce\u7fd4", value: "/actors/gB4E" },
-  { title: "\u5e0c\u5c9b\u7231\u91cc", value: "/actors/wK0z" },
-  { title: "\u5e0c\u7f8e\u771f\u7531", value: "/actors/P9mN" },
-  { title: "\u5e0c\u5d0e\u6d01\u897f\u5361", value: "/actors/dxne" },
-  { title: "\u5e0c\u54b2\u5f69", value: "/actors/8VdK" },
-  { title: "\u5e0c\u5fd7\u7231\u91ce", value: "/actors/bAGB" },
-  { title: "\u590f\u5ddd\u660e", value: "/actors/pxBk" },
-  { title: "\u590f\u5e0c\u5357", value: "/actors/XqGM" },
-  { title: "\u76f8\u6cfd\u5357", value: "/actors/RAnD" },
-  { title: "\u76f8\u6cfd\u4f18\u91cc\u5948", value: "/actors/m94d" },
-  { title: "\u9999\u6f84\u679c\u7a57", value: "/actors/MqQQ" },
-  { title: "\u9999\u690e\u68a8\u4e9a", value: "/actors/YZm6" },
-  { title: "\u9999\u82d7\u73b2\u97f3", value: "/actors/n4d6" },
-  { title: "\u9999\u897f\u54b2", value: "/actors/JMZ2" },
-  { title: "\u7fd4\u7530\u5343\u91cc", value: "/actors/REr7" },
-  { title: "\u5411\u4e95\u84dd", value: "/actors/OgK" },
-  { title: "\u5c0f\u4ed3\u5948\u5948", value: "/actors/1xx4" },
-  { title: "\u5c0f\u5c9b\u5357", value: "/actors/A2Q0" },
-  { title: "\u5c0f\u8c37\u5b9e", value: "/actors/2K6W" },
-  { title: "\u5c0f\u6817\u8420\u4e2d", value: "/actors/XVba" },
-  { title: "\u5c0f\u6cc9\u65e5\u5411", value: "/actors/bb0B" },
-  { title: "\u5c0f\u897f\u60a0", value: "/actors/pY3Z" },
-  { title: "\u5c0f\u897f\u771f\u7406\u60e0", value: "/actors/5Dn9" },
-  { title: "\u5c0f\u91ce\u5bfa\u68a8\u7eb1", value: "/actors/N2D4" },
-  { title: "\u5c0f\u91ce\u5915\u5b50", value: "/actors/0x0v" },
-  { title: "\u5c0f\u65e9\u5ddd\u601c\u5b50", value: "/actors/z964" },
-  { title: "\u5c0f\u6cfd\u739b\u5229\u4e9a", value: "/actors/78EM" },
-  { title: "\u7be0\u5d0e\u6faa", value: "/actors/eVZx" },
-  { title: "\u7b7f\u7530\u6b65\u7f8e", value: "/actors/5R56" },
-  { title: "\u7b7f\u7530\u4f18", value: "/actors/WE4e" },
-  { title: "\u5fc3\u82b1\u7531\u7f57", value: "/actors/kaRJ" },
-  { title: "\u65b0\u4e95\u7231\u4e3d", value: "/actors/rD3r" },
-  { title: "\u65b0\u6709\u83dc", value: "/actors/RJM8" },
-  { title: "\u661f\u7a7a\u8420\u7231", value: "/actors/E2x2" },
-  { title: "\u661f\u4e43\u6708", value: "/actors/J2Kx" },
-  { title: "\u661f\u5948\u7231", value: "/actors/GMN7" },
-  { title: "\u661f\u54b2\u4f36\u7f8e", value: "/actors/zKJQ" },
-  { title: "\u661f\u91ce\u5a1c\u7f8e", value: "/actors/1B29" },
-  { title: "\u718a\u4ed3\u7965\u5b50", value: "/actors/x01E" },
-  { title: "\u7eea\u5948\u840c", value: "/actors/xrYn" },
-  { title: "\u91ce\u91ce\u5bab\u7f8e\u91cc", value: "/actors/deAQ" },
-  { title: "\u53f6\u6708\u4e03\u6fd1", value: "/actors/y060" },
-  { title: "\u4e00\u6761\u7eee\u7f8e\u9999", value: "/actors/VgzW" },
-  { title: "\u4f0a\u4e1c\u5343\u5948\u7f8e", value: "/actors/1014" },
-  { title: "\u4f0a\u85e4\u821e\u96ea", value: "/actors/YgJx" },
-  { title: "\u97f3\u6893", value: "/actors/XxvJ" },
-  { title: "\u6a31\u6728\u51db", value: "/actors/D042" },
-  { title: "\u6a31\u6728\u4f18\u5e0c\u97f3", value: "/actors/J9O8" },
-  { title: "\u6a31\u7a7a\u6843", value: "/actors/bvWB" },
-  { title: "\u6a31\u7f8e\u96ea", value: "/actors/JqQ8" },
-  { title: "\u6a31\u8420\u5b50", value: "/actors/Vk3W" },
-  { title: "\u6a31\u7531\u7f57", value: "/actors/YbZ8" },
-  { title: "\u9e70\u5bab\u552f", value: "/actors/reRN" },
-  { title: "\u6c38\u4e95\u739b\u4e3d\u4e9a", value: "/actors/Bxw4" },
-  { title: "\u6c38\u4e95\u7f8e\u96cf", value: "/actors/79BR" },
-  { title: "\u6c38\u4e95\u5807", value: "/actors/W4Q7" },
-  { title: "\u6c38\u6fd1\u552f", value: "/actors/MxZP" },
-  { title: "\u6c38\u6fd1\u672a\u8420", value: "/actors/Rr3K" },
-  { title: "\u6c38\u91ce\u4e00\u590f", value: "/actors/NeOr" },
-  { title: "\u4f18\u6708\u771f\u91cc\u5948", value: "/actors/Zyyq" },
-  { title: "\u7531\u7231\u53ef\u5948", value: "/actors/pPQq" },
-  { title: "\u53cb\u7530\u5f69\u4e5f\u9999", value: "/actors/dENv" },
-  { title: "\u6709\u5742\u6df1\u96ea", value: "/actors/kJYJ" },
-  { title: "\u6709\u82b1\u8420", value: "/actors/QYJn" },
-  { title: "\u6709\u539f\u6b65\u7f8e", value: "/actors/bv9A" },
-  { title: "\u67da\u6728\u8482\u5a1c", value: "/actors/33nb" },
-  { title: "\u67da\u6708\u5411\u65e5\u8475", value: "/actors/7BQJ" },
-  { title: "\u5b87\u91ce\u681e\u83dc", value: "/actors/AMgm" },
-  { title: "\u7fbd\u7530\u5e0c", value: "/actors/qJ96" },
-  { title: "\u7fbd\u54b2\u7f8e\u6674", value: "/actors/p7nE" },
-  { title: "\u5706\u57ce\u77b3", value: "/actors/1xQd" },
-  { title: "\u539f\u5343\u5c81", value: "/actors/RYN8" },
-  { title: "\u56ed\u7530\u7f8e\u6a31", value: "/actors/QE4G" },
-  { title: "\u6708\u672c\u7231", value: "/actors/GOX2" },
-  { title: "\u65e9\u5ddd\u6fd1\u91cc\u5948", value: "/actors/eOAp" },
-  { title: "\u65e9\u4e59\u5973\u552f", value: "/actors/7P3P" },
-  { title: "\u6cfd\u6751\u4e3d\u5b50", value: "/actors/Ak6e" },
-  { title: "\u658b\u85e4\u7f8e\u7ec7", value: "/actors/nVBM" },
-  { title: "\u957f\u8c37\u5ddd\u7559\u8863", value: "/actors/GW77" },
-  { title: "\u771f\u6728\u4eca\u65e5\u5b50", value: "/actors/Y3MD" },
-  { title: "\u7ec7\u7530\u771f\u5b50", value: "/actors/Oq2y" },
-  { title: "\u4e2d\u6751\u667a\u6167", value: "/actors/GwQJ" },
-  { title: "\u51a2\u7530\u8bd7\u7ec7", value: "/actors/pN8k" },
-  { title: "\u4ef2\u91cc\u7eb1\u7fbd", value: "/actors/WKMq" },
-  { title: "\u6e1a\u5149\u8389", value: "/actors/EPJJ" },
-  { title: "\u6e1a\u5149\u5e0c", value: "/actors/YJeb" },
-  { title: "\u594f\u97f3\u82b1\u97f3", value: "/actors/ewAz" },
-  { title: "\u4f50\u4ed3\u7eca", value: "/actors/pRDB" },
-  { title: "\u4f50\u4ed3\u5b81\u5b81", value: "/actors/pR49" },
-  { title: "\u4f50\u5c71\u7231", value: "/actors/PO5v" },
-  { title: "\u4f50\u85e4\u7231\u7406", value: "/actors/6PyK" },
-  { title: "\u4f50\u85e4\u9065\u5e0c", value: "/actors/k794" },
-  { title: "\u4f50\u4f50\u6ce2\u7eeb", value: "/actors/M15A" },
-  { title: "\u4f50\u4f50\u6728\u660e\u5e0c", value: "/actors/ZOM6" },
-  { title: "AIKA", value: "/actors/RXbR" },
-  { title: "JULIA", value: "/actors/1KBW" },
-  { title: "NAOMI", value: "/actors/X4me" },
-  { title: "\u8475\u73b2\u5948", value: "/actors/K5EM" },
-  { title: "\u6893\u5e0c", value: "/actors/exMr" },
-  { title: "\u5343\u5948\u7f8e", value: "/actors/3mWD" },
-  { title: "\u590f\u76ee\u7231\u68a8", value: "/actors/JOr3" },
-  { title: "\u4e03\u6fd1\u9ebb\u8863", value: "/actors/9wKX" },
-  { title: "\u65e5\u5411\u6faa", value: "/actors/ARDP" },
-  { title: "\u5915\u65e5\u83dc\u90a3", value: "/actors/kAzm" },
-];
-
-var JAVDB_SERIES_OPTIONS = [
-  { title: "\u7d20\u4ebaTV\u8c6a\u534e\u7248", value: "/series/M4nJ" },
-  { title: "\u6301\u7eed\u6027\u4ea4", value: "/series/3nEN" },
-  { title: "\u3010\u521d\u6b21\u62cd\u6444\u3011\u7f51\u4e0a\u5e94\u52dfAV\u4f53\u9a8c\u62cd\u6444", value: "/series/rY2v" },
-  { title: "\u3010\u6d41\u51fa\u5f71\u50cf\u3011\u5973\u5b66\u751f\u793e\u56e2\u5408\u5bbf\u6027\u7231", value: "/series/0w2k" },
-  { title: "Fashion", value: "/series/Zx8V" },
-  { title: "\u67d0\u67d0\u7cbe\u9009", value: "/series/8XG5" },
-  { title: "\u67d0\u67d0NTR", value: "/series/Yq0b" },
-  { title: "\u51fa\u501f\u67d0\u67d0", value: "/series/x9O" },
-  { title: "\u6211\u53d8\u6210\u4e86\u67d0\u67d0", value: "/series/Yez" },
-  { title: "\u67d0\u67d0\u662f\u6211\u7684\u5973\u53cb", value: "/series/d2M" },
-  { title: "\u67d0\u67d0\u7cbe\u90094\u5c0f\u65f6", value: "/series/RKqK" },
-  { title: "\u6570\u5206\u949f\u4e0d\u505c\u62cd\u6444", value: "/series/Gwmz" },
-  { title: "\u6570\u5341\u5c81\u7684\u6027", value: "/series/5Emz" },
-  { title: "100\u65e5\u5143\u7279\u4ef7", value: "/series/rnxZ" },
-  { title: "100\u65e5\u5143\u7279\u4ef7\uff08\u767e\u82b1\u6620\u753b/\u827e\u66fc\u7ebd\uff09", value: "/series/DAAk" },
-  { title: "120%\u771f\u5b9e\u642d\u8baa", value: "/series/nzDw" },
-  { title: "17\u5c81\u7981\u4ee4", value: "/series/YnVD" },
-  { title: "2\u789f\u88c58\u5c0f\u65f6\uff08\u5b9d\u6620\u50cf\uff09", value: "/series/XYA5" },
-  { title: "\u53ea\u5269\u4e24\u4e2a\u4eba\u4e4b\u540e\u2026", value: "/series/Xg2G" },
-  { title: "3.1\u6b21\u5143AV", value: "/series/7Pw1" },
-  { title: "3D\u79c1\u62cdVR\u6539", value: "/series/DKwM" },
-  { title: "43\u5c81\u53d8\u6001\u6444\u540c\u00d7\u7d20\u4eba\u89d2\u8272\u626e\u6f14\uff08\u5168\u65e5\u672c\u6444\u540c\u534f\u540c\u7ec4\u5408/\u5984\u60f3\u65cf\uff09", value: "/series/gP2y" },
-  { title: "\u7231 \u865a\u62df\u81ea\u6170", value: "/series/ZxYm" },
-  { title: "\u6211\u4eec\u7684\u719f\u5973", value: "/series/qb4D" },
-  { title: "\u4e0d\u62d4\u51fa\u768414\u53d1\u4e2d\u51fa", value: "/series/PPvX" },
-  { title: "\u4e00\u76f4\u88ab\u62bd\u63d2\u7684\u4e00\u6cca\u4e24\u65e5", value: "/series/1A1A" },
-  { title: "\u5728\u767e\u6218\u642d\u8baa\u5e08\u7684\u623f\u95f4\u91cc\u5e26\u56de\u5bb6\u6027\u7231\u5077\u62cd", value: "/series/gq5y" },
-  { title: "\u7206\u4e73\u767e\u95fb\u4e0d\u5982\u4e00\u89c1", value: "/series/wAb" },
-  { title: "\u4e0b\u6d41\u8bed\u5973\u4eba", value: "/series/wqXY" },
-  { title: "\u771f\u5b9e\u53d1\u751f\u8fc7\u7684\u8272\u60c5\u6545\u4e8b", value: "/series/223Z" },
-  { title: "\u53bb\u4e86\u4e0d\u505a\u63d2\u5165\u7684\u57ab\u4e0a\u98ce\u4fd7\uff0c\u51fa\u6765\u7684\u5374\u662f\u2026", value: "/series/wqab" },
-  { title: "\u771f\u4eba\u4eba\u59bb\uff08\u7792\u7740\u4e08\u592b\u4f53\u9a8cAV\uff09", value: "/series/m9Rr" },
-  { title: "\u672c\u4e2d-VR", value: "/series/EJM9" },
-  { title: "\u672c\u4e2d\u7cbe\u9009", value: "/series/0670" },
-  { title: "\u672c\u4e2d\u51fa\u9053", value: "/series/06A7" },
-  { title: "\u7792\u7740\u5973\u53cb\u4e5f\u548c\u5979\u5988\u5988\u505a\u4e86\u2026", value: "/series/zBbE" },
-  { title: "\u5973\u53cb\u7684\u59d0\u59d0\u7528\u5de8\u4e73\u548c\u4e2d\u51faOK\u8bf1\u60d1\u6211", value: "/series/8Vza" },
-  { title: "\u5c55\u793a\u52c3\u8d77\u7684\u60c5\u5883", value: "/series/vr99" },
-  { title: "\u5e26\u56de\u623f\u95f4\u75af\u72c2\u505a\u7231\u7684\u90a3\u4ef6\u4e8b", value: "/series/Bg74" },
-  { title: "\u8d85\u672c\u683c\u60c5\u8272\u7ed8\u5377\uff08\u5b9d\u6620\u50cf\uff09", value: "/series/Yw3D" },
-  { title: "\u8d85\u9ad8\u7ea7\u4e2d\u51fa\u4e13\u95e8\u6ce1\u6ce1\u6d74", value: "/series/Yn0b" },
-  { title: "\u8d85\u6fc0\u70c8\u6027\u4ea4", value: "/series/RXg8" },
-  { title: "\u4ece\u65e9\u5230\u665a\u4e2d\u51fa\u6027\u7231", value: "/series/AzRe" },
-  { title: "\u559d\u5230\u5929\u4eae\u7684\u8fde\u73af\u9152", value: "/series/AKB0" },
-  { title: "\u75f4\u6c49\u7535\u8f66\uff08\u795e\u56de\uff09", value: "/series/92yV" },
-  { title: "\u75f4\u6c49\u8bb0\u5f55\u65e5\u8bb0", value: "/series/JMrR" },
-  { title: "\u75f4\u6c49\u5077\u62cd\uff06\u4e2d\u51fa\u7d20\u5973\u4eba\u5a9a\u836f\u7cbe\u6cb9\u6309\u6469", value: "/series/8qvd" },
-  { title: "\u803b\u8fb1\u3001\u51cc\u8fb1\u3001\u8df3\u86cb\u4f69\u6234\u00b7\u95f9\u5e02\u7ea6\u4f1a", value: "/series/NXBb" },
-  { title: "\u4ee4\u4eba\u5bb3\u7f9e\u7684\u8eab\u4f53", value: "/series/p3Ke" },
-  { title: "\u548c\u61a7\u61ac\u7684\u5973\u4e0a\u53f8", value: "/series/eO6E" },
-  { title: "\u89c1\u9762\u6570\u79d2\u5c31\u5408\u4f53", value: "/series/emr" },
-  { title: "\u4eba\u59bb\u521d\u6b21\u62cd\u6444\uff0c\u518d\u4e00\u6b21", value: "/series/AkkP" },
-  { title: "\u4eba\u59bb\u521d\u6b21\u62cd\u6444\u7eaa\u5f55\u7247", value: "/series/GMwb" },
-  { title: "\u4e94\u5341\u5c81\u4eba\u59bb\u521d\u6b21\u62cd\u6444\u7eaa\u5f55\u7247", value: "/series/yrdv" },
-  { title: "\u521d\u88f8 virgin nude", value: "/series/gGN" },
-  { title: "\u521d\u4f53\u9a8c\u6570\u6b21\u63d2\u5165\u7279\u522b\u7bc7", value: "/series/5nR8" },
-  { title: "\u521d\u6b21\u8131\u8863\u719f\u5973", value: "/series/AJ0" },
-  { title: "\u7eaf\u7cfb\u8ff7\u5bab", value: "/series/xrdg" },
-  { title: "\u62cd\u5b8c\u5373\u51fa\uff01\u9b54\u955c\u53f7", value: "/series/RPMn" },
-  { title: "\u957f\u5927\u540e\u5c31\u53bbCenter Village", value: "/series/WkZ" },
-  { title: "\u5927\u4eba\u7684AV", value: "/series/Rdkm" },
-  { title: "\u4ee3\u4ee3\u6728\u5fe0", value: "/series/wmXB" },
-  { title: "\u5077\u62cd\u7eaa\u5f55\u7247\u5927\u5168", value: "/series/qdp9" },
-  { title: "\u8c03\u6559\u7eaa\u5f55\u7247", value: "/series/pq9w" },
-  { title: "\u804c\u573a\u5973\u4eba", value: "/series/29rq" },
-  { title: "\u6355\u83b7\u804c\u573a\u5973\u4eba", value: "/series/AqNP" },
-  { title: "\u804c\u573a\u8d85M\u5c0f\u59d0", value: "/series/pqd9" },
-  { title: "\u72ec\u5360\uff01\u4eba\u59bb\u7279\u522b\u7bc7", value: "/series/ZNXJ" },
-  { title: "\u72ec\u5360\u9171", value: "/series/GBzm" },
-  { title: "\u76f4\u5230\u5815\u843d\u2026", value: "/series/2qw" },
-  { title: "\u65e0\u5fb7\u8272\u60c5\u533b\u751f\u5077\u62cd", value: "/series/e28d" },
-  { title: "\u653e\u5b66\u540e\u7f8e\u5c11\u5973\u56de\u6625\u6309\u6469", value: "/series/QV54" },
-  { title: "\u653e\u5b66\u540e\u662f\u4f2a\u5a18", value: "/series/KNOm" },
-  { title: "\u975e\u65e5\u5e38\u7684\u95f7\u7edd\u6e38\u620f", value: "/series/8Ax" },
-  { title: "\u98ce\u4fd7\u4e2d\u51fa\u6027\u7231", value: "/series/e2vE" },
-  { title: "\u592b\u59bb\u4e00\u8d77\u6311\u6218", value: "/series/zMg4" },
-  { title: "\u548c\u4e08\u592b\u505a\u5b8c\u9020\u4eba\u540e\uff0c\u603b\u662f\u7ee7\u7eed\u88ab\u516c\u516c\u4e2d\u51fa\u2026", value: "/series/YZkB" },
-  { title: "\u5728\u4e08\u592b\u773c\u524d\u88ab\u4fb5\u72af", value: "/series/MbX" },
-  { title: "\u88ab\u4e08\u592b\u4e0a\u53f8\u8fde\u7eed\u4fb5\u72af\u5230\u7b2c7\u5929\uff0c\u6211\u5931\u53bb\u4e86\u7406\u6027\u2026", value: "/series/65vn" },
-  { title: "\u7236\u4eb2\u51fa\u95e82\u79d2\u5c31\u5f00\u59cb\u505a\u7231\u7684\u6bcd\u5b50", value: "/series/96gw" },
-  { title: "\u590d\u523b\u7cbe\u9009", value: "/series/vDAW" },
-  { title: "\u592a\u8fc7\u654f\u611f\u5c3f\u51fa\u6765\u4e86\u5bf9\u4e0d\u8d77\u2026", value: "/series/8RE" },
-  { title: "\u9ad8\u7ea7\u548c\u98ce\u6ce1\u6ce1\u6d74", value: "/series/RZdn" },
-  { title: "\u6b4c\u821e\u4f0e\u753a\u6574\u4f53\u6cbb\u7597\u9662", value: "/series/8qpx" },
-  { title: "\u4e2a\u4eba\u62cd\u6444\u642d\u8baa", value: "/series/aw6n" },
-  { title: "\u76ef\u4e0a\u5a46\u5a46\u8fc7\u4e8e\u4e0b\u6d41\u5de8\u4e73\u7684\u5973\u5a7f", value: "/series/8NNW" },
-  { title: "\u9b3c\u9ad8\u6f6e", value: "/series/NQPB" },
-  { title: "\u9b3c\u53e3\u4ea4\u5730\u72f1", value: "/series/6JE" },
-  { title: "\u9ed1\u4eba\u5de8\u5927\u8089\u68d2 VS", value: "/series/p49m" },
-  { title: "\u6df7\u6d74\u5fc3\u60c5", value: "/series/7y7M" },
-  { title: "\u6781\u4e0a\uff01\uff01\u67d0\u67d0\u592a\u592a\u521d\u6b21\u8131\u8863AV\u7eaa\u5f55\u7247", value: "/series/8VZd" },
-  { title: "\u5bb6\u755c\u6536\u85cf\u5bb6", value: "/series/MBV1" },
-  { title: "\u53ef\u4ee5\u9001\u4f60\u56de\u5bb6\u5417\uff1f", value: "/series/xPkQ" },
-  { title: "\u548c\u4e08\u6bcd\u5a18\u7684\u7981\u65ad\u6027\u4ea4", value: "/series/xr6A" },
-  { title: "\u4ea4\u878d\u7684\u4f53\u6db2\uff0c\u6d53\u5bc6\u6027\u7231", value: "/series/5EQa" },
-  { title: "\u697c\u68af\u95f4\u5973\u5b66\u751f", value: "/series/MnA4" },
-  { title: "\u8857\u89d2\u7d20\u4eba\u89c2\u5bdf", value: "/series/Jg7d" },
-  { title: "\u8857\u89d2\u7d20\u4eba\u67d0\u67d0\u9891\u9053", value: "/series/02X3" },
-  { title: "\u8857\u89d2\u7d20\u4eba\u642d\u8baa", value: "/series/MqM1" },
-  { title: "\u8857\u89d2\u7d20\u4eba\u642d\u8baa\uff01", value: "/series/QWR8" },
-  { title: "\u8bf7\u8def\u4e0a\u7684\u59d0\u59d0\u4ecb\u7ecd\u4e00\u70b9\u8272\u60c5\u670b\u53cb\uff0c\u6709\u65f6\u6709\u6709\u65f6\u6ca1\u6709", value: "/series/x0pQ" },
-  { title: "\u642d\u8baa\u8def\u4e0a\u540d\u5a9b\u4eba\u59bb\u56de\u5bb6\u62cdAV\uff01\u5728\u4e08\u592b\u4e0d\u5728\u7684\u5bb6\u91cc\u80cc\u5fb7\u4e2d\u51fa", value: "/series/R2gz" },
-  { title: "\u4eca\u5929\u8981\u4e0d\u8981\u7fd8\u73ed\uff1f", value: "/series/e26z" },
-  { title: "\u91d1\u53d1\u8272\u60c5", value: "/series/kyZ4" },
-  { title: "\u7d27\u7f1a\u8c03\u6559\u59bb", value: "/series/zeP7" },
-  { title: "\u8fd1\u4eb2\uff3b\u65e0\u8a00\uff3d\u76f8\u5978", value: "/series/dev5" },
-  { title: "\u8fd1\u4eb2\u76f8\u5978", value: "/series/mebY" },
-  { title: "\u8fd1\u4eb2\u76f8\u5978 \u7ed9\u5988\u5988\u9634\u9053\u4e2d\u51fa", value: "/series/aqkX" },
-  { title: "\u8fd1\u4eb2\u76f8\u5978\uff08VENUS\uff09", value: "/series/J0N8" },
-  { title: "\u8fd1\u4eb2\u76f8\u5978\u5e7b\u6bcd INCEST", value: "/series/7ywZ" },
-  { title: "\u8fd1\u4eb2\u76f8\u5978\u7ed9\u5988\u5988\u9634\u9053\u4e2d\u51fa", value: "/series/zW" },
-  { title: "\u7981\u65ad\u770b\u62a4", value: "/series/8MK" },
-  { title: "\u6c42\u804c\u6d3b\u52a8\u6863\u6848", value: "/series/WPgq" },
-  { title: "\u5de8\u4e73\u00b7\u7206\u4e73", value: "/series/Q2p" },
-  { title: "\u5de8\u4e73\u5916\u9001\u98ce\u4fd7", value: "/series/O29B" },
-  { title: "\u7edd\u5bf9\u7f8e\u5c11\u5973\uff0c\u51fa\u501f\u7ed9\u4f60", value: "/series/pk5" },
-  { title: "\u7edd\u5bf9\u60f3\u8ba9\u4f60\u770b\uff01\uff01MBM\u5c71\u53e3\u793e\u957f\u4e25\u9009\u672c\u6708\u63a8\u83503\u90e8\u5957\u88c5", value: "/series/Bpaa" },
-  { title: "\u957f\u7740\u53ef\u7231\u7684\u8138\u5374\u662f\u5927\u5c41\u80a1", value: "/series/akG4" },
-  { title: "\u53e3\u5185 Queen", value: "/series/8OZV" },
-  { title: "\u53e3\u5185\u5973\u738b", value: "/series/PygE" },
-  { title: "\u542b\u6cea\u4e0d\u505c\u5f3a\u5236\u9ad8\u6f6e\u6027\u7231", value: "/series/AJOy" },
-  { title: "\u5730\u4e0b\u91d1\u53d1\u65e0\u5957\u63d2\u5165", value: "/series/ZN5V" },
-  { title: "\u604b\u591c", value: "/series/MmrR" },
-  { title: "\u604b\u7231\u4e11\u95fb", value: "/series/Kp3b" },
-  { title: "\u88f8\u4f53\u4e3b\u5987", value: "/series/vK9" },
-  { title: "\u5988\u5988\u7684\u95fa\u871c", value: "/series/GZ9q" },
-  { title: "\u9ebb\u836f\u641c\u67e5\u5b98", value: "/series/MmXQ" },
-  { title: "\u7f8e\u5c11\u5973\u5373\u63d2\u767d\u76ae\u4e66", value: "/series/Mb4k" },
-  { title: "\u7f8e\u5c11\u5973\u4eba\u683c\u77eb\u6b63\u7cfb\u5217", value: "/series/wDGz" },
-  { title: "\u7f8e\u719f\u5973\u7cbe\u9009", value: "/series/mpJy" },
-  { title: "\u59b9\u59b9\u7684\u7206\u4e73\u767e\u95fb\u4e0d\u5982\u4e00\u89c1\uff08Cherries Rebo\uff09", value: "/series/J6Zx" },
-  { title: "\u5e94\u52df\u7684\u840c\u7cfb\u5c11\u5987", value: "/series/aeEW" },
-  { title: "\u79d8\u5bc6\u641c\u67e5\u5b98\u4e4b\u5973", value: "/series/V47z" },
-  { title: "\u8d34\u8eab\u5b9e\u62cd \u4eba\u59bb\u51fa\u8f68\u65c5\u884c", value: "/series/WVqp" },
-  { title: "\u8d34\u8eab\u6027\u7231", value: "/series/mQED" },
-  { title: "\u540d\u4f5c\u8272\u60c5", value: "/series/p4mE" },
-  { title: "\u9b54\u6cd5\u7cbe\u6cb9\u6309\u6469", value: "/series/Ndvg" },
-  { title: "\u9b54\u955c\u53f7\uff0c\u6211\u5c31\u5728\u8f66\u5185\u5de5\u4f5c\u4f46\u4f60\u770b\u4e0d\u5230", value: "/series/Pm9" },
-  { title: "\u6bcd\u5978\u4e2d\u51fa", value: "/series/ZNYX" },
-  { title: "\u6bcd\u5b50\u5978", value: "/series/GJqz" },
-  { title: "\u6bcd\u5b50\u4ea4\u5c3e", value: "/series/89W" },
-  { title: "\u6bcd\u4eb2\u7684\u53cb\u4eba", value: "/series/neD4" },
-  { title: "\u661f\u671f\u56db\u7684\u54c8\u547c\u54c8\u547c", value: "/series/mbQR" },
-  { title: "\u5e94\u52df\u9171 \uff5e\u62db\u52df\u4e00\u822c\u7d20\u4eba\u5973\u6027\uff5e", value: "/series/EmQ0" },
-  { title: "\u4f2a\u5a18\uff0c\u5b8c\u5168\u96cc\u5316\u5408\u96c6", value: "/series/DKma" },
-  { title: "\u7537\u4eba\u53ea\u6709\u6211\u4e00\u4e2a", value: "/series/P2mN" },
-  { title: "\u6d53\u539a\u63a5\u543b\u4e0e\u6027\u7231", value: "/series/XW4J" },
-  { title: "\u5974\u96b6\u8272\u821e\u53f0", value: "/series/wDD" },
-  { title: "\u5973\u5bfc\u6f14\u6625\u5948\u7684\u7d20\u4eba\u5973\u540c\u642d\u8baa", value: "/series/K4aA" },
-  { title: "\u5973\u6559\u5e08\u5e38\u53bb\u7684\u6574\u4f53\u7406\u7597\u9662", value: "/series/14xY" },
-  { title: "\u5973\u5c3b", value: "/series/eQN" },
-  { title: "\u5973\u4f53\u62f7\u95ee\u7814\u7a76\u6240", value: "/series/9N5" },
-  { title: "\u5973\u4f53\u56fe\u9274", value: "/series/ebAr" },
-  { title: "\u5973\u4f18\u7cbe\u9009\uff08MOODYZ\uff09", value: "/series/Q2XG" },
-  { title: "\u5973\u804c\u5458\u91ce\u7403\u62f3", value: "/series/0dx7" },
-  { title: "\u5973\u5b66\u751f\u76d1\u7981\u51cc\u8fb1 \u9b3c\u755c\u8f6e\u5978", value: "/series/J14A" },
-  { title: "\u5973\u5b66\u751f\u76d1\u7981\u51cc\u8fb1\u9b3c\u755c\u8f6e\u5978", value: "/series/1y9" },
-  { title: "\u88ab\u6d3e\u9063\u6309\u6469\u5e08\u8fc7\u5206\u89e6\u78b0\u79c1\u5904\uff0c\u53d7\u4e0d\u4e86\u5feb\u611f\u800c\u88ab\u7761\u8d70", value: "/series/YNpz" },
-  { title: "\u60f3\u770b\u770b\u6211\u4e0d\u8ba4\u8bc6\u7684\u90a3\u4e2a\u59bb\u5b50\u2026", value: "/series/Z4z8" },
-  { title: "\u8bf7\u542c\u6211\u88ab\u7eff\u7684\u6545\u4e8b", value: "/series/me1y" },
-  { title: "\u5bf9\u59bb\u5b50\u6b7b\u4e5f\u4e0d\u6562\u8bf4\uff0c\u5c45\u7136\u628a\u5cb3\u6bcd\u5f04\u6000\u5b55\u4e86\u2026", value: "/series/746Z" },
-  { title: "\u671f\u95f4\u9650\u5b9a\u719f\u5973\u5957\u88c5", value: "/series/enJM" },
-  { title: "\u6f02\u4eae\u53c8\u4e0b\u6d41\u7684\u53d4\u6bcd", value: "/series/29m" },
-  { title: "\u5f3a\u5236\u7edd\u9876\u60e8\u53eb\u62f7\u95ee\u8c03\u6559", value: "/series/E6DJ" },
-  { title: "\u4eb2\u65cf\u76f8\u5978", value: "/series/0e8J" },
-  { title: "\u88ab\u7761\u8d70\u64ad\u79cd\u538b\u5236", value: "/series/nqv4" },
-  { title: "\u9752\u5c71\u7325\u4eb5\u7f8e\u5bb9\u6c99\u9f99", value: "/series/A9mP" },
-  { title: "\u6e05\u7eaf\u7f16\u5e74\u53f2", value: "/series/J4Z3" },
-  { title: "\u5168\u56fd\u4eba\u59bb\u60c5\u8272\u56fe\u9274", value: "/series/9qmE" },
-  { title: "\u5168\u56fd\u719f\u5973\u641c\u7d22\u961f", value: "/series/akyO" },
-  { title: "\u5168\u56fd\u7eb5\u65ad\u300c\u8ba4\u771f\u300d100%\u642d\u8baa \u7d20\u4eba\u592a\u592a\u591a\u8c22\u6b3e\u5f85", value: "/series/qbpr" },
-  { title: "\u4eba\u59bb\u803b\u60a6\u65c5\u884c", value: "/series/Rn7" },
-  { title: "\u4eba\u59bb\u6c64\u604b\u65c5\u884c", value: "/series/QWDq" },
-  { title: "\u4eba\u59bb\u7684\u51fa\u8f68\u5fc3", value: "/series/6dQM" },
-  { title: "\u4eba\u59bb\u82b1\u74e3\u7ffb\u5f00", value: "/series/4d1E" },
-  { title: "\u4eba\u59bb\u5185\u8863\u5973", value: "/series/A840" },
-  { title: "\u4eba\u751f\u521d\u6b21\u604d\u60da\u72b6\u6001 \u6fc0\u70c8\u9ad8\u6f6e\u6027\u7231", value: "/series/P0vr" },
-  { title: "\u65e5\u672c\u4eba\u6765\u63d2\u5165", value: "/series/R5Zn" },
-  { title: "\u5bf9\u767d\u7699\u5927\u5c41\u80a1\u5bb6\u653f\u963f\u59e8\u5373\u63d2", value: "/series/NpVb" },
-  { title: "\u5239\u90a3\u80cc\u5fb7\u65c5\u884c \u4eba\u59bb\u5931\u683c", value: "/series/BP06" },
-  { title: "\u820c\u5934\u604b\u7269", value: "/series/Kg4A" },
-  { title: "\u795e\u7ade\u6cf3", value: "/series/Yr5z" },
-  { title: "\u795e\u7ade\u6cf3\u6cf3\u88c5", value: "/series/BEy9" },
-  { title: "\u795e\u5b66\u56ed\u6cf3\u88c5", value: "/series/pzq" },
-  { title: "\u795e\u4e1d\u889c", value: "/series/W1OZ" },
-  { title: "\u795e\u4f53\u64cd\u88e4", value: "/series/O2bB" },
-  { title: "\u65e0\u5957\u62bd\u63d2 PornGirl", value: "/series/rVmD" },
-  { title: "\u4e0d\u80fd\u51fa\u58f0\u7684\u7edd\u9876\u8bfe\u7a0b", value: "/series/M4m4" },
-  { title: "\u5b9e\u5f55 \u7535\u8f66\u75f4\u6c49\u5f71\u50cf", value: "/series/xP8E" },
-  { title: "\u5b9e\u5f55\u00b7\u8fd1\u4eb2\u76f8\u5978", value: "/series/AKdK" },
-  { title: "\u65f6\u95f4\u505c\u6b62\u5427", value: "/series/m4D" },
-  { title: "\u4e16\u754c\u7684\uff08\u6fc0\u70c8\uff09\u7325\u4eb5\u5a18", value: "/series/r4Gz" },
-  { title: "\u719f\u5e74AV\u51fa\u9053\u7eaa\u5f55\u7247", value: "/series/k484" },
-  { title: "\u719f\u5973", value: "/series/8PVa" },
-  { title: "\u719f\u5973\u4eba\u59bb\u9762\u8bd5\u79c1\u62cd", value: "/series/G4DD" },
-  { title: "\u719f\u5973\u8272\u60c5\u65c5", value: "/series/pqJk" },
-  { title: "\u719f\u5973\u9650\u5b9a \u719f\u5973\u6765\u5230\u623f\u95f4\uff08\u719f\u5973\u5e93/\u827e\u66fc\u7ebd\uff09", value: "/series/rY5R" },
-  { title: "\u719f\u5973\u7684\u51fa\u8f68\u662f\u8ba4\u771f\u7684\u6027\u7231", value: "/series/QJO7" },
-  { title: "\u719f\u59bb", value: "/series/O1nA" },
-  { title: "\u5176\u5b9e\u6211\u4e00\u76f4\u88ab\u4e08\u592b\u4e0a\u53f8\u4fb5\u72af\u2026", value: "/series/O2mk" },
-  { title: "\u79c1\u7acb\u62bd\u63d2\u5973\u5b50\u5927\u5b66", value: "/series/N2E3" },
-  { title: "\u6211\u662f\u75f4\u5973", value: "/series/mezD" },
-  { title: "\u6574\u5929\u60f3\u8981\u5973\u5a7f\u5927\u8089\u68d2\u7684\u5cb3\u6bcd\u8bf1\u60d1", value: "/series/14mA" },
-  { title: "\u7d20\u4eba\u53c2\u52a0\u7efc\u827a", value: "/series/mzAD" },
-  { title: "\u7d20\u4eba\u53c2\u52a0\u7efc\u827a", value: "/series/MZGk" },
-  { title: "\u7d20\u4eba\u521d\u6b21\u62cd\u6444\u65e0\u5957\u4e2d\u51fa", value: "/series/PJ6v" },
-  { title: "\u7d20\u5973\u4eba\uff0c\u51fa\u501f\u7ed9\u4f60", value: "/series/pVb" },
-  { title: "\u7d20\u4eba\u5973\u5927\u5b66\u751f", value: "/series/pYy5" },
-  { title: "\u7d20\u4eba\u719f\u5973\u4eba\u59bb\u7ed9\u5904\u7537\u7834\u5904", value: "/series/vDkp" },
-  { title: "\u7d20\u4eba\u8fd9\u662f\u8c01", value: "/series/9GrV" },
-  { title: "\u7d20\u4eba\u56db\u53e0\u534a", value: "/series/ZynP" },
-  { title: "\u7d20\u4eba\u9650\u5b9a\uff01\uff08ATOM\uff09", value: "/series/KK77" },
-  { title: "\u7d20\u4eba\u63f4\u4ea4\u65e0\u5957\u4e2d\u51fa", value: "/series/gyzm" },
-  { title: "\u7d20\u4eba\u6c34\u624b\u670d\u65e0\u5957\u4e2d\u51fa", value: "/series/pk9Z" },
-  { title: "\u7d20\u4eba\u642d\u8baa\u4e2d\u51fa", value: "/series/GnEJ" },
-  { title: "\u7d20\u4eba\u8d70\u5149 \u5728\u81ea\u5b85\u4e2a\u4eba\u62cd\u6444\u4f1a", value: "/series/pDvw" },
-  { title: "\u7d20\u4eba\u547c\u547c \u00d7 MBM", value: "/series/1RZW" },
-  { title: "\u6e29\u6cc9\u84b8\u6c14\u8fd1\u4eb2\u76f8\u5978", value: "/series/QN5p" },
-  { title: "\u6843\u8272\u5bb6\u65cf", value: "/series/b7RA" },
-  { title: "\u7279\u5316VR", value: "/series/AM1P" },
-  { title: "\u5929\u82b1\u677f\u7279\u5316\u673a\u4f4d", value: "/series/YGxD" },
-  { title: "\u5929\u7136\u6210\u5206\u67d0\u67d0\u6c41100%", value: "/series/89" },
-  { title: "\u4e61\u4e0b\u7684\u8fd1\u4eb2\u76f8\u5978", value: "/series/d4vQ" },
-  { title: "\u753a\u7530\u955c\u5934\u7684 BLACK KAMEKO \u6863\u6848", value: "/series/wmYD" },
-  { title: "\u6295\u7a3f\u4e2a\u4eba\u62cd\u6444 \u6076\u5fc3\u5b85\u7537\u590d\u4ec7\u52a8\u753b", value: "/series/ky9P" },
-  { title: "\u6295\u7a3f\u7c89\u4e1d\u4ff1\u4e50\u90e8", value: "/series/Ybx8" },
-  { title: "\u7a81\u51fb\u961f\u7279\u522b\u4f01\u5212", value: "/series/9yJ5" },
-  { title: "\u5728\u56fe\u4e66\u9986\u4e0d\u80fd\u51fa\u58f0\u3001\u7231\u6db2\u591a\u5230\u62c9\u4e1d\u7684\u654f\u611f\u5a18", value: "/series/wV8B" },
-  { title: "\u63a8\u7684\u5973\u5b69\u4ed4\u7ec6\u6765\uff01\u9b54\u955c\u53f7", value: "/series/dgXa" },
-  { title: "\u63a8\u7684\u5973\u5b69\u4ed4\u7ec6\u6765\uff01\u53ea\u56f4\u4e00\u6761\u6bdb\u5dfe\uff0c\u8981\u4e0d\u8981\u8fdb\u7537\u6c64\uff1f", value: "/series/mJZn" },
-  { title: "\u5b8c\u5168\u79c1\u4eba\u5f71\u50cf", value: "/series/ay9O" },
-  { title: "\u5b8c\u719f \u592a\u592a\u865a\u62df\u81ea\u6170", value: "/series/mbzM" },
-  { title: "\u5b8c\u5168\u65e0\u5957 STYLE@\u67d0\u67d0", value: "/series/YZJB" },
-  { title: "\u5984\u60f3\u4e3b\u89c2", value: "/series/n4kY" },
-  { title: "\u5371\u9669\u65e5\u76f4\u51fb\uff01\uff01\u80fd\u9020\u4eba\u7684\u6ce1\u6ce1\u6d74", value: "/series/0RBX" },
-  { title: "\u672a\u6210\u5e74(\u6210\u5e74\u6f14\u5458)", value: "/series/zbGz" },
-  { title: "\u5fcd\u5f97\u4f4f\u5c31\u65e0\u5957\u4e2d\u51fa\u6027\u7231", value: "/series/DRaJ" },
-  { title: "\u6211\u5bb6\u7f8e\u4e3d\u7684\u5a46\u5a46", value: "/series/G45Q" },
-  { title: "\u65e0\u7801", value: "/series/uncensored" },
-  { title: "\u65e0\u8a00\u67d0\u67d0", value: "/series/VMG" },
-  { title: "\u4e94\u661f\u9891\u9053", value: "/series/eOWr" },
-  { title: "\u4e0a\u534810\u70b9 \u5b66\u6821\u600e\u4e48\u4e86\u2026", value: "/series/myRZ" },
-  { title: "\u821e\u59bb \uff5e\u540d\u5a9b\u4ff1\u4e50\u90e8\uff5e", value: "/series/DV35" },
-  { title: "\u574a\u95f4\u4f20\u95fb\u7684\u300c\u79df\u8d41\u963f\u59e8\u300d", value: "/series/6qVD" },
-  { title: "\u5c0f\u6076\u9b54\u6311\u9017\u7f8e\u5c11\u5973", value: "/series/14q9" },
-  { title: "\u80c1\u8feb\uff08CHoBitcH\uff09", value: "/series/06nv" },
-  { title: "\u80c1\u8feb\u5957\u623f", value: "/series/QV6M" },
-  { title: "\u65b0\u00b7\u592a\u592a\u7cfb\u5217", value: "/series/0p43" },
-  { title: "\u65b0\u00b7\u7edd\u5bf9\u7f8e\u5c11\u5973\uff0c\u51fa\u501f\u7ed9\u4f60", value: "/series/kA6" },
-  { title: "\u65b0\u00b7\u7f8e\u4e3d\u719f\u5973\u6c64\u5c4b", value: "/series/EzE2" },
-  { title: "\u65b0\u4eba\uff01kawaii*\u4e13\u5c5e\u51fa\u9053", value: "/series/D262" },
-  { title: "\u65b0\u4eba\uff08MAXING\uff09", value: "/series/65y0" },
-  { title: "\u65b0\u4eba\u00d7\u6781\u9650\u9a6c\u8d5b\u514b", value: "/series/5EYM" },
-  { title: "\u65b0\u4eba NO.1 STYLE", value: "/series/5na8" },
-  { title: "\u7f9e\u803b\uff01", value: "/series/QNkK" },
-  { title: "\u7eed\u00b7\u5f02\u5e38\u6027\u4ea4 \u4e94\u5341\u5c81\u6bcd\u5b50", value: "/series/p4Rm" },
-  { title: "\u8ba9\u4e25\u9009\u7f8e\u5c11\u5973\u7a7f\u89d2\u8272\u626e\u6f14\u3001\u6000\u4e0a\u6211\u7684\u5b69\u5b50", value: "/series/POq0" },
-  { title: "\u4e00\u822c\u7537\u5973\u89c2\u5bdfAV", value: "/series/X47J" },
-  { title: "\u4e00\u7c92\u4e07\u500d", value: "/series/QYGG" },
-  { title: "\u4e00\u6d41\u592a\u592a\u642d\u8baa \u540d\u5a9b\u7f8e\u719f\u5973\u4e2d\u51faJAPAN", value: "/series/94Zp" },
-  { title: "\u4e00\u6cca\u4e24\u65e5\uff0c\u7f8e\u5c11\u5973\u5b8c\u5168\u9884\u7ea6\u5236", value: "/series/W7" },
-  { title: "\u540c\u4e00\u5c4b\u6a90\u4e0b\u7684\u6027\u4ea4", value: "/series/x4yQ" },
-  { title: "\u7ee7\u6bcd\u5974\u96b6", value: "/series/W7R" },
-  { title: "\u6deb\u4e71 Madam", value: "/series/ZxPP" },
-  { title: "\u6deb\u8bed\u75f4\u5973\uff08Dogma\uff09", value: "/series/kp0" },
-  { title: "\u6deb\u8bed\u5973\u4e3b\u64ad", value: "/series/3nnD" },
-  { title: "\u6deb\u8bed\u4e2d\u51fa\u6ce1\u6ce1\u6d74", value: "/series/9pw" },
-  { title: "\u6deb\u8bed\u89e3\u8bf4\u81ea\u6170", value: "/series/5rb8" },
-  { title: "\u5e94\u52df\u7d20\u4eba\uff0c\u521d\u6b21AV\u62cd\u6444", value: "/series/5X7D" },
-  { title: "\u6c38\u65e0\u6b62\u5883\u7684\u4e2d\u51fa\u8f6e\u5978\u65e5\u5b50", value: "/series/7qAb" },
-  { title: "\u670b\u53cb\u7684\u6bcd\u4eb2", value: "/series/76B4" },
-  { title: "\u53cb\u4eba\u7684\u6bcd\u4eb2", value: "/series/8V1E" },
-  { title: "\u53cb\u4eba\u7684\u6bcd\u4eb2", value: "/series/bKJB" },
-  { title: "\u53cb\u4eba\u7684\u59bb\u5b50\u662f\u8d85\u4e0b\u6d41\u5bb6\u5ead\u6559\u5e08", value: "/series/KkdO" },
-  { title: "\u8bf1\u60d1\u8bfe\u7a0b", value: "/series/QVW8" },
-  { title: "\u6b32\u6c42\u4e0d\u6ee1\u7684\u6bcd\u4eb2\u4e0e\u7edd\u4f26\u513f\u5b50", value: "/series/BAm4" },
-  { title: "\u63f4\u5973\u4ea4\u9645", value: "/series/G4q5" },
-  { title: "\u6708\u520a\u719f\u5973\u79d8\u5b9d\u9986", value: "/series/82dV" },
-  { title: "\u6708\u520a\u60c5\u8272\u65e5\u5386", value: "/series/V9WD" },
-  { title: "\u827a\u80fd\u4eba", value: "/series/3nkN" },
-  { title: "\u662d\u548c\u7325\u4eb5\u5b98\u80fd\u5267", value: "/series/xg78" },
-  { title: "\u771f\u00b7\u5f02\u5e38\u6027\u4ea4", value: "/series/54nM" },
-  { title: "\u771f\u6027\u4e2d\u51fa", value: "/series/1Bz4" },
-  { title: "\u4e0e\u5236\u670d\u7f8e\u5c11\u5973\u6027\u4ea4", value: "/series/9DRw" },
-  { title: "\u5236\u670d\u5f88\u9002\u5408\u7684\u53ef\u7231\u5973\u5b69", value: "/series/Z4P" },
-  { title: "\u4e2d\u51fa20\u8fde\u53d1", value: "/series/0R5q" },
-  { title: "\u4e2d\u51fa\u9732\u5929\u6e29\u6cc9", value: "/series/JnV2" },
-  { title: "\u4e2d\u51fa\u4eba\u59bb\u51fa\u8f68\u65c5\u884c", value: "/series/p4w" },
-  { title: "\u53ea\u9700\u4e2d\u51fa\u7684\u7b80\u5355\u5de5\u4f5c", value: "/series/1RDJ" },
-  { title: "\u4e2d\u5e74\u5927\u53d4\u4e0e\u67d0\u67d0", value: "/series/Yxwz" },
-  { title: "\u548c\u6700\u68d2\u7684\u60c5\u4eba\uff0c\u6700\u68d2\u7684\u4e2d\u51fa\u6027\u4ea4", value: "/series/ZdPX" },
-  { title: "\u6700\u5f3a\u5c5e\u6027", value: "/series/wVB" },
-  { title: "\u6700\u65b0\u4e0a\u763e\u7f8e\u5bb9", value: "/series/Nb" },
-  { title: "AI\u4fee\u590d\uff08Tokyo247\uff09", value: "/series/58Xp" },
-  { title: "AI\u4fee\u590d\uff08Alice Japan\uff09", value: "/series/JE1x" },
-  { title: "AI\u4fee\u590d\uff08SHY\u4f01\u5212\uff09", value: "/series/YOPz" },
-  { title: "AI\u4fee\u590d\u7248", value: "/series/9xwV" },
-  { title: "\u963f\u8299\u6d1b\u72c4\u5fd2", value: "/series/9qX" },
-  { title: "AV\u65e0\u7406", value: "/series/MmpQ" },
-  { title: "AV\u51fa\u9053", value: "/series/6d4a" },
-  { title: "AV\u51fa\u9053\uff08Peters\uff09", value: "/series/MbvJ" },
-  { title: "BEST\uff08\u4f5c\u54c1\u96c6\uff09", value: "/series/PQRe" },
-  { title: "Boin\u300c\u67d0\u67d0\u300dBox", value: "/series/8ZW" },
-  { title: "\u8327\uff08SILK LABO\uff09", value: "/series/22Mp" },
-  { title: "\u6570\u5b57\u9891\u9053", value: "/series/Bz0d" },
-  { title: "E-BODY", value: "/series/1NW" },
-  { title: "E-BODY BEST PROPORTIONS", value: "/series/4Paa" },
-  { title: "E-BODY VR", value: "/series/ydkZ" },
-  { title: "E-BODY\u4e13\u5c5e\u51fa\u9053", value: "/series/P5W9" },
-  { title: "Extreme\uff08\u8fc7\u6fc0\uff09\u81ea\u6170\u8005", value: "/series/Z97A" },
-  { title: "FALENO\u603b\u96c6\u7bc7", value: "/series/wmv7" },
-  { title: "\u7b2c\u4e00\u5370\u8c61", value: "/series/qDJ6" },
-  { title: "\u98ce\u4fd7\u9891\u9053", value: "/series/Mm9Q" },
-  { title: "GAL\u62bd\u63d2\u590d\u4ec7\u8005", value: "/series/Jym8" },
-  { title: "GET\u7cfb\u5217", value: "/series/nKy9" },
-  { title: "\u6781\u81f4", value: "/series/QBG" },
-  { title: "\u8d85\u7ea7\u604b\u7269", value: "/series/dNM" },
-  { title: "\u8272\u60c5\u5730\u4e0b\u4ea4\u6613", value: "/series/Gnbg" },
-  { title: "J\u25cf FIRST TAKE", value: "/series/aD8n" },
-  { title: "KARMA\u642d\u8baa\u961f\u51fa\u53d1", value: "/series/JO5B" },
-  { title: "kawaii* VR", value: "/series/VP0n" },
-  { title: "kawaii*\u7cbe\u9009", value: "/series/8e23" },
-  { title: "kira\u2606kira BEST", value: "/series/dzB5" },
-  { title: "kira\u2606kira BLACK GAL", value: "/series/RYz" },
-  { title: "MADOOOON \u79c1\u62cd", value: "/series/7d7B" },
-  { title: "MOODYZ 8KVR", value: "/series/EEZ2" },
-  { title: "\u6708\u529b\u6b22\u547c", value: "/series/Wzep" },
-  { title: "mpo.jp\u51fa\u54c1 \u7eaa\u5b9e", value: "/series/BgrG" },
-  { title: "\u65b0\u4eba", value: "/series/ZNkJ" },
-  { title: "NTR\u7f51", value: "/series/xgdE" },
-  { title: "pg", value: "/series/2aeP" },
-  { title: "\u9ad8\u7ea7VR", value: "/series/Eqa3" },
-  { title: "\u9ad8\u7ea7\u65f6\u5c1a\u6ce1\u6ce1\u6d74", value: "/series/OXvv" },
-  { title: "\u7ea2\u9f99", value: "/series/0YRE" },
-  { title: "RED\u603b\u96c6\u7bc7", value: "/series/BJZO" },
-  { title: "\u65b0\u4ebaVR", value: "/series/64n0" },
-  { title: "\u65b0\u4eba\u7cbe\u9009", value: "/series/pOZq" },
-  { title: "S1\u5973\u5b69\u5408\u96c6", value: "/series/WVXe" },
-  { title: "S1 VR", value: "/series/aqWg" },
-  { title: "S1\u5973\u5b69\u5408\u96c6", value: "/series/K486" },
-  { title: "S\u7ea7\u719f\u5973\uff08VENUS\uff09", value: "/series/gyr7" },
-  { title: "\u5077\u62cd\u628a\u8bdd\u9898\u5e26\u5230\u6027\u7231\u7684DVD", value: "/series/ky60" },
-  { title: "\u6027\u7231\u9038\u6750", value: "/series/pqpk" },
-  { title: "SOD\u5973\u804c\u5458", value: "/series/bKXa" },
-  { title: "\u8d85\u7ea7\u9c7c\u773c\u604b\u7269", value: "/series/xOZA" },
-  { title: "THE\u7eaa\u5f55\u7247 \u91ca\u653e\u672c\u80fd\u7684\u7edd\u9876\u6027\u7231", value: "/series/xOAE" },
-  { title: "\u6700\u4f73", value: "/series/VGz" },
-  { title: "\u672a\u5b8c\u6210VR", value: "/series/V0zA" },
-  { title: "VR\u6700\u4f73", value: "/series/P2D2" },
-  { title: "WAAPVR\u798f\u888b", value: "/series/8ww3" },
-  { title: "\u554a\u554a\u592a\u592a", value: "/series/2adq" },
-  { title: "IdeaPocket\u7cbe\u9009", value: "/series/1JN4" },
-  { title: "IdeaPocket VR", value: "/series/Zpv7" },
-  { title: "IdeaPocket 8KVR", value: "/series/OE7z" },
-  { title: "IdeaPocket\u9038\u6750\u53d1\u6398\u4f01\u5212", value: "/series/nzp9" },
-  { title: "Outvision VR KMPVR", value: "/series/zQ3z" },
-  { title: "\u4e9a\u6d32\u53e4\u5f0f\u6309\u6469\u5e97\u5077\u62cd", value: "/series/gemy" },
-  { title: "Adore", value: "/series/dd7e" },
-  { title: "\u4eb2\u7231\u7684\uff0c\u539f\u8c05\u6211\u2026", value: "/series/ZX" },
-  { title: "\u4ece\u90a3\u5929\u8d77\u4e00\u76f4\u2026\u88ab\u7d27\u7f1a\u8c03\u6559\u4e2d\u51fa\u7684\u5236\u670d\u7f8e\u5c11\u5973", value: "/series/76gP" },
-  { title: "\u60f3\u73a9\u793e\u4ea4\u8f6f\u4ef6\u7684\u5973\u5b69", value: "/series/Qr0q" },
-  { title: "\u4eb2\u5bc6\u604b\u7231", value: "/series/5rOa" },
-  { title: "\u59b9\u59b9\u5076\u50cf", value: "/series/2aAp" },
-  { title: "\u7ef4\u7eb3\u65af\u6e29\u6cc9", value: "/series/G4y2" },
-  { title: "\u8bf7\u7761\u8d70\u6211\u7684\u59bb\u5b50\u67d0\u67d0", value: "/series/ZdMX" },
-  { title: "\u4e0d\u65ad\u5347\u7ea7\u7684\u8d85\u7d20\u4eba\u5a18", value: "/series/5ea" },
-  { title: "\u8272\u60c5\u4ff1\u4e50\u90e8", value: "/series/qD83" },
-  { title: "\u8272\u60c5\u65d7\u6807\uff0c\u5df2\u7ecf\u786c\u4e86", value: "/series/ArAK" },
-  { title: "\u5b9d\u7269\u798f\u888b", value: "/series/04vb" },
-  { title: "\u6211\u6210\u4e86\u5988\u5988\u7684\u73a9\u5177", value: "/series/mQY" },
-  { title: "\u8272\u60c5\u5bb6\u957f\u4f1a\u957f\u4e0e\u574f\u5c0f\u5b69\u5b66\u751f\u4f1a", value: "/series/YnKx" },
-  { title: "\u7ee7\u6bcd\uff0c\u6bd4\u6211\u8001\u5a46\u597d\u592a\u591a\u4e86\u2026", value: "/series/k42V" },
-  { title: "\u59d0\u59d0\u7684\u5de8\u5c3b\u592a\u4e0b\u6d41\uff0c\u79d2\u6740\u8bf1\u60d1", value: "/series/K4xv" },
-  { title: "\u53e3\u4ea4\u9884\u5907\u6821", value: "/series/WkEK" },
-  { title: "\u4f2a\u5a18\u7684\u81ea\u6170", value: "/series/qMEM" },
-  { title: "\u65e9\u4e0a\u597d\u76f4\u63a5\u63d2\u5165", value: "/series/kK46" },
-  { title: "\u5927\u53d4\u7684\u79c1\u62cd\u7eaa\u5f55\u7247", value: "/series/mJ6Z" },
-  { title: "\u5bb6\u755c\u4f2a\u5a18", value: "/series/2kEq" },
-  { title: "\u786c\u90a6\u90a6TV", value: "/series/wxEm" },
-  { title: "\u8ba4\u771f\u642d\u8baa\uff08Peters\uff09", value: "/series/WVPQ" },
-  { title: "\u771f\u5200\u771f\u67aa\u4e2d\u51fa\uff01\u9732\u8138\uff01\u4eba\u59bb\u642d\u8baa", value: "/series/WVeQ" },
-  { title: "\u4f60\uff0c\u5341\u591a\u5c81\uff0c\u604b\u7231\u7684\u9884\u611f", value: "/series/PVJX" },
-  { title: "\u8fa3\u59b9\u820c\u6280\u5bcc\u7fc1", value: "/series/3Eab" },
-  { title: "\u8fa3\u59b9Instagram", value: "/series/4nbZ" },
-  { title: "\u95ea\u4eae\u59bb\u5b50", value: "/series/2gXp" },
-  { title: "\u6414\u75d2\u604b\u7269", value: "/series/1WAn" },
-  { title: "\u6414\u75d2\u73a9\u6cd5", value: "/series/rDwz" },
-  { title: "\u4e0a\u763e\u7ffb\u767d\u773c\u7d20\u4eba\u67d0\u67d0", value: "/series/39w3" },
-  { title: "\u4e0d\u7518\u5fc3\u6240\u4ee5\u8bf7\u76f4\u63a5\u53d1\u884cAV", value: "/series/z595" },
-  { title: "\u4e0b\u6d41\u81f3\u6781\u7684\u5f71\u50cf", value: "/series/de29" },
-  { title: "\u522b\u770b\u8fd9\u6837\u5176\u5b9e\u5e26\u7740\u8089\u68d2", value: "/series/48Q6" },
-  { title: "THE \u7834\u5904", value: "/series/Yg8" },
-  { title: "THE \u5931\u53bb\u5904\u5973", value: "/series/EnXJ" },
-  { title: "THE \u9762\u8bd5", value: "/series/MbmP" },
-  { title: "THE \u955c\u5934\u8bd5\u955c", value: "/series/pk3B" },
-  { title: "THE \u642d\u8baa\u7279\u522b\u7bc7", value: "/series/A9Dn" },
-  { title: "THE \u9b54\u955c", value: "/series/wkBB" },
-  { title: "\u900f\u89c6\u4e4b\u7231", value: "/series/NPAN" },
-  { title: "\u77ed\u7bc7\u6545\u4e8b", value: "/series/Ak2m" },
-  { title: "\u6b63\u592a\u541b\u7684\u8272\u60c5\u6076\u4f5c\u5267", value: "/series/bee" },
-  { title: "\u7d20\u4eba\u5173\u897f\u63f4\u4ea4\uff08\u4e2d\u7530\u6c0f\uff09", value: "/series/RXAD" },
-  { title: "\u7d20\u4eba\u89c2\u5bdf \u5b9e\u9a8c", value: "/series/39BD" },
-  { title: "\u7d20\u4eba\u5a18\u642d\u8baa\u72e9\u730e", value: "/series/7G6V" },
-  { title: "\u4eba\u683c\u64cd\u4f5c\u6d17\u8111\u50ac\u7720", value: "/series/54b7" },
-  { title: "\u8d85\u7ea7\u5973\u82f1\u96c4\u652f\u914d\u5730\u72f1", value: "/series/7EM" },
-  { title: "\u65af\u5bbe\u585e\u4e73\u817a\u5f00\u53d1\u8bca\u6240", value: "/series/AzZ0" },
-  { title: "\u8981\u505a\u7231\u7684\u8bdd\u7edd\u5bf9\u9009\u5730\u65b9\u4eba\u59bb", value: "/series/gz9q" },
-  { title: "\u540d\u5a9bDX", value: "/series/4d0J" },
-  { title: "\u540d\u5a9b\u91d1\u53d1", value: "/series/bze" },
-  { title: "\u98de\u9556\u642d\u8baa in Tokyo", value: "/series/WZ27" },
-  { title: "\u53ea\u56f4\u4e00\u6761\u6bdb\u5dfe \u8981\u4e0d\u8981\u8fdb\u7537\u6c64\uff1f", value: "/series/dgy8" },
-  { title: "\u65c5\u60c5", value: "/series/ZN36" },
-  { title: "\u548c\u8c01\u90fd\u53ef\u4ee5\u5b9a\u989d\u968f\u4fbf\u63d2", value: "/series/w8X2" },
-  { title: "\u6311\u6218\uff01\u5b9a\u65f6\u8df3\u86cb", value: "/series/ZK38" },
-  { title: "\u7eaa\u5f55TV\u00d7PRESTIGE PREMIUM \u53ef\u4ee5\u9001\u4f60\u56de\u5bb6\u5417\uff1f", value: "/series/WyE8" },
-  { title: "\u53ea\u9650\u8fd9\u91cc", value: "/series/qrD" },
-  { title: "\u80fd\u505a\u5230\u54ea\u4e00\u6b65\uff01\uff1f", value: "/series/Ww7p" },
-  { title: "\u8d85\u4e0b\u6d41\u516c\u516c\u73a9\u5f04\u513f\u5ab3", value: "/series/0eV0" },
-  { title: "Dream Woman", value: "/series/Nwz3" },
-  { title: "Dream Shower", value: "/series/39D" },
-  { title: "\u65e0\u5957\u4e2d\u51fa", value: "/series/45a" },
-  { title: "\u65e0\u5957\u62bd\u63d2\u77ed\u89c6\u9891", value: "/series/GKAQ" },
-  { title: "\u642d\u8baa\u5e26\u56de\u5bb6\u6027\u7231\u5077\u62cd\u00b7\u64c5\u81ea\u53d1\u884cAV", value: "/series/4dWG" },
-  { title: "\u642d\u8baa\u5e08\u5e26\u56de\u5bb6\u623f\u95f4\u5077\u62cd", value: "/series/d9Yg" },
-  { title: "\u642d\u8baaTV\u00d7PRESTIGE PREMIUM", value: "/series/6Qe7" },
-  { title: "\u642d\u8baa\u62bd\u63d2", value: "/series/ArpO" },
-  { title: "\u88ab\u642d\u8baa\u7684\u8272\u60c5\u7d20\u4eba\u5973\u6027\u4eec", value: "/series/9qZ6" },
-  { title: "\u4eba\u7c7b\u89c2\u5bdf", value: "/series/qM5P" },
-  { title: "\u88ab\u7eff\u7269\u8bed", value: "/series/9D3g" },
-  { title: "\u65e0\u526a\u8f91\u7cbe\u9009", value: "/series/awxp" },
-  { title: "\u540e\u5bab\u9020\u4eba", value: "/series/bK0v" },
-  { title: "\u8d85\u7ea7\u6570\u7801\u9a6c\u8d5b\u514b", value: "/series/rmRA" },
-  { title: "\u8d85\u7ea7\u7cbe\u9009", value: "/series/32g0" },
-  { title: "\u5976\u5b50\u6469\u64e6\u5b50", value: "/series/D6O3" },
-  { title: "\u62bd\u63d2\u62cd\u6444", value: "/series/Vg3A" },
-  { title: "\u7b2c\u4e00\u6b21\u5927\u00b7\u75c9\u00b7\u631b\u7279\u522b\u7bc7", value: "/series/nKV4" },
-  { title: "\u7b2c\u4e00\u6b21\u65e0\u5957\u4e2d\u51fa\uff08\u672c\u4e2d\uff09", value: "/series/qdnr" },
-  { title: "\u88f8\u4f53\u592a\u592a", value: "/series/XWpM" },
-  { title: "\u88f8\u4f53\u5bb6\u653f\u5987", value: "/series/vDPO" },
-  { title: "\u53d1\u73b0\u7f8e\u5c11\u5973 Revolution", value: "/series/Zvq" },
-  { title: "Hunter Black", value: "/series/5bb8" },
-  { title: "\u72ec\u81ea\u5973\u5b50\u65c5\u884c\u642d\u8baa", value: "/series/XVz1" },
-  { title: "\u548c\u7a7f\u9774\u7f8e\u9b54\u5973\u65e0\u5957\u4ea4\u5c3e", value: "/series/WAG7" },
-  { title: "\u5730\u4e0b\u60c5\u82722\u697c", value: "/series/eOnM" },
-  { title: "Premium\u7cbe\u9009", value: "/series/Mn51" },
-  { title: "\u4ea8\u5229\u51a2\u672c", value: "/series/Yae" },
-  { title: "\u8ba4\u771f\u642d\u8baa\uff0c\u521d\u6b21\u62cd\u6444", value: "/series/wkan" },
-  { title: "\u9b54\u955c\u8f66", value: "/series/AgO" },
-  { title: "\u9b54\u955c\u53f7\u62cd\u5b8c\u5373\u51fa", value: "/series/dVKv" },
-  { title: "\u9b54\u955c\u53f7\u786c\u6838", value: "/series/evaN" },
-  { title: "\u9b54\u955c\u7684\u53e6\u4e00\u8fb9\u662f\u67d0\u67d0", value: "/series/MqBX" },
-  { title: "\u6309\u6469\u4e2d\u51fa\u6027\u7231", value: "/series/54DB" },
-  { title: "\u7231\u597d\u8005\u4ff1\u4e50\u90e8\u8d23\u4efb\u76d1\u4fee", value: "/series/bRmP" },
-  { title: "\u7231\u597d\u8005\u4ff1\u4e50\u90e8\u8c6a\u534e\u7248", value: "/series/1REw" },
-  { title: "\u5403\u6389\u5988\u5988\u7684\u670b\u53cb", value: "/series/8wW3" },
-  { title: "\u6bcd\u5b50\u6b63\u592a\u5b9e\u8bdd", value: "/series/4V6b" },
-  { title: "\u5988\u5988\u7684\u771f\u5b9e\u6027\u6559\u80b2", value: "/series/1Bb4" },
-  { title: "\u673a\u5bc6\u5077\u62cd\u5f71\u50cf\u6d41\u51fa", value: "/series/QW49" },
-  { title: "\u4f20\u9500\u4e4b\u5973", value: "/series/pYDB" },
-  { title: "\u6574\u5305\u6253\u5305", value: "/series/vDnz" },
-  { title: "\u5168\u90e8\u6253\u5305", value: "/series/P2A9" },
-  { title: "\u770b\u4f53\u80b2", value: "/series/der8" },
-  { title: "\u90ae\u4ef6\u5373\u63d2\u4fbf", value: "/series/YMJp" },
-  { title: "\u7537\u58eb\u6309\u6469\u5077\u62cd", value: "/series/rvdZ" },
-  { title: "\u70ae\u53cb\u793e\u56e2\u5973\u5b50", value: "/series/0wOa" },
-  { title: "\u5962\u534eTV", value: "/series/YrB8" },
-  { title: "\u5962\u534eTV\u00d7PRESTIGE", value: "/series/D2GJ" },
-  { title: "\u60c5\u4eba\u65c5\u9986\u7eaa\u5f55\u7247\u4f11\u606f2\u5c0f\u65f6", value: "/series/94Yq" },
-  { title: "\u771f\u5b9e\u642d\u8baa", value: "/series/p5nq" },
-  { title: "\u771f\u5b9e\u89c2\u5bdf\u5b9e\u9a8c", value: "/series/7akd" },
-  { title: "Luna\u65ec\u9999\u820d", value: "/series/DWDa" },
-  { title: "Ruby\u5e74\u9274", value: "/series/1k4" },
-  { title: "\u7ea2\u7a81\u51fb\u961f \u589e\u520a\u53f7", value: "/series/2GeZ" },
-  { title: "\u7ea2\u7a81\u51fb\u961f\u7cfb\u5217", value: "/series/ayr4" },
-  { title: "\u79df\u8d41\u5973\u53cb", value: "/series/R2RR" },
-  { title: "\u79df\u8d41\u5973\u53cb\u00d7PRESTIGE PREMIUM", value: "/series/WyAe" },
-  { title: "\u79df\u8d41\u719f\u5973\u7684\u5de5\u4f5c", value: "/series/yd2d" },
-  { title: "\u5728\u6d1b\u6749\u77f6\u642d\u8baa\u7684\u67d0\u67d0\u88ab\u64c5\u81eaAV\u51fa\u9053", value: "/series/7q9V" },
-  { title: "\u841d\u8389\u4e13\u79d1", value: "/series/eK1" },
-  { title: "Waka\u5b9e\u9a8c\u5ba4", value: "/series/P8rr" },
-  { title: "\u8089\u7f1d\u9171", value: "/series/aW7W" },
-];
-
-var JAVDB_TAG_OPTIONS = [
-  { title: "\u4e2d\u6587\u5b57\u5e55", value: "search:中文字幕" },
-  { title: "VR", value: "search:VR" },
-  { title: "\u5de8\u4e73", value: "search:巨乳" },
-  { title: "\u7f8e\u4e73", value: "search:美乳" },
-  { title: "\u4e2d\u51fa", value: "search:中出" },
-  { title: "\u989c\u5c04", value: "search:颜射" },
-  { title: "\u53e3\u4ea4", value: "search:口交" },
-  { title: "\u4eba\u59bb", value: "search:人妻" },
-  { title: "\u719f\u5973", value: "search:熟女" },
-  { title: "\u5b66\u751f", value: "search:學生" },
-  { title: "OL", value: "search:OL" },
-  { title: "\u62a4\u58eb", value: "search:护士" },
-  { title: "\u6559\u5e08", value: "search:教师" },
-  { title: "NTR", value: "search:NTR" },
-  { title: "SM", value: "search:SM" },
-  { title: "\u8c03\u6559", value: "search:调教" },
-  { title: "\u5c48\u8fb1", value: "search:屈辱" },
-  { title: "\u65e0\u7801\u6d41\u51fa", value: "search:无码流出" },
-  { title: "\u8fde\u88e4\u889c", value: "search:连裤袜" },
-  { title: "\u7d20\u4eba", value: "search:素人" },
-  { title: "FC2", value: "search:FC2" },
-];
-
-var JAVDB_MAKER_OPTIONS = [
-  { title: "S1", value: "/makers/7R" },
-  { title: "MOODYZ", value: "/makers/zKW" },
-  { title: "\u521b\u610f\u53e3\u888b", value: "search:Ideapocket" },
-  { title: "\u5c0a\u7235", value: "search:Prestige" },
-  { title: "FALENO", value: "search:FALENO" },
-  { title: "\u5723\u6bcd", value: "search:Madonna" },
-  { title: "SOD", value: "search:SOD" },
-  { title: "\u653b\u51fb\u8005", value: "search:Attackers" },
-  { title: "E-BODY", value: "search:E-BODY" },
-  { title: "\u53ef\u7231", value: "search:kawaii" },
-  { title: "\u81ea\u7136\u55e8", value: "search:Natural High" },
-  { title: "HEYZO", value: "search:HEYZO" },
-  { title: "\u4e07\u8c61\u5de5\u5382", value: "search:WANZ" },
-  { title: "\u4f18\u8d28", value: "search:PREMIUM" },
-  { title: "OPPAI", value: "search:OPPAI" },
-  { title: "\u672c\u4e2d", value: "search:Honnaka" },
-  { title: "Das!", value: "search:DASDAS" },
-  { title: "\u672c\u4e2d", value: "search:本中" },
-  { title: "\u7ef4\u4ed6\u547d", value: "search:Vitamin" },
-  { title: "\u7231\u4e3d\u4e1d\u65e5\u672c", value: "search:Alice Japan" },
-];
-
-/* @category-options-end */
 
 /* ===== module: 02-config.js ===== */
 
@@ -970,6 +78,1223 @@ var DEVICE_DEFAULTS = {
   app_channel: "AppStore",
 };
 
+/* ===== module: 15-visual-browse-modules.js ===== */
+
+/* ========================= 可视化浏览/榜单模块元数据 ========================= */
+/* 自 解密javdb.可视化.js 抽取：厂牌 / 分类 / 无码·FC2·欧美榜 / Top250 */
+
+var VISUAL_TOP250_MODULE = {
+      id: 'top250',
+      title: 'TOP250',
+      functionName: 'loadTop250',
+      cacheDuration: 3600,
+      params: [
+        {
+          name: 'ranking_type',
+          title: '榜单类型',
+          type: 'enumeration',
+          value: 'all',
+          enumOptions: [
+            {
+              title: '综合',
+              value: 'all',
+            },
+            {
+              title: '有码',
+              value: 'type_0',
+            },
+            {
+              title: '无码',
+              value: 'type_1',
+            },
+            {
+              title: 'FC2',
+              value: 'type_3',
+            },
+            {
+              title: '欧美',
+              value: 'type_2',
+            },
+            {
+              title: '2026年',
+              value: '2026',
+            },
+            {
+              title: '2025年',
+              value: '2025',
+            },
+            {
+              title: '2024年',
+              value: '2024',
+            },
+            {
+              title: '2023年',
+              value: '2023',
+            },
+            {
+              title: '2022年',
+              value: '2022',
+            },
+            {
+              title: '2021年',
+              value: '2021',
+            },
+            {
+              title: '2020年',
+              value: '2020',
+            },
+            {
+              title: '2019年',
+              value: '2019',
+            },
+            {
+              title: '2018年',
+              value: '2018',
+            },
+            {
+              title: '2017年',
+              value: '2017',
+            },
+            {
+              title: '2016年',
+              value: '2016',
+            },
+            {
+              title: '2015年',
+              value: '2015',
+            },
+            {
+              title: '2014年',
+              value: '2014',
+            },
+            {
+              title: '2013年',
+              value: '2013',
+            },
+            {
+              title: '2012年',
+              value: '2012',
+            },
+            {
+              title: '2011年',
+              value: '2011',
+            },
+            {
+              title: '2010年',
+              value: '2010',
+            },
+            {
+              title: '2009年',
+              value: '2009',
+            },
+            {
+              title: '2008年',
+              value: '2008',
+            },
+          ],
+        },
+        {
+          name: 'rank_display_style',
+          title: '图样式',
+          type: 'enumeration',
+          value: 'poster',
+          enumOptions: [
+            {
+              title: '竖图（海报）',
+              value: 'poster',
+            },
+            {
+              title: '横图（宽屏）',
+              value: 'backdrop',
+            },
+          ],
+        },
+        {
+          name: 'page',
+          title: '页码',
+          type: 'page',
+        },
+      ],
+    };
+
+var VISUAL_UNCENSORED_MODULE = {
+      id: 'loadUncensored',
+      title: '无码榜',
+      functionName: 'loadUncensored',
+      cacheDuration: 86400,
+      params: [
+        {
+          name: 'period',
+          title: '周期',
+          type: 'enumeration',
+          value: 'daily',
+          enumOptions: [
+            {
+              title: '日榜',
+              value: 'daily',
+            },
+            {
+              title: '周榜',
+              value: 'weekly',
+            },
+            {
+              title: '月榜',
+              value: 'monthly',
+            },
+          ],
+        },
+        {
+          name: 'sort_by',
+          title: '快速切换',
+          type: 'enumeration',
+          value: '',
+          enumOptions: [
+            {
+              title: '周期选择',
+              value: '',
+            },
+            {
+              title: '日榜',
+              value: 'daily',
+            },
+            {
+              title: '周榜',
+              value: 'weekly',
+            },
+            {
+              title: '月榜',
+              value: 'monthly',
+            },
+          ],
+        },
+        {
+          name: 'rank_display_style',
+          title: '图样式',
+          type: 'enumeration',
+          value: 'backdrop',
+          enumOptions: [
+            {
+              title: '横图（宽屏）',
+              value: 'backdrop',
+            },
+            {
+              title: '竖图（海报）',
+              value: 'poster',
+            },
+          ],
+        },
+        {
+          name: 'page',
+          title: '页码',
+          type: 'page',
+        },
+      ],
+    };
+
+var VISUAL_FC2_MODULE = {
+      id: 'loadFC2',
+      title: 'FC2 榜',
+      functionName: 'loadFC2',
+      cacheDuration: 86400,
+      params: [
+        {
+          name: 'period',
+          title: '周期',
+          type: 'enumeration',
+          value: 'daily',
+          enumOptions: [
+            {
+              title: '日榜',
+              value: 'daily',
+            },
+            {
+              title: '周榜',
+              value: 'weekly',
+            },
+            {
+              title: '月榜',
+              value: 'monthly',
+            },
+          ],
+        },
+        {
+          name: 'sort_by',
+          title: '快速切换',
+          type: 'enumeration',
+          value: '',
+          enumOptions: [
+            {
+              title: '周期选择',
+              value: '',
+            },
+            {
+              title: '日榜',
+              value: 'daily',
+            },
+            {
+              title: '周榜',
+              value: 'weekly',
+            },
+            {
+              title: '月榜',
+              value: 'monthly',
+            },
+          ],
+        },
+        {
+          name: 'rank_display_style',
+          title: '图样式',
+          type: 'enumeration',
+          value: 'backdrop',
+          enumOptions: [
+            {
+              title: '横图（宽屏）',
+              value: 'backdrop',
+            },
+            {
+              title: '竖图（海报）',
+              value: 'poster',
+            },
+          ],
+        },
+        {
+          name: 'page',
+          title: '页码',
+          type: 'page',
+        },
+      ],
+    };
+
+var VISUAL_WESTERN_MODULE = {
+      id: 'loadWestern',
+      title: '欧美榜',
+      functionName: 'loadWestern',
+      cacheDuration: 86400,
+      params: [
+        {
+          name: 'period',
+          title: '周期',
+          type: 'enumeration',
+          value: 'daily',
+          enumOptions: [
+            {
+              title: '日榜',
+              value: 'daily',
+            },
+            {
+              title: '周榜',
+              value: 'weekly',
+            },
+            {
+              title: '月榜',
+              value: 'monthly',
+            },
+          ],
+        },
+        {
+          name: 'sort_by',
+          title: '快速切换',
+          type: 'enumeration',
+          value: '',
+          enumOptions: [
+            {
+              title: '周期选择',
+              value: '',
+            },
+            {
+              title: '日榜',
+              value: 'daily',
+            },
+            {
+              title: '周榜',
+              value: 'weekly',
+            },
+            {
+              title: '月榜',
+              value: 'monthly',
+            },
+          ],
+        },
+        {
+          name: 'rank_display_style',
+          title: '图样式',
+          type: 'enumeration',
+          value: 'backdrop',
+          enumOptions: [
+            {
+              title: '横图（宽屏）',
+              value: 'backdrop',
+            },
+            {
+              title: '竖图（海报）',
+              value: 'poster',
+            },
+          ],
+        },
+        {
+          name: 'page',
+          title: '页码',
+          type: 'page',
+        },
+      ],
+    };
+
+var VISUAL_MAKER_MODULE = {
+      id: 'loadMaker',
+      title: '厂牌',
+      functionName: 'loadMaker',
+      cacheDuration: 86400,
+      params: [
+        {
+          name: 'maker',
+          title: '厂牌',
+          type: 'enumeration',
+          value: '7R',
+          enumOptions: [
+            {
+              title: 'S1 NO.1 STYLE',
+              value: '7R',
+            },
+            {
+              title: 'SOD Create',
+              value: 'q6',
+            },
+            {
+              title: 'MOODYZ',
+              value: 'zKW',
+            },
+            {
+              title: 'FALENO',
+              value: 'Y46',
+            },
+            {
+              title: 'PRESTIGE,プレステージ',
+              value: '6M',
+            },
+            {
+              title: 'ABC/妄想族',
+              value: 'DYK',
+            },
+            {
+              title: 'ナチュラルハイ',
+              value: 'gZ',
+            },
+            {
+              title: 'ワープエンタテインメント',
+              value: 'e1',
+            },
+            {
+              title: '変态紳士倶楽部',
+              value: 'ARy',
+            },
+            {
+              title: 'JET映像',
+              value: 'zbJ',
+            },
+            {
+              title: 'ROOKIE',
+              value: 'JAA',
+            },
+            {
+              title: 'Hunter',
+              value: '2Vm',
+            },
+            {
+              title: 'Jackson',
+              value: 'GP2q',
+            },
+            {
+              title: 'セレブの友',
+              value: 'deB',
+            },
+            {
+              title: 'LEO',
+              value: 'zW',
+            },
+            {
+              title: '山と空',
+              value: 'AEO',
+            },
+            {
+              title: 'ミル',
+              value: '4dR',
+            },
+            {
+              title: '犬/妄想族',
+              value: 'mw5',
+            },
+            {
+              title: 'DAHLIA',
+              value: '5458',
+            },
+            {
+              title: 'ケイ・エム・プロデュース',
+              value: '8V9',
+            },
+            {
+              title: 'プレステージプレミアム(PRESTIGE PREMIUM)',
+              value: 'Qap',
+            },
+            {
+              title: '桃太郎映像出版',
+              value: 'pk',
+            },
+            {
+              title: 'アイエナジー',
+              value: 'W7',
+            },
+            {
+              title: 'LUNATICS',
+              value: '557',
+            },
+            {
+              title: 'シロウトTV',
+              value: 'Jnxd',
+            },
+            {
+              title: 'DANDY',
+              value: '1EW',
+            },
+            {
+              title: 'ダスッ！',
+              value: 'ZyP',
+            },
+            {
+              title: '溜池ゴロー',
+              value: 'Ww7',
+            },
+            {
+              title: '本中',
+              value: '89V',
+            },
+            {
+              title: 'ディープス',
+              value: 'D8',
+            },
+            {
+              title: 'バビロン/妄想族',
+              value: 'Qvyq',
+            },
+            {
+              title: '美',
+              value: 'aeX',
+            },
+            {
+              title: 'E-BODY',
+              value: 'bgA',
+            },
+            {
+              title: 'ラグジュTV',
+              value: 'mbW5',
+            },
+            {
+              title: 'S-Cute',
+              value: 'gBA',
+            },
+            {
+              title: 'IDEA POCKET',
+              value: 'ZXX',
+            },
+            {
+              title: 'OPPAI',
+              value: 'p3k',
+            },
+            {
+              title: 'VENUS',
+              value: 'OXz',
+            },
+            {
+              title: 'AVS',
+              value: '363',
+            },
+            {
+              title: 'マックスエー',
+              value: '96p',
+            },
+            {
+              title: 'クリスタル映像',
+              value: 'KQ',
+            },
+            {
+              title: 'アリスJAPAN',
+              value: 'J2x',
+            },
+            {
+              title: 'Fitch',
+              value: 'Aby',
+            },
+            {
+              title: 'Glory Quest',
+              value: 'W17',
+            },
+            {
+              title: 'kira★kira',
+              value: 'Rkg',
+            },
+            {
+              title: 'kawaii',
+              value: 'rmZ',
+            },
+            {
+              title: 'MARRION',
+              value: '647',
+            },
+            {
+              title: 'Attackers',
+              value: 'Ywz',
+            },
+            {
+              title: 'Digital Ark',
+              value: 'RGD',
+            },
+            {
+              title: 'エムズビデオグループ',
+              value: 'dZ0',
+            },
+            {
+              title: 'マドンナ(Madonna)',
+              value: '35e',
+            },
+            {
+              title: 'ROYAL',
+              value: 'kBvm',
+            },
+            {
+              title: 'h.m.p',
+              value: 'xZg',
+            },
+            {
+              title: 'プレミアム',
+              value: '8Xd',
+            },
+            {
+              title: 'ワンズファクトリー',
+              value: '333',
+            },
+            {
+              title: 'オフサイドトラップ',
+              value: 'DPDp',
+            },
+            {
+              title: 'グラッツコーポレーション',
+              value: 'd49',
+            },
+            {
+              title: 'ビビアン',
+              value: 'J0R',
+            },
+            {
+              title: 'Air control',
+              value: '32D',
+            },
+            {
+              title: 'FAIR&WAY',
+              value: '8BEK',
+            },
+            {
+              title: 'MARLOMEDIA',
+              value: 'xeRV',
+            },
+          ],
+        },
+        {
+          name: 'sort_by',
+          title: '排序',
+          type: 'enumeration',
+          value: 'release_desc',
+          enumOptions: [
+            {
+              title: '📅 从新到旧',
+              value: 'release_desc',
+            },
+            {
+              title: '📅 从旧到新',
+              value: 'release_asc',
+            },
+            {
+              title: '⭐ 评分最高',
+              value: 'score',
+            },
+            {
+              title: '🧲 有磁力',
+              value: 'magnets',
+            },
+          ],
+        },
+        {
+          name: 'page',
+          title: '页码',
+          type: 'page',
+        },
+      ],
+    };
+
+var VISUAL_CATEGORY_MODULE = {
+      id: 'loadCategory',
+      title: '分类',
+      functionName: 'loadCategory',
+      cacheDuration: 86400,
+      params: [
+        {
+          name: 'category',
+          title: '分类',
+          type: 'enumeration',
+          value: 'subject',
+          enumOptions: [
+            {
+              title: '主题',
+              value: 'subject',
+            },
+            {
+              title: '角色',
+              value: 'role',
+            },
+            {
+              title: '服装',
+              value: 'cloth',
+            },
+            {
+              title: '体型',
+              value: 'body',
+            },
+            {
+              title: '行为',
+              value: 'behavior',
+            },
+            {
+              title: '玩法',
+              value: 'play_method',
+            },
+            {
+              title: '类别',
+              value: 'category',
+            },
+            {
+              title: '时长',
+              value: 'duration',
+            },
+          ],
+        },
+        {
+          name: 'tag_subject',
+          title: '标签',
+          type: 'enumeration',
+          value: '淫乱真实',
+          belongTo: {
+            paramName: 'category',
+            value: ['subject'],
+          },
+          enumOptions: [
+            {
+              title: '淫乱真实',
+              value: '淫乱真实',
+            },
+            {
+              title: '出轨',
+              value: '出轨',
+            },
+            {
+              title: '强奸',
+              value: '强奸',
+            },
+            {
+              title: '乱伦',
+              value: '乱伦',
+            },
+            {
+              title: '女同性恋',
+              value: '女同性恋',
+            },
+            {
+              title: '偷窥',
+              value: '偷窥',
+            },
+            {
+              title: '处女',
+              value: '处女',
+            },
+            {
+              title: '性爱',
+              value: '性爱',
+            },
+            {
+              title: 'M男',
+              value: 'M男',
+            },
+            {
+              title: '恋物癖',
+              value: '恋物癖',
+            },
+            {
+              title: '温泉',
+              value: '温泉',
+            },
+            {
+              title: '纯欲',
+              value: '纯欲',
+            },
+            {
+              title: '绝顶高潮',
+              value: '绝顶高潮',
+            },
+            {
+              title: '奴隶',
+              value: '奴隶',
+            },
+          ],
+        },
+        {
+          name: 'tag_role',
+          title: '标签',
+          type: 'enumeration',
+          value: '高中女生',
+          belongTo: {
+            paramName: 'category',
+            value: ['role'],
+          },
+          enumOptions: [
+            {
+              title: '高中女生',
+              value: '高中女生',
+            },
+            {
+              title: '美少女',
+              value: '美少女',
+            },
+            {
+              title: '已婚妇女',
+              value: '已婚妇女',
+            },
+            {
+              title: '姐姐',
+              value: '姐姐',
+            },
+            {
+              title: '母亲',
+              value: '母亲',
+            },
+            {
+              title: '辣妹',
+              value: '辣妹',
+            },
+            {
+              title: '女教师',
+              value: '女教师',
+            },
+            {
+              title: '女大学生',
+              value: '女大学生',
+            },
+            {
+              title: '偶像',
+              value: '偶像',
+            },
+            {
+              title: '护士',
+              value: '护士',
+            },
+            {
+              title: '妹妹',
+              value: '妹妹',
+            },
+            {
+              title: '模特儿',
+              value: '模特儿',
+            },
+            {
+              title: '秘书',
+              value: '秘书',
+            },
+            {
+              title: '新娘',
+              value: '新娘',
+            },
+            {
+              title: '荡妇',
+              value: '荡妇',
+            },
+          ],
+        },
+        {
+          name: 'tag_cloth',
+          title: '标签',
+          type: 'enumeration',
+          value: '眼镜',
+          belongTo: {
+            paramName: 'category',
+            value: ['cloth'],
+          },
+          enumOptions: [
+            {
+              title: '眼镜',
+              value: '眼镜',
+            },
+            {
+              title: '角色扮演',
+              value: '角色扮演',
+            },
+            {
+              title: '内衣',
+              value: '内衣',
+            },
+            {
+              title: '制服',
+              value: '制服',
+            },
+            {
+              title: '水手服',
+              value: '水手服',
+            },
+            {
+              title: '泳装',
+              value: '泳装',
+            },
+            {
+              title: '连裤袜',
+              value: '连裤袜',
+            },
+            {
+              title: '女佣',
+              value: '女佣',
+            },
+            {
+              title: 'OL',
+              value: 'OL',
+            },
+            {
+              title: '迷你裙',
+              value: '迷你裙',
+            },
+            {
+              title: '旗袍',
+              value: '旗袍',
+            },
+            {
+              title: '兔女郎',
+              value: '兔女郎',
+            },
+            {
+              title: '和服',
+              value: '和服',
+            },
+            {
+              title: '裸体围裙',
+              value: '裸体围裙',
+            },
+          ],
+        },
+        {
+          name: 'tag_body',
+          title: '标签',
+          type: 'enumeration',
+          value: '熟女',
+          belongTo: {
+            paramName: 'category',
+            value: ['body'],
+          },
+          enumOptions: [
+            {
+              title: '熟女',
+              value: '熟女',
+            },
+            {
+              title: '巨乳',
+              value: '巨乳',
+            },
+            {
+              title: '萝莉塔',
+              value: '萝莉塔',
+            },
+            {
+              title: '无毛',
+              value: '无毛',
+            },
+            {
+              title: '美臀',
+              value: '美臀',
+            },
+            {
+              title: '苗条',
+              value: '苗条',
+            },
+            {
+              title: '美乳',
+              value: '美乳',
+            },
+            {
+              title: '素人',
+              value: '素人',
+            },
+            {
+              title: '平胸',
+              value: '平胸',
+            },
+            {
+              title: '孕妇',
+              value: '孕妇',
+            },
+            {
+              title: '高挑',
+              value: '高挑',
+            },
+            {
+              title: '瘦小身型',
+              value: '瘦小身型',
+            },
+            {
+              title: '美脚',
+              value: '美脚',
+            },
+            {
+              title: '肌肉',
+              value: '肌肉',
+            },
+          ],
+        },
+        {
+          name: 'tag_behavior',
+          title: '标签',
+          type: 'enumeration',
+          value: '乳交',
+          belongTo: {
+            paramName: 'category',
+            value: ['behavior'],
+          },
+          enumOptions: [
+            {
+              title: '乳交',
+              value: '乳交',
+            },
+            {
+              title: '中出',
+              value: '中出',
+            },
+            {
+              title: '多P',
+              value: '多P',
+            },
+            {
+              title: '69',
+              value: '69',
+            },
+            {
+              title: '淫语',
+              value: '淫语',
+            },
+            {
+              title: '自慰',
+              value: '自慰',
+            },
+            {
+              title: '颜射',
+              value: '颜射',
+            },
+            {
+              title: '潮吹',
+              value: '潮吹',
+            },
+            {
+              title: '口交',
+              value: '口交',
+            },
+            {
+              title: '肛门肛交',
+              value: '肛门肛交',
+            },
+            {
+              title: '足交',
+              value: '足交',
+            },
+            {
+              title: '接吻',
+              value: '接吻',
+            },
+            {
+              title: '吞精',
+              value: '吞精',
+            },
+            {
+              title: '骑乘位',
+              value: '骑乘位',
+            },
+            {
+              title: '手淫',
+              value: '手淫',
+            },
+          ],
+        },
+        {
+          name: 'tag_play_method',
+          title: '标签',
+          type: 'enumeration',
+          value: '凌辱',
+          belongTo: {
+            paramName: 'category',
+            value: ['play_method'],
+          },
+          enumOptions: [
+            {
+              title: '凌辱',
+              value: '凌辱',
+            },
+            {
+              title: '捆绑',
+              value: '捆绑',
+            },
+            {
+              title: '轮奸',
+              value: '轮奸',
+            },
+            {
+              title: '玩具',
+              value: '玩具',
+            },
+            {
+              title: 'SM',
+              value: 'SM',
+            },
+            {
+              title: '户外',
+              value: '户外',
+            },
+            {
+              title: '羞耻',
+              value: '羞耻',
+            },
+            {
+              title: '调教',
+              value: '调教',
+            },
+            {
+              title: '催眠',
+              value: '催眠',
+            },
+            {
+              title: '监禁',
+              value: '监禁',
+            },
+            {
+              title: '露出',
+              value: '露出',
+            },
+            {
+              title: '汽车性爱',
+              value: '汽车性爱',
+            },
+            {
+              title: '紧缚',
+              value: '紧缚',
+            },
+            {
+              title: '拘束',
+              value: '拘束',
+            },
+          ],
+        },
+        {
+          name: 'tag_category',
+          title: '标签',
+          type: 'enumeration',
+          value: '单体作品',
+          belongTo: {
+            paramName: 'category',
+            value: ['category'],
+          },
+          enumOptions: [
+            {
+              title: '单体作品',
+              value: '单体作品',
+            },
+            {
+              title: '首次亮相',
+              value: '首次亮相',
+            },
+            {
+              title: '经典',
+              value: '经典',
+            },
+            {
+              title: 'VR',
+              value: 'VR',
+            },
+            {
+              title: '4K',
+              value: '4K',
+            },
+            {
+              title: '无码流出',
+              value: '无码流出',
+            },
+            {
+              title: '薄马赛克',
+              value: '薄马赛克',
+            },
+            {
+              title: '业余',
+              value: '业余',
+            },
+            {
+              title: '主观视角',
+              value: '主观视角',
+            },
+            {
+              title: '3D',
+              value: '3D',
+            },
+            {
+              title: '西洋片',
+              value: '西洋片',
+            },
+            {
+              title: '写真偶像',
+              value: '写真偶像',
+            },
+            {
+              title: '感谢祭',
+              value: '感谢祭',
+            },
+            {
+              title: '数位马赛克',
+              value: '数位马赛克',
+            },
+          ],
+        },
+        {
+          name: 'tag_duration',
+          title: '标签',
+          type: 'enumeration',
+          value: '45分钟以内',
+          belongTo: {
+            paramName: 'category',
+            value: ['duration'],
+          },
+          enumOptions: [
+            {
+              title: '45分钟以内',
+              value: '45分钟以内',
+            },
+            {
+              title: '45-90分钟',
+              value: '45-90分钟',
+            },
+            {
+              title: '90-120分钟',
+              value: '90-120分钟',
+            },
+            {
+              title: '120分钟以上',
+              value: '120分钟以上',
+            },
+          ],
+        },
+        {
+          name: 'page',
+          title: '页码',
+          type: 'page',
+        },
+      ],
+    };
+
 /* ===== module: 03-metadata.js ===== */
 
 /* ========================= WidgetMetadata ========================= */
@@ -982,36 +1307,12 @@ function firstEnumValue(options) {
   return "";
 }
 
-function categoryParams(paramName, itemTitle, enumOptions) {
-  return [
-    {
-      name: paramName,
-      title: itemTitle,
-      type: "enumeration",
-      enumOptions: enumOptions,
-      value: firstEnumValue(enumOptions),
-    },
-    {
-      name: "sort_by",
-      title: "作品排序",
-      type: "enumeration",
-      enumOptions: [
-        { title: "最近上架(有磁力)", value: "published_download" },
-        { title: "最高评分(有磁力)", value: "score_download" },
-        { title: "最多收藏(有磁力)", value: "fav_download" },
-      ],
-      value: "published_download",
-    },
-    { name: "page", title: "作品页码", type: "page" },
-  ];
-}
-
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.7.0",
+  version: "4.9.0",
   requiredVersion: "0.0.1",
-  description: "JavDB API：最近更新 / TOP250 / 搜索 / 分类预填；详情磁力合并 JavDB/短评，一键转存光鸭",
+  description: "JavDB：榜单/厂牌/分类浏览；详情磁力转存光鸭，播放源匹配光鸭网盘",
   author: "老头",
   site: API_SITE,
   detailCacheDuration: 3600,
@@ -1054,7 +1355,7 @@ WidgetMetadata = {
       name: "guangya_token",
       title: "光鸭 refresh_token",
       type: "input",
-      description: "gy.- 开头；填写后详情页磁力栏点击可直转光鸭",
+      description: "gy.- 开头；用于磁力转存与详情播放源匹配网盘文件",
       value: "",
     },
     {
@@ -1081,6 +1382,15 @@ WidgetMetadata = {
   ],
   modules: [
     {
+      id: "loadResource",
+      title: "光鸭云盘",
+      description: "按番号自动匹配光鸭网盘文件作为播放源",
+      functionName: "loadResource",
+      type: "stream",
+      cacheDuration: 30,
+      params: [],
+    },
+    {
       id: "latest",
       title: "最近更新",
       description: "最新上架影片",
@@ -1097,24 +1407,8 @@ WidgetMetadata = {
         { name: "page", title: "页码", type: "page", value: "1" },
       ],
     },
-    {
-      id: "top250",
-      title: "TOP250",
-      description: "JavDB TOP250（需登录）",
-      functionName: "loadTop250",
-      cacheDuration: 3600,
-      params: [
-        {
-          name: "type",
-          title: "分类",
-          type: "enumeration",
-          enumOptions: TOP250_TYPE_ENUM,
-          value: "all",
-        },
-        { name: "page", title: "页码", type: "page", value: "1" },
-      ],
-    },
-    
+    VISUAL_TOP250_MODULE,
+
     {
       "id": "playbackRanking",
       "title": "热播榜",
@@ -2826,38 +3120,11 @@ WidgetMetadata = {
         }
       ]
     },
-{
-      id: "actors",
-      title: "演员",
-      description: "按演员分类浏览影片",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryParams("peopleId", "选择演员", JAVDB_ACTOR_OPTIONS),
-    },
-    {
-      id: "series",
-      title: "系列",
-      description: "按系列分类浏览影片",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryParams("genreId", "选择系列", JAVDB_SERIES_OPTIONS),
-    },
-    {
-      id: "tags",
-      title: "标签",
-      description: "按标签浏览影片",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryParams("genreId", "选择标签", JAVDB_TAG_OPTIONS),
-    },
-    {
-      id: "makers",
-      title: "片商",
-      description: "按片商浏览影片",
-      functionName: "loadPage",
-      cacheDuration: 3600,
-      params: categoryParams("genreId", "选择片商", JAVDB_MAKER_OPTIONS),
-    },
+    VISUAL_UNCENSORED_MODULE,
+    VISUAL_FC2_MODULE,
+    VISUAL_WESTERN_MODULE,
+    VISUAL_MAKER_MODULE,
+    VISUAL_CATEGORY_MODULE,
     {
       id: "search",
       title: "搜索",
@@ -2871,11 +3138,11 @@ WidgetMetadata = {
           title: "排序",
           type: "enumeration",
           enumOptions: [
-            { title: "最近上架(有磁力)", value: "published_download" },
-            { title: "最高评分(有磁力)", value: "score_download" },
-            { title: "最多收藏(有磁力)", value: "fav_download" },
+            { title: "最近上架", value: "published" },
+            { title: "最高评分", value: "score" },
+            { title: "最多收藏", value: "fav" },
           ],
-          value: "published_download",
+          value: "published",
         },
         { name: "page", title: "页码", type: "page", value: "1" },
       ],
@@ -3417,8 +3684,17 @@ async function ensureGlobalParams(params) {
 
 /* ========================= CategoryPath ========================= */
 
+function categoryParamValue(raw) {
+  if (raw && typeof raw === "object") {
+    if (raw.value !== undefined) return categoryParamValue(raw.value);
+    if (raw.id !== undefined) return categoryParamValue(raw.id);
+    return "";
+  }
+  return String(raw == null ? "" : raw).trim();
+}
+
 function splitIdTitle(raw) {
-  raw = String(raw || "").trim();
+  raw = categoryParamValue(raw);
   if (!raw) return { id: "", title: "" };
   var sep = raw.indexOf(ID_TITLE_SEP);
   if (sep < 0) return { id: raw, title: "" };
@@ -3460,9 +3736,9 @@ function isLibraryIndex(path) {
  */
 function resolveCategoryTarget(params) {
   params = syncParams(params || {});
-  var item = String(params.item || "").trim();
-  var peopleRaw = String(params.peopleId || "").trim();
-  var genreRaw = String(params.genreId || "").trim();
+  var item = categoryParamValue(params.item);
+  var peopleRaw = categoryParamValue(params.peopleId);
+  var genreRaw = categoryParamValue(params.genreId);
 
   if (item && !peopleRaw && !genreRaw) {
     var itemRef = splitIdTitle(item);
@@ -3479,9 +3755,10 @@ function resolveCategoryTarget(params) {
   if (people.title) params.categoryTitle = people.title;
   if (genre.title) params.categoryTitle = genre.title;
 
-  var sortRaw = String(params.sort_by || "published_download");
+  var sortRaw = categoryParamValue(params.sort_by) || "published";
   var sortKey = sortRaw.replace(/_download$/, "");
-  var magnetOnly = true;
+  // 旧排序缓存只决定排序，不再把所有分类强制限制为有磁力。
+  var magnetOnly = params.list_filter === "magnet";
   params.sort_by = SORT_API_MAP[sortKey] ? sortKey : "published";
 
   var ref = genre.id || people.id || "";
@@ -3519,7 +3796,7 @@ function resolveCategoryTarget(params) {
     var tPath = normalizePath(ref.charAt(0) === "/" ? ref : "/" + ref);
     var qMatch = tPath.match(/[?&](?:c\d+|q)=([^&]+)/i);
     var tagId = qMatch ? decodeURIComponent(qMatch[1]) : tPath.replace(/^\/tags\/?/, "");
-    if (!tagId || isLibraryIndex(tPath)) {
+    if (!tagId || (!qMatch && isLibraryIndex(tPath))) {
       return { kind: "tags", itemId: "", keyword: "", magnetOnly: magnetOnly, params: params };
     }
     return { kind: "tags", itemId: tagId, keyword: "", magnetOnly: magnetOnly, params: params };
@@ -3550,7 +3827,8 @@ function resolveCategoryTarget(params) {
 function categoryIdFromPath(path, title) {
   path = normalizePath(path);
   var bare = path.split("?")[0];
-  if (!path || isLibraryIndex(bare)) return joinIdTitle(SEARCH_PREFIX + (title || bare), "");
+  var selectedTag = /^\/tags\?/.test(path) && /[?&](?:c\d+|q)=([^&]+)/i.test(path);
+  if (!path || (isLibraryIndex(bare) && !selectedTag)) return joinIdTitle(SEARCH_PREFIX + (title || bare), "");
   var id = "";
   if (bare.indexOf("/actors/") === 0) id = bare;
   else if (bare.indexOf("/series/") === 0) id = bare;
@@ -4403,9 +4681,10 @@ function buildCategoryFilter(kind, itemId, magnetOnly) {
   var extra = magnetOnly ? "m" : "";
   if (kind === "tags") {
     if (/^[pmcsiv]$/i.test(id)) {
-      return typePart + ":0:x:" + id.toLowerCase() + (extra ? ":" + extra : "");
+      // p/m/c/s/i/v 已是原生资源筛选，不能再重复拼接 :m。
+      return typePart + ":0:x:" + id.toLowerCase();
     }
-    return typePart + ":t::" + id + (extra ? ":" + extra : "");
+    return typePart + ":t::" + id + ":" + extra;
   }
   var kindCode = CATEGORY_KIND_CODE[kind] || "a";
   return typePart + ":" + kindCode + ":" + id + ":" + extra;
@@ -4415,7 +4694,23 @@ function resolveSortQuery(sortBy) {
   return SORT_API_MAP[sortBy] || SORT_API_MAP.published;
 }
 
+function extractApiMovies(data, depth) {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== "object" || (depth || 0) > 3) return [];
+  var keys = ["movies", "videos", "items", "results", "data"];
+  for (var i = 0; i < keys.length; i++) {
+    var value = data[keys[i]];
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === "object") {
+      var nested = extractApiMovies(value, (depth || 0) + 1);
+      if (nested.length) return nested;
+    }
+  }
+  return [];
+}
+
 async function fetchCategoryMovies(filterBy, params) {
+  params = params || {};
   var page = Number(params.page || params.from || 1);
   var sort = resolveSortQuery(params.sort_by || "published");
   var data = await apiGet(
@@ -4429,7 +4724,8 @@ async function fetchCategoryMovies(filterBy, params) {
     },
     params
   );
-  return filterMoviesWithMagnets((data && data.movies) || []);
+  // 列表 API 不保证包含磁力统计，不能据此丢弃已返回的分类作品。
+  return extractApiMovies(data);
 }
 
 function categoryKindLabel(kind) {
@@ -4531,18 +4827,20 @@ async function fetchCategoryEntities(kind, params) {
 }
 
 async function fetchSearchMovies(keyword, params, magnetOnly) {
+  params = params || {};
   var page = Number(params.page || params.from || 1);
-  var sortRaw = String((params && params.sort_by) || "published_download");
+  var sortRaw = String(params.sort_by || "published");
   var sortKey = sortRaw.replace(/_download$/, "");
   var query = {
     q: keyword,
     page: page,
     type: "movie",
-    movie_filter_by: "magnet",
     movie_sort_by: SEARCH_SORT_MAP[sortKey] || "release",
   };
+  if (magnetOnly) query.movie_filter_by = "magnet";
   var data = await apiGet("/v2/search", query, params);
-  return filterMoviesWithMagnets((data && data.movies) || []);
+  // 列表 API 不保证包含磁力统计，不能据此丢弃已返回的分类作品。
+  return extractApiMovies(data);
 }
 
 function parseDetailMeta(movie) {
@@ -4897,10 +5195,13 @@ function magnetsFromReviews(reviews, code) {
 async function fetchMovieReviews(movieId, params, options) {
   options = options || {};
   var page = Number(options.page || 1) || 1;
-  var limit = Number(options.limit || 20) || 20;
-  var maxPages = Number(options.maxPages || 5) || 5;
+  var limit = Number(options.limit || 15) || 15;
+  // 详情页关键路径：默认最多 2 页，避免串行翻 5 页拖慢整页
+  var maxPages = Number(options.maxPages != null ? options.maxPages : 2) || 2;
+  var deadlineAt = Number(options.deadlineAt || 0) || 0;
   var all = [];
   for (var p = page; p < page + maxPages; p++) {
+    if (deadlineAt && Date.now() >= deadlineAt) break;
     var data;
     try {
       data = await apiGet("/v1/movies/" + movieId + "/reviews", { page: p, limit: limit }, params);
@@ -4913,6 +5214,32 @@ async function fetchMovieReviews(movieId, params, options) {
     if (list.length < limit) break;
   }
   return all;
+}
+
+function settleWithTimeout(promise, ms, fallback) {
+  ms = Math.max(500, Number(ms) || 0);
+  return new Promise(function (resolve) {
+    var done = false;
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      resolve(fallback);
+    }, ms);
+    Promise.resolve(promise).then(
+      function (value) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      function () {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      }
+    );
+  });
 }
 
 function collectMagnetSourceKeys(magnets) {
@@ -4952,6 +5279,9 @@ async function fetchDetailMagnets(movieId, params, code) {
   var apiMagnets = [];
   var reviewMagnets = [];
   var reviews = [];
+  var startedAt = Date.now();
+  // 详情页整体软超时：超过后用已拿到的结果，避免短评翻页卡住
+  var deadlineAt = startedAt + 8000;
 
   var magnetPromise = Promise.resolve()
     .then(function () {
@@ -4966,7 +5296,12 @@ async function fetchDetailMagnets(movieId, params, code) {
 
   var reviewPromise = Promise.resolve()
     .then(function () {
-      return fetchMovieReviews(movieId, params, { page: 1, limit: 20, maxPages: 5 });
+      return fetchMovieReviews(movieId, params, {
+        page: 1,
+        limit: 15,
+        maxPages: 2,
+        deadlineAt: deadlineAt,
+      });
     })
     .then(function (list) {
       reviews = list || [];
@@ -4976,7 +5311,11 @@ async function fetchDetailMagnets(movieId, params, code) {
       return [];
     });
 
-  var settled = await Promise.all([magnetPromise, reviewPromise]);
+  var remainMs = Math.max(1000, deadlineAt - Date.now());
+  var settled = await Promise.all([
+    settleWithTimeout(magnetPromise, remainMs, []),
+    settleWithTimeout(reviewPromise, remainMs, []),
+  ]);
   apiMagnets = settled[0] || [];
   reviewMagnets = settled[1] || [];
 
@@ -4987,6 +5326,14 @@ async function fetchDetailMagnets(movieId, params, code) {
     else if (apiMagnets.length) source = "api";
     else if (reviewMagnets.length) source = "review";
   }
+  console.log(
+    "[javdb/detail-magnets]",
+    code || movieId,
+    "api=" + apiMagnets.length,
+    "review=" + reviewMagnets.length,
+    "merged=" + merged.length,
+    "elapsed=" + (Date.now() - startedAt) + "ms"
+  );
   return {
     magnets: merged,
     source: source,
@@ -6201,6 +6548,403 @@ async function handleGuangyaMagnetSave(hash, params) {
   }
 }
 
+/* ===== module: 14-guangya-stream.js ===== */
+
+/* ========================= 光鸭番号播放源（stream） ========================= */
+/* 移植自 guangya_jav.js：按番号匹配网盘视频并返回直链，供详情页播放源调用 */
+
+var GY_STREAM_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+var GY_STREAM_WESTERN_NOISE = /\b(?:xxx|1080p|2160p|4k|mp4|mkv|x264|x265|hevc|web-dl|webdl|ktr|n1c)\b/gi;
+var GY_STREAM_FILE_CACHE = {};
+
+function gyStreamIsVideoFile(name) {
+  var ext = String(name || "")
+    .split(".")
+    .pop()
+    .toLowerCase();
+  return !!GY_VIDEO_EXTS[ext];
+}
+
+function gyStreamFormatSize(bytes) {
+  var n = Number(bytes || 0);
+  if (!n) return "";
+  var units = ["B", "KB", "MB", "GB", "TB"];
+  var i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1);
+  return (n / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + " " + units[i];
+}
+
+function gyStreamNormalizeFile(item) {
+  item = item || {};
+  return {
+    fileId: String(item.fileId || item.id || ""),
+    filename: item.fileName || item.name || "",
+    size: Number(item.fileSize || item.size || 0),
+    isDir: item.resType === 2 || item.isDir === true,
+    parentId: String(item.parentId || ""),
+  };
+}
+
+function gyStreamGuessQuality(filename) {
+  var fn = String(filename || "").toLowerCase();
+  if (fn.indexOf("2160") !== -1 || fn.indexOf("4k") !== -1) return "4K";
+  if (fn.indexOf("1080") !== -1) return "1080P";
+  if (fn.indexOf("720") !== -1) return "720P";
+  return "";
+}
+
+function gyStreamExtractNumber(text) {
+  var s = safeText(text).toUpperCase();
+  if (!s) return "";
+  s = s.replace(/^[A-Z0-9]+(?:\.[A-Z0-9]+)+@/, "");
+  s = s.replace(/^(?:HHD800|HHB800)[_\-@.\s]?/, "");
+  var normalized = s.replace(/_/g, "-").replace(/\s+/g, " ").trim();
+  var patterns = [
+    /\bFC2(?:[- ]?PPV)?[- ]?(\d{5,8})\b/,
+    /\bCARIB[- ]?(\d{6,8})\b/,
+    /\b1PONDO[- ]?(\d{6,8})\b/,
+    /\bHEYZO[- ]?(\d{3,6})\b/,
+    /\bT28[- ]?(\d{6,8})\b/,
+    /\b([A-Z]{2,15})[- ]?(\d{2,10})\b/,
+    /\b(\d{6}[-_]\d{2,3})\b/,
+  ];
+  for (var i = 0; i < patterns.length; i++) {
+    var match = normalized.match(patterns[i]);
+    if (!match) continue;
+    if (match[1] && match[2]) return match[1] + "-" + match[2];
+    if (match[1]) return String(match[1]).replace(/\s+/g, "");
+  }
+  return "";
+}
+
+function gyStreamNormalizeToken(text) {
+  return String(text || "")
+    .replace(/[^a-z0-9]/gi, "")
+    .toLowerCase();
+}
+
+function gyStreamBuildSearchTexts(number) {
+  var raw = safeText(number);
+  var texts = [];
+  function add(value) {
+    value = safeText(value);
+    if (!value || texts.indexOf(value) >= 0) return;
+    texts.push(value);
+  }
+  add(raw.toLowerCase());
+  add(gyStreamNormalizeToken(raw));
+  add(raw.toUpperCase());
+  return texts;
+}
+
+function gyStreamFilenameMatches(filename, target) {
+  var fn = gyStreamNormalizeToken(filename);
+  return !!target && fn.indexOf(target) !== -1;
+}
+
+function gyStreamExtractWesternSceneKey(text) {
+  var s = safeText(text).toLowerCase();
+  if (!s) return null;
+  s = s.replace(GY_STREAM_WESTERN_NOISE, "");
+  var clean = s
+    .replace(/[_\s:]+/g, ".")
+    .replace(/\.+/g, ".")
+    .replace(/^\.|\.$/g, "")
+    .trim();
+  if (!clean) return null;
+  var dateMatch = clean.match(/(\d{2})[-.](\d{2})[-.](\d{2})/);
+  if (!dateMatch) return null;
+  var dateStr = dateMatch[0];
+  var dateIndex = dateMatch.index || 0;
+  var beforeRaw = clean.slice(0, dateIndex).replace(/\.+$/, "").replace(/^\.+/, "");
+  var beforeParts = beforeRaw.split(".").filter(Boolean);
+  var studio = beforeParts.length ? beforeParts[beforeParts.length - 1] : "";
+  var afterRaw = clean.slice(dateIndex + dateStr.length).replace(/^\.+/, "").replace(/\.+$/, "");
+  var performerParts = afterRaw.split(".").filter(Boolean);
+  if (!studio || !performerParts.length) return null;
+  return {
+    type: "western",
+    key: studio + "." + dateStr + "." + performerParts.join("."),
+    searchText: studio,
+    strictTarget: (studio + dateStr.replace(/\./g, "") + performerParts.join(".")).replace(/[^a-z0-9]/g, ""),
+  };
+}
+
+function gyStreamExtractWesternDateKey(text) {
+  var s = safeText(text).toLowerCase();
+  if (!s) return null;
+  s = s.replace(GY_STREAM_WESTERN_NOISE, "");
+  var clean = s
+    .replace(/[_\s:]+/g, ".")
+    .replace(/\.+/g, ".")
+    .replace(/^\.|\.$/g, "")
+    .trim();
+  var dateMatch = clean.match(/(\d{2})[-.](\d{2})[-.](\d{2})/);
+  if (!dateMatch) return null;
+  var dateStr = dateMatch[0];
+  var studio =
+    clean
+      .slice(0, dateMatch.index || 0)
+      .replace(/\.+$/, "")
+      .split(".")
+      .filter(Boolean)
+      .pop() || "";
+  if (!studio) return null;
+  return {
+    type: "western_date",
+    key: studio + "." + dateStr,
+    searchText: studio,
+    strictTarget: (studio + dateStr.replace(/\./g, "")).replace(/[^a-z0-9]/g, ""),
+  };
+}
+
+function gyStreamExtractMatchKey(text) {
+  var number = gyStreamExtractNumber(text);
+  if (number) {
+    return {
+      type: "jav",
+      key: number,
+      searchText: number.toLowerCase(),
+    };
+  }
+  var western = gyStreamExtractWesternSceneKey(text);
+  if (western) return western;
+  return gyStreamExtractWesternDateKey(text);
+}
+
+function gyStreamScoreWesternFile(file) {
+  var fn = String((file && file.filename) || "").toLowerCase();
+  var score = 0;
+  if (fn.indexOf("trailer") !== -1 || fn.indexOf("sample") !== -1 || fn.indexOf("preview") !== -1) score -= 100;
+  var size = Number((file && file.size) || 0);
+  if (size >= 2 * 1024 * 1024 * 1024) score += 30;
+  else if (size >= 1024 * 1024 * 1024) score += 20;
+  else if (size < 50 * 1024 * 1024) score -= 20;
+  return score;
+}
+
+async function gyStreamApiPost(accessToken, did, path, body) {
+  var url = String(path || "").indexOf("http") === 0 ? path : GUANGYA_API_BASE + path;
+  var data = await gyHttpPost(url, gyApiHeaders(accessToken, did), body || {}, 15000);
+  if (!data) throw new Error("光鸭空响应");
+  if (data.error || (data.msg && data.msg !== "success")) {
+    throw new Error(data.msg || data.error_description || data.error || "光鸭 API 错误");
+  }
+  return data;
+}
+
+async function gyStreamSearchFiles(accessToken, did, keyword, page, pageSize) {
+  var data = await gyStreamApiPost(accessToken, did, "/userres/v1/file/search_files", {
+    name: keyword,
+    page: Math.max(0, (page || 1) - 1),
+    pageSize: pageSize || 50,
+  });
+  var list = (data.data && data.data.list) || [];
+  return list.map(gyStreamNormalizeFile).filter(function (f) {
+    return !!f.fileId;
+  });
+}
+
+async function gyStreamListFolder(accessToken, did, parentId, page, pageSize) {
+  var data = await gyStreamApiPost(accessToken, did, "/userres/v1/file/get_file_list", {
+    parentId: parentId || "",
+    page: Math.max(0, (page || 1) - 1),
+    pageSize: pageSize || 100,
+  });
+  var list = (data.data && data.data.list) || [];
+  return list.map(gyStreamNormalizeFile).filter(function (f) {
+    return !!f.fileId;
+  });
+}
+
+async function gyStreamGetDownloadUrl(accessToken, did, fileId) {
+  var data = await gyStreamApiPost(accessToken, did, "/nd.bizuserres.s/v1/get_res_download_url", {
+    fileId: fileId,
+  });
+  return (data.data && data.data.signedURL) || "";
+}
+
+async function gyStreamSearchByMatchKey(accessToken, did, matchKey) {
+  if (matchKey.type !== "jav") {
+    return await gyStreamSearchFiles(accessToken, did, matchKey.searchText, 1, 50);
+  }
+  var texts = gyStreamBuildSearchTexts(matchKey.key);
+  for (var i = 0; i < texts.length; i++) {
+    var files = await gyStreamSearchFiles(accessToken, did, texts[i], 1, 50);
+    if (files.length) return files;
+  }
+  return [];
+}
+
+async function gyStreamExpandMatched(accessToken, did, files, matchKey, target) {
+  var expanded = [];
+  var seen = {};
+  function push(file) {
+    if (!file || !file.fileId || seen[file.fileId]) return;
+    seen[file.fileId] = true;
+    expanded.push(file);
+  }
+  for (var i = 0; i < (files || []).length; i++) {
+    var file = files[i];
+    if (file.isDir) {
+      var folderKey = gyStreamNormalizeToken(file.filename);
+      if (
+        matchKey.type === "jav" &&
+        folderKey.indexOf(target) === -1 &&
+        target.indexOf(folderKey) === -1
+      ) {
+        continue;
+      }
+      var children = await gyStreamListFolder(accessToken, did, file.fileId, 1, 100);
+      for (var j = 0; j < children.length; j++) {
+        if (children[j].isDir) continue;
+        if (matchKey.type === "jav") {
+          if (folderKey.indexOf(target) !== -1 || gyStreamFilenameMatches(children[j].filename, target)) {
+            push(children[j]);
+          }
+        } else {
+          push(children[j]);
+        }
+      }
+      continue;
+    }
+    push(file);
+  }
+  return expanded;
+}
+
+function gyStreamCacheFile(file) {
+  if (file && file.fileId) {
+    GY_STREAM_FILE_CACHE[file.fileId] = {
+      fileId: file.fileId,
+      filename: file.filename,
+      size: file.size,
+    };
+  }
+}
+
+async function gyStreamBuildSources(accessToken, did, file) {
+  if (!file || !file.fileId || !gyStreamIsVideoFile(file.filename)) return [];
+  gyStreamCacheFile(file);
+  var url = await gyStreamGetDownloadUrl(accessToken, did, file.fileId);
+  if (!url) return [];
+  var label = gyStreamGuessQuality(file.filename);
+  var number = gyStreamExtractNumber(file.filename);
+  return [
+    {
+      id: "guangya:" + file.fileId,
+      name: "光鸭云盘" + (label ? " (" + label + ")" : ""),
+      description:
+        (number ? "番号: " + number + "\n" : "") +
+        "文件: " +
+        file.filename +
+        (file.size ? "\n大小: " + gyStreamFormatSize(file.size) : ""),
+      url: url,
+      customHeaders: {
+        Referer: GUANGYA_SITE + "/",
+        "User-Agent": GY_STREAM_UA,
+      },
+    },
+  ];
+}
+
+function gyStreamCollectTexts(params) {
+  params = params || {};
+  var texts = [];
+  function add(v) {
+    v = safeText(v);
+    if (v) texts.push(v);
+  }
+  add(params.title);
+  add(params.name);
+  add(params.originalTitle);
+  add(params.id);
+  add(params.number);
+  add(params.code);
+  add(params.description);
+  add(params.episodeName);
+  add(params.seriesName);
+  add(params.link);
+  add(params.videoId);
+  return texts;
+}
+
+async function gyStreamEnsureAuth(params) {
+  var cfg = await getGuangyaConfig(params || {});
+  var refresh = normalizeGuangyaToken(cfg.guangya_token || "");
+  if (!refresh) return null;
+  var did = await ensureGuangyaDeviceId();
+  var accessToken = await ensureGuangyaAccessToken(refresh, did);
+  return { accessToken: accessToken, did: did, refresh: refresh };
+}
+
+async function loadResource(params) {
+  params = params || {};
+  try {
+    var auth = await gyStreamEnsureAuth(params);
+    if (!auth) {
+      console.log("[javdb/stream] skipped: no guangya token");
+      return [];
+    }
+
+    var texts = gyStreamCollectTexts(params);
+    var matchKey = gyStreamExtractMatchKey(texts.join(" "));
+    if (!matchKey) {
+      console.log("[javdb/stream] no match key from:", texts.slice(0, 3).join(" | "));
+      return [];
+    }
+    console.log("[javdb/stream] match:", matchKey.type, matchKey.key);
+
+    var files = await gyStreamSearchByMatchKey(auth.accessToken, auth.did, matchKey);
+    if (!files.length) return [];
+
+    var matched = [];
+    if (matchKey.type === "jav") {
+      var target = gyStreamNormalizeToken(matchKey.key);
+      for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        if (file.isDir) {
+          var folderKey = gyStreamNormalizeToken(file.filename);
+          if (folderKey.indexOf(target) !== -1 || target.indexOf(folderKey) !== -1) matched.push(file);
+          continue;
+        }
+        if (gyStreamFilenameMatches(file.filename, target)) matched.push(file);
+      }
+      matched = await gyStreamExpandMatched(auth.accessToken, auth.did, matched, matchKey, target);
+    } else {
+      var strict = matchKey.strictTarget;
+      for (var w = 0; w < files.length; w++) {
+        var wfn = gyStreamNormalizeToken(files[w].filename);
+        if (wfn.indexOf(strict) !== -1) matched.push(files[w]);
+      }
+      if (matchKey.type === "western_date" && matched.length > 1) {
+        matched.sort(function (a, b) {
+          return gyStreamScoreWesternFile(b) - gyStreamScoreWesternFile(a);
+        });
+        matched = matched.filter(function (f) {
+          return gyStreamScoreWesternFile(f) >= 0;
+        });
+        if (!matched.length) matched = files.slice(0, 1);
+      }
+    }
+
+    if (!matched.length) return [];
+
+    var streams = [];
+    for (var s = 0; s < matched.length; s++) {
+      if (!gyStreamIsVideoFile(matched[s].filename)) continue;
+      var part = await gyStreamBuildSources(auth.accessToken, auth.did, matched[s]);
+      if (part.length) streams = streams.concat(part);
+      if (streams.length >= 3) break;
+    }
+    console.log("[javdb/stream] sources:", streams.length);
+    return streams;
+  } catch (err) {
+    console.error("[javdb/stream] failed:", (err && err.message) || err);
+    return [];
+  }
+}
+
 /* ===== module: 10-visual-hd-images.js ===== */
 
 /* ========================= 高清图片（可视化版策略） ========================= */
@@ -6214,7 +6958,12 @@ async function handleGuangyaMagnetSave(hash, params) {
  * 这里不再调用 dmm-cover Probe Worker。
  */
 
-var JAVDB_CDN_BASE = "https://tp.cmastd.com/rhe951l4q";
+var JAVDB_CDN_BASE = "https://c0.jdbstatic.com";
+var HD_IMAGE_REQUEST_TIMEOUT_MS = 1200;
+var HD_IMAGE_BATCH_BUDGET_MS = 4000;
+var HD_IMAGE_MIN_CONTENT_LENGTH = 3000;
+var HD_IMAGE_AVAILABLE_CACHE = {};
+var HD_IMAGE_PENDING_REQUESTS = {};
 var DMM_CONTENT_PREFIX_MAP = {
   WSA: "2",
   FSDSS: "1",
@@ -6739,14 +7488,20 @@ function normalizeLatestFilter(raw) {
 }
 
 function normalizeTop250Type(raw) {
-  var text = String(raw || "all").trim().toLowerCase();
-  if (text === "all" || text === "") return "all";
-  if (text === "censored") return "0";
-  if (text === "uncensored") return "1";
-  if (text === "western") return "2";
-  if (text === "fc2") return "3";
-  if (/^[0-3]$/.test(text)) return text;
-  return "all";
+  var text = String(raw || "all").trim();
+  if (!text || text === "all") return { type: "all", type_value: "" };
+  // 可视化 ranking_type：type_0 / type_1 / type_2 / type_3
+  if (/^type_[0-3]$/i.test(text)) {
+    return { type: "video_type", type_value: text.replace(/^type_/i, "") };
+  }
+  if (text === "censored" || text === "0") return { type: "video_type", type_value: "0" };
+  if (text === "uncensored" || text === "1") return { type: "video_type", type_value: "1" };
+  if (text === "western" || text === "2") return { type: "video_type", type_value: "2" };
+  if (text === "fc2" || text === "3") return { type: "video_type", type_value: "3" };
+  if (/^[0-3]$/.test(text)) return { type: "video_type", type_value: text };
+  // 年份榜：2026 / 2025 ...
+  if (/^\d{4}$/.test(text)) return { type: "year", type_value: text };
+  return { type: "all", type_value: "" };
 }
 
 async function loadLatest(params) {
@@ -6772,14 +7527,16 @@ async function loadTop250(params) {
   try {
     params = await ensureApiSession(params || {}, { requireAuth: true });
     var page = Number(params.page || params.from || 1);
-    var type = normalizeTop250Type(params.type);
-    var query = { page: page };
-    if (type !== "all") {
-      query.type = type;
-      query.filter_by = type;
-    } else {
-      query.filter_by = "all";
-    }
+    var rankingType = params.ranking_type || params.type || "all";
+    var norm = normalizeTop250Type(rankingType);
+    var query = {
+      type: norm.type,
+      page: page,
+      limit: 20,
+      start_rank: 1,
+      ignore_watched: false,
+    };
+    if (norm.type_value) query.type_value = norm.type_value;
     var data = await apiGet("/v1/movies/top", query, params);
     var movies = (data && data.movies) || [];
     if (!movies.length) throw new Error("TOP250 无数据（请确认已登录）");
@@ -6987,6 +7744,9 @@ async function loadDetail(link, params) {
     } else if (resolveGuangyaTokenSync()) {
       descParts.push("磁力: 暂无可用磁链");
     }
+    if (resolveGuangyaTokenSync()) {
+      descParts.push("播放: 点击播放将按番号匹配光鸭网盘文件");
+    }
 
     var item = {
       id: code || movie.id || movieId,
@@ -7001,8 +7761,10 @@ async function loadDetail(link, params) {
       genreItems: meta.genreItems,
       peoples: meta.peoples,
       description: descParts.join("\n\n"),
-      // 仅保留预告模块；不写 videoId/videoUrl/previewUrl，避免生成无效的 JavDB 播放源。
+      // 预告走 trailers；正片播放源由 loadResource(stream) 按光鸭网盘匹配
       trailers: trailers,
+      videoId: movie.id || movieId,
+      number: code || "",
     };
     if (relatedItems.length) item.relatedItems = relatedItems;
     if (coverUrl) {
@@ -7067,6 +7829,8 @@ if (typeof module !== "undefined" && module.exports) {
     mergeAndDedupeMagnets: mergeAndDedupeMagnets,
     buildMagnetItemDescription: buildMagnetItemDescription,
     formatMagnetSourceTip: formatMagnetSourceTip,
+    loadResource: loadResource,
+    gyStreamExtractMatchKey: gyStreamExtractMatchKey,
     dedupeMagnetsByGbBucket: dedupeMagnetsByGbBucket,
     compareMagnetPriority: compareMagnetPriority,
     gyFilterResolvedFiles: gyFilterResolvedFiles,
@@ -15105,8 +15869,7 @@ async function loadPlayback(params) {
   }
 }
 
-/** 有码榜 */
-async function loadCensored(params) {
+async function loadRankingByType(params, typeCode, label) {
   try {
     params = await ensureApiSession(params || {});
     var period = rankingPeriod(params);
@@ -15114,7 +15877,7 @@ async function loadCensored(params) {
     var data = await apiGet(
       "/v1/rankings",
       {
-        type: "0",
+        type: String(typeCode),
         period: period,
         page: page,
         limit: RANKING_PAGE_LIMIT,
@@ -15123,11 +15886,93 @@ async function loadCensored(params) {
     );
     var movies = (data && data.movies) || [];
     if (!movies.length) {
-      console.warn("[javdb] loadCensored 空数据 period=", period, "page=", page);
+      console.warn("[javdb] " + label + " 空数据 period=", period, "page=", page);
     }
     return enrichListMovies(movies, params);
   } catch (error) {
-    console.error("[javdb] 有码榜失败:", (error && error.message) || error);
+    console.error("[javdb] " + label + "失败:", (error && error.message) || error);
+    throw error;
+  }
+}
+
+/** 有码榜 */
+async function loadCensored(params) {
+  return loadRankingByType(params, "0", "有码榜");
+}
+
+/** 无码榜 */
+async function loadUncensored(params) {
+  return loadRankingByType(params, "1", "无码榜");
+}
+
+/** FC2 榜 */
+async function loadFC2(params) {
+  return loadRankingByType(params, "3", "FC2榜");
+}
+
+/** 欧美榜 */
+async function loadWestern(params) {
+  return loadRankingByType(params, "2", "欧美榜");
+}
+
+/** 厂牌（可视化精选枚举） */
+async function loadMaker(params) {
+  try {
+    params = await ensureApiSession(params || {});
+    var makerId = String((params && params.maker) || "7R").trim() || "7R";
+    var sortRaw = String((params && params.sort_by) || "release_desc").trim() || "release_desc";
+    var filterBy = "0:m:" + makerId;
+    if (sortRaw === "magnets") {
+      filterBy += ":m";
+      sortRaw = "release_desc";
+    }
+    var sort_by = sortRaw === "score" ? "score" : "release";
+    var order_by = sortRaw === "release_asc" ? "asc" : "desc";
+    var page = Number((params && params.page) || 1) || 1;
+    var data = await apiGet(
+      "/v1/movies/tags",
+      {
+        filter_by: filterBy,
+        sort_by: sort_by,
+        order_by: order_by,
+        page: page,
+        limit: RANKING_PAGE_LIMIT,
+      },
+      params
+    );
+    return enrichListMovies((data && data.movies) || [], params);
+  } catch (error) {
+    console.error("[javdb] 厂牌浏览失败:", (error && error.message) || error);
+    throw error;
+  }
+}
+
+/** 分类标签（可视化：主题/角色/服装…） */
+async function loadCategory(params) {
+  try {
+    params = await ensureApiSession(params || {});
+    var category = String((params && params.category) || "subject").trim() || "subject";
+    var tag = String((params && params["tag_" + category]) || "").trim();
+    if (!tag) {
+      return [{ id: "tip", type: "text", title: "请选择分类和标签" }];
+    }
+    var page = Number((params && params.page) || 1) || 1;
+    var data = await apiGet(
+      "/v2/search",
+      {
+        q: tag,
+        type: "video",
+        movie_sort_by: "release",
+        page: page,
+        limit: RANKING_PAGE_LIMIT,
+      },
+      params
+    );
+    var movies = (data && data.movies) || [];
+    if (!movies.length) throw new Error("未找到相关影片");
+    return enrichListMovies(movies, params);
+  } catch (error) {
+    console.error("[javdb] 分类浏览失败:", (error && error.message) || error);
     throw error;
   }
 }
@@ -15267,6 +16112,11 @@ async function loadDMMMonthlyRanking(params) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports.loadPlayback = loadPlayback;
   module.exports.loadCensored = loadCensored;
+  module.exports.loadUncensored = loadUncensored;
+  module.exports.loadFC2 = loadFC2;
+  module.exports.loadWestern = loadWestern;
+  module.exports.loadMaker = loadMaker;
+  module.exports.loadCategory = loadCategory;
   module.exports.loadNewActors = loadNewActors;
   module.exports.loadActorsRanking = loadActorsRanking;
   module.exports.loadDMMRanking = loadDMMRanking;
