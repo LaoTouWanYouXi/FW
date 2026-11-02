@@ -11,7 +11,7 @@ WidgetMetadata = {
   title: "光鸭-番号",
   description: "按番号搜索光鸭云盘，详情页自动匹配播放源",
   author: "老头",
-  version: "1.0.1",
+  version: "1.0.2",
   requiredVersion: "0.0.1",
   site: "https://www.guangyapan.com",
   detailCacheDuration: 300,
@@ -238,12 +238,31 @@ async function getDownloadUrl(token, fileId) {
   return (data.data && data.data.signedURL) || "";
 }
 
+/** Rex 按 VideoResource.name 做线路排序/画质筛选；官方示例直接用 "4K"/"1080P" 作 name */
 function guessQualityLabel(filename) {
   var fn = String(filename || "").toLowerCase();
-  if (fn.indexOf("2160") !== -1 || fn.indexOf("4k") !== -1) return "4K";
-  if (fn.indexOf("1080") !== -1) return "1080P";
+  if (fn.indexOf("2160") !== -1 || fn.indexOf("4k") !== -1 || fn.indexOf("uhd") !== -1) return "4K";
+  if (fn.indexOf("1080") !== -1 || fn.indexOf("fhd") !== -1) return "1080P";
   if (fn.indexOf("720") !== -1) return "720P";
-  return "";
+  // 文件名无分辨率时默认 4K：靠前排序，且可在 Rex 独立筛「4K」
+  return "4K";
+}
+
+function qualityRank(label) {
+  var s = String(label || "").toUpperCase();
+  if (s === "4K" || s === "2160P" || s === "UHD") return 400;
+  if (s === "1080P" || s === "FHD") return 300;
+  if (s === "720P" || s === "HD") return 200;
+  return 100;
+}
+
+function sortFilesByQuality(files) {
+  return (files || []).slice().sort(function (a, b) {
+    var ra = qualityRank(guessQualityLabel(a && a.filename));
+    var rb = qualityRank(guessQualityLabel(b && b.filename));
+    if (rb !== ra) return rb - ra;
+    return Number((b && b.size) || 0) - Number((a && a.size) || 0);
+  });
 }
 
 async function buildStreamSources(token, file) {
@@ -254,8 +273,8 @@ async function buildStreamSources(token, file) {
   var label = guessQualityLabel(file.filename);
   var number = extractNumber(file.filename);
   return [{
-    name: "光鸭云盘" + (label ? " (" + label + ")" : ""),
-    description: (number ? "番号: " + number + "\n" : "") +
+    name: label,
+    description: "光鸭云盘" + (number ? " · " + number : "") + "\n" +
       "文件: " + file.filename +
       (file.size ? "\n大小: " + formatSize(file.size) : ""),
     url: url,
@@ -623,6 +642,8 @@ async function loadResource(params) {
 
     if (!matched.length) return [];
 
+    matched = sortFilesByQuality(matched);
+
     var streams = [];
     for (var si = 0; si < matched.length; si++) {
       if (!isVideoFile(matched[si].filename)) continue;
@@ -630,6 +651,9 @@ async function loadResource(params) {
       if (part.length) streams = streams.concat(part);
       if (streams.length >= 3) break;
     }
+    streams.sort(function (a, b) {
+      return qualityRank(b && b.name) - qualityRank(a && a.name);
+    });
     return streams;
   } catch (err) {
     console.error("[guangya-jav/stream]", err && err.message || err);

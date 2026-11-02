@@ -13,10 +13,10 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.3.8",
+  version: "1.3.9",
   requiredVersion: "0.0.1",
   description:
-    "JAV Verse：作品池 / 千级类别筛选（RSC） / 列表横图位 / 详情 id=番号（link=jv:work:id:番号，避免误解析成 JV-数字）/ 光鸭磁力按目录 ID 转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+    "JAV Verse：作品池 / 千级类别筛选（RSC） / 列表横图位 / 详情 id=标准番号（FANZA cid→PIYO-241）/ 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javverse.com/",
   icon: "https://javverse.com/apple-icon.png",
@@ -403,28 +403,48 @@ function parseOwnedLink(raw) {
 function codeFromCoverUrl(url) {
   var u = getText(url);
   if (!u) return "";
-  var m = u.match(/\/([0-9]?[a-z]+)(\d+)(?:[a-z]*)?(?:pl|ps|jm)?\.(?:jpg|webp)/i);
-  if (!m) m = u.match(/\/(?:digital\/video\/)?([0-9]?[a-z]+)0*(\d+)\//i);
+  // .../h_068mxgs01451/h_068mxgs01451pl.jpg 或 .../1piyo00241/1piyo00241pl.jpg
+  var m =
+    u.match(/\/(h_\d+[a-z0-9]+)(?:[a-z]*)?(?:pl|ps|jm)?\.(?:jpg|webp)/i) ||
+    u.match(/\/([0-9]*[a-z]+[0-9]+[a-z0-9]*)(?:pl|ps|jm)?\.(?:jpg|webp)/i) ||
+    u.match(/\/(?:digital\/video\/)?(h_\d+[a-z0-9]+|[0-9]*[a-z]+[0-9]+)(?:\/|$)/i);
   if (!m) return "";
-  return normalizeCode(m[1] + m[2]) || normalizeCode(m[1] + "-" + m[2]);
+  return normalizeCode(m[1]);
+}
+
+function isStandardHinban(code) {
+  code = getText(code).toUpperCase();
+  return /^([A-Z]{2,15}|T28|R18|3DSVR)-[1-9]\d{0,7}[A-Z]?$/.test(code);
 }
 
 function resolveItemCode(row) {
   row = row || {};
-  var code =
-    normalizeCode(row.code) ||
-    normalizeCode(row.code_display) ||
-    normalizeCode(row.number) ||
-    getText(row.code).toUpperCase();
-  // 过滤误解析：jv:数字 / JV-数字 不是真实番号
-  if (code && /^JV[:\-]?\d+/i.test(code)) code = "";
-  if (!code) code = codeFromCoverUrl(row.coverUrl || row.cover || row.cover_url || "");
-  if (!code) {
-    var title = getText(row.title || row.title_zh || row.originalTitle);
-    var tm = title.match(/\b([A-Z]{2,10})[-_ ]?(\d{2,5}[A-Z]?)\b/i);
-    if (tm) code = normalizeCode(tm[1] + "-" + tm[2]);
+  var candidates = [
+    row.code_display,
+    row.code,
+    row.number,
+    row.cid,
+    row.content_id,
+    row.contentId,
+  ];
+  var best = "";
+  for (var i = 0; i < candidates.length; i++) {
+    var raw = getText(candidates[i]);
+    if (!raw) continue;
+    var n = normalizeCode(raw);
+    if (!n || /^JV[:\-]?\d+/i.test(n)) continue;
+    if (isStandardHinban(n)) return n;
+    if (!best) best = n;
   }
-  return code || "";
+  if (best && isStandardHinban(best)) return best;
+  if (!best) best = codeFromCoverUrl(row.coverUrl || row.cover || row.cover_url || "");
+  if (!best || !isStandardHinban(best)) {
+    var title = getText(row.title || row.title_zh || row.originalTitle);
+    var tm = title.match(/\b([A-Z0-9]{2,15})[-_ ](\d{1,5}[A-Z]?)\b/i);
+    if (tm) best = normalizeCode(tm[1] + "-" + tm[2]) || best;
+  }
+  if (best && /^JV[:\-]?\d+/i.test(best)) return "";
+  return best || "";
 }
 
 function extractMagnetHash(magnet) {
@@ -826,12 +846,45 @@ async function loadGenreFallbackFromPool(params, genreId) {
   return itemsFromPool(filtered, (page - 1) * size, size);
 }
 
+/**
+ * FANZA/DMM cid → 标准品番
+ * 1piyo00241 → PIYO-241
+ * h_068mxgs01451 → MXGS-1451
+ * ssis00999 → SSIS-999
+ * 42vrpn00022 → VRPN-22
+ * 已是 PIYO-241 则原样规范化
+ */
 function normalizeCode(code) {
   code = getText(code).toUpperCase();
   if (!code) return "";
-  var m = code.match(/^(\d+)?([A-Z]+)0*([0-9]+)$/);
-  if (m) return m[2] + "-" + m[3];
-  if (/^[A-Z0-9]+-\d+$/.test(code)) return code;
+
+  // 已是标准品番（含数字片商前缀如 T28 / 3DSVR）
+  var hy = code.match(/^([A-Z]{2,15}|T28|R18|3DSVR)-0*([0-9]+)([A-Z]?)$/);
+  if (hy) return hy[1] + "-" + String(parseInt(hy[2], 10)) + (hy[3] || "");
+
+  // 去掉包装：cid=、AI 重制后缀、非字母数字分隔
+  code = code.replace(/^CID[=:]?/i, "");
+  code = code.replace(/[-_]?AI$/i, "");
+  // h_068mxgs01451 / h_1240milk00308
+  code = code.replace(/^H_\d+/i, "");
+  code = code.replace(/[^A-Z0-9]+/g, "");
+  if (!code) return "";
+
+  // 特殊：片商代号本身含数字
+  var special = code.match(/^(T28|R18|3DSVR)0*([0-9]+)([A-Z]?)$/);
+  if (special) {
+    return special[1] + "-" + String(parseInt(special[2], 10)) + (special[3] || "");
+  }
+
+  // 典型 cid：可选开头数字(配信/片商区分) + 英字 + 零填充流水号 + 可选末尾字母
+  // 1PIYO00241 / 42VRPN00022 / SSIS00999 / MXGS01451
+  var m = code.match(/^(\d{0,4})([A-Z]{2,15})0*([0-9]{1,8})([A-Z]?)$/);
+  if (m && m[2] && m[3] && String(parseInt(m[3], 10)) !== "0") {
+    return m[2] + "-" + String(parseInt(m[3], 10)) + (m[4] || "");
+  }
+
+  // 兜底：已是 LETTERS-DIGITS
+  if (/^[A-Z0-9]+-\d+[A-Z]?$/.test(code)) return code;
   return code;
 }
 
