@@ -13,10 +13,10 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.4.4",
+  version: "1.4.6",
   requiredVersion: "0.0.1",
   description:
-    "JAV Verse：作品池 / 抽一部 / 千级类别（WebView + HTML 代理过 CF）/ 详情 id=标准番号 / 光鸭按目录转存（可设最小保留视频 MB）。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+    "JAV Verse：作品池 / 抽一部 / 千级类别（直走 CF 代理 /browse，不前置直连 403）/ 详情 id=标准番号 / 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javverse.com/",
   icon: "https://javverse.com/apple-icon.png",
@@ -856,8 +856,8 @@ async function fetchViaHtmlProxy(targetUrl, mode) {
   return body;
 }
 
-async function fetchViaProxyModes(url) {
-  var modes = ["browse", "html", "fetch"];
+async function fetchViaProxyModes(url, preferModes) {
+  var modes = preferModes && preferModes.length ? preferModes : ["browse", "html", "fetch"];
   var lastErr = null;
   for (var i = 0; i < modes.length; i++) {
     try {
@@ -1105,56 +1105,17 @@ function genrePathCandidates(genreId, page) {
 }
 
 async function fetchGenreRsc(genreId, page) {
-  var nextUrl = "/genre/" + genreId + (page > 1 ? "?page=" + page : "");
-  var paths = [
-    buildGenreRscPath(genreId, page),
-    "/zh-CN" + buildGenreRscPath(genreId, page),
-  ];
-  var headerSets = [
-    rscHeaders(SITE + "/genres", nextUrl),
-    rscHeaders(SITE + nextUrl, nextUrl),
-  ];
-  var best = [];
-  await softBrowseGate();
-  for (var p = 0; p < paths.length; p++) {
-    for (var h = 0; h < headerSets.length; h++) {
-      // 类别页对非 WebView 必现 CF 403；强制 WebView
-      var got = await safeGet(SITE + paths[p], headerSets[h], { requiresWebView: true });
-      var body = typeof got.body === "string" ? got.body : "";
-      if (!body && got.body != null && typeof got.body === "object") {
-        try {
-          body = JSON.stringify(got.body);
-        } catch (e0) {
-          body = "";
-        }
-      }
-      if (
-        got.status === 403 ||
-        isCloudflareChallenge(body) ||
-        (got.error && isForbiddenError(got.error)) ||
-        !body ||
-        body.length < 80
-      ) {
-        console.log(
-          "[javverse] genre RSC blocked:",
-          paths[p],
-          "status=",
-          got.status,
-          "len=",
-          body.length
-        );
-        continue;
-      }
-      if (body.indexOf("workId") === -1) {
-        console.log("[javverse] genre RSC empty shell:", paths[p], "len=", body.length);
-        continue;
-      }
-      var items = parseGenreRscPayload(body);
-      if (items.length > best.length) best = items;
-      if (best.length >= 24) return best;
-    }
+  // 仅作 HTML 代理不足时的补刀；同样不直连 javverse.com
+  var path = buildGenreRscPath(genreId, page);
+  try {
+    var body = await fetchViaProxyModes(SITE + path, ["html", "browse"]);
+    if (!body || body.length < 80 || body.indexOf("workId") === -1) return null;
+    var items = parseGenreRscPayload(body);
+    return items.length ? items : null;
+  } catch (e) {
+    console.log("[javverse] genre RSC proxy skip:", path, (e && e.message) || e);
+    return null;
   }
-  return best.length ? best : null;
 }
 
 /**
@@ -1585,46 +1546,21 @@ function parseGenreWorkCards(html) {
 }
 
 async function fetchGenreHtmlCards(genreId, page) {
+  // 类别：优先单次 /browse 代理；失败再 html/fetch，且默认只打主路径，减少无效请求
   var paths = genrePathCandidates(genreId, page);
   var best = [];
-  await softBrowseGate();
-  for (var i = 0; i < paths.length; i++) {
+  for (var j = 0; j < paths.length; j++) {
+    var modes = j === 0 ? ["browse", "html"] : ["browse"];
     try {
-      var url = SITE + paths[i];
-      var got = await safeGet(url, htmlHeaders(SITE + "/genres"), { requiresWebView: true });
-      var html = typeof got.body === "string" ? got.body : String(got.body || "");
-      if (
-        got.status === 403 ||
-        isCloudflareChallenge(html) ||
-        (got.error && isForbiddenError(got.error)) ||
-        !html ||
-        html.length < 200
-      ) {
-        console.log("[javverse] genre HTML blocked:", paths[i], "status=", got.status);
-        continue;
+      var proxied = await fetchViaProxyModes(SITE + paths[j], modes);
+      var proxiedCards = parseGenreWorkCards(proxied);
+      if (!proxiedCards.length && proxied.indexOf("workId") !== -1) {
+        proxiedCards = parseGenreRscPayload(proxied);
       }
-      var cards = parseGenreWorkCards(html);
-      if (cards.length > best.length) best = cards;
-      if (best.length >= 24) return best;
-    } catch (e) {
-      console.log("[javverse] genre HTML skip:", paths[i], (e && e.message) || e);
-    }
-  }
-  // 直连全灭：走 HTML 代理 Worker（对齐 missav / move-html-proxy）
-  if (!best.length) {
-    for (var j = 0; j < paths.length; j++) {
-      var proxyUrl = SITE + paths[j];
-      try {
-        var proxied = await fetchHtmlWithProxyFallback(proxyUrl, SITE + "/genres", { proxyOnly: true });
-        var proxiedCards = parseGenreWorkCards(proxied);
-        if (!proxiedCards.length && proxied.indexOf("workId") !== -1) {
-          proxiedCards = parseGenreRscPayload(proxied);
-        }
-        if (proxiedCards.length > best.length) best = proxiedCards;
-        if (best.length >= 8) break;
-      } catch (e3) {
-        console.log("[javverse] genre proxy skip:", paths[j], (e3 && e3.message) || e3);
-      }
+      if (proxiedCards.length > best.length) best = proxiedCards;
+      if (best.length >= 8) return best;
+    } catch (e3) {
+      console.log("[javverse] genre proxy skip:", paths[j], (e3 && e3.message) || e3);
     }
   }
   return best.length ? best : null;
@@ -1741,31 +1677,33 @@ async function loadGenreWorks(params) {
     var page = pageNum(params);
     var cards = null;
 
-    // 1) RSC（官网类别页同源）
+    // 类别页：直接走 CF 代理（不再先打 javverse.com 直连/RSC，避免前置一串 403）
     try {
-      cards = await fetchGenreRsc(genreId, page);
+      cards = await fetchGenreHtmlCards(genreId, page);
       console.log(
-        "[javverse] genre RSC id=",
+        "[javverse] genre proxy HTML id=",
         genreId,
         "page=",
         page,
         "n=",
-        cards ? cards.length : 0
+        cards ? cards.length : 0,
+        "via=",
+        getHtmlProxyWorkerBase()
       );
-    } catch (e) {
-      console.log("[javverse] genre RSC skip:", (e && e.message) || e);
+    } catch (e2) {
+      console.log("[javverse] genre proxy HTML skip:", (e2 && e2.message) || e2);
     }
 
-    // 2) HTML 回退（多语言路径）
+    // 代理 HTML 不足时再试代理 RSC（同样不直连）
     if (!cards || cards.length < 8) {
       try {
-        var htmlCards = await fetchGenreHtmlCards(genreId, page);
-        if (htmlCards && htmlCards.length > (cards ? cards.length : 0)) {
-          cards = htmlCards;
-          console.log("[javverse] genre HTML id=", genreId, "n=", cards.length);
+        var rscCards = await fetchGenreRsc(genreId, page);
+        if (rscCards && rscCards.length > (cards ? cards.length : 0)) {
+          cards = rscCards;
+          console.log("[javverse] genre proxy RSC id=", genreId, "n=", cards.length);
         }
-      } catch (e2) {
-        console.log("[javverse] genre HTML skip:", (e2 && e2.message) || e2);
+      } catch (e) {
+        console.log("[javverse] genre proxy RSC skip:", (e && e.message) || e);
       }
     }
 
@@ -1778,8 +1716,9 @@ async function loadGenreWorks(params) {
           genreTitleById(genreId) +
           ") 第 " +
           page +
-          " 页加载失败（直连/代理均被 Cloudflare 拦截）。请用浏览器打开 javverse.com 过人机验证后，把含 cf_clearance 的 Cookie 填入全局「站点 Cookie」，必要时确认 html_proxy_worker=" +
-          getHtmlProxyWorkerBase()
+          " 页代理加载失败。请确认 html_proxy_worker=" +
+          getHtmlProxyWorkerBase() +
+          "，或填入含 cf_clearance 的站点 Cookie 后重试。"
       );
     }
 

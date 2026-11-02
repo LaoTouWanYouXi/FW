@@ -405,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.3.7",
+  version: "1.3.8",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力（作品可按代表作/发行日排序）/ 今天冲谁·冲什么；封面 DMM 优先；光鸭转存可设最小保留视频 MB。",
+    "权威榜单 / 神作 / 女优战力（作品排序）/ 随机神作与今天冲谁仅有码；封面 DMM 优先；光鸭可设最小保留视频 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -2327,7 +2327,28 @@ async function loadRandomMasterpiece(params) {
   try {
     var count = Math.max(6, Math.min(48, Number(params.count || 24) || 24));
     var rows = await resolveHallOfFameRows(params);
-    if (!rows.length) throw new Error("无可随机的神作");
+    // 仅有码：排除 FC2 / 无码（封面头像常缺失）
+    var index = await getSearchIndex(params);
+    var codeMap = buildCodeMap(index);
+    rows = (rows || []).filter(function (row) {
+      var code = normalizeCode(row && row.code);
+      var meta = (code && codeMap[code]) || null;
+      if (meta) return isPreferredCensoredVideo(meta);
+      // 无索引元数据时至少挡掉 FC2 番号
+      return code && !isFc2LikeCode(code);
+    });
+    if (!rows.length) {
+      rows = (index.videos || [])
+        .filter(isPreferredCensoredVideo)
+        .sort(function (a, b) {
+          return Number(a.rank || 1e9) - Number(b.rank || 1e9);
+        })
+        .slice(0, 300)
+        .map(function (v, idx) {
+          return { rank: idx + 1, code: v.code, title: v.title, videoId: v.videoId };
+        });
+    }
+    if (!rows.length) throw new Error("无可随机的有码神作");
     var pool = shuffleCopy(rows).slice(0, Math.min(120, rows.length));
     var picked = shuffleCopy(pool).slice(0, count);
     // 随机模块不分页：临时覆盖 page
@@ -2672,10 +2693,40 @@ function isFemaleEntity(ent) {
   return true;
 }
 
+function isFc2LikeCode(code) {
+  var c = normalizeCode(code) || getText(code).toUpperCase();
+  return /^FC2([-_]?\d)/i.test(c) || /^FC2PPV/i.test(c);
+}
+
+/** 有码且非 FC2（随机神作 / 今天冲谁 用，避免无图） */
+function isPreferredCensoredVideo(v) {
+  if (!v || !v.videoId) return false;
+  if (isFc2LikeCode(v.code)) return false;
+  var scope = getText(v.scope).toLowerCase();
+  if (scope && scope !== "censored") return false;
+  return true;
+}
+
+function actressHasPreferredCensoredWorks(index, ent) {
+  if (!ent) return false;
+  var keys = [];
+  if (getText(ent.slug)) keys.push(ent.slug);
+  if (getText(ent.name)) keys.push(ent.name);
+  for (var i = 0; i < keys.length; i++) {
+    var works = findActressWorks(index, keys[i]);
+    for (var j = 0; j < works.length; j++) {
+      if (isPreferredCensoredVideo(works[j])) return true;
+    }
+  }
+  return false;
+}
+
 function listActressEntities(index, opts) {
   opts = opts || {};
   var kw = getText(opts.keyword).toLowerCase();
   var minScore = Number(opts.minScore || 0) || 0;
+  var censoredOnly = !!opts.censoredOnly;
+  var requireAvatar = !!opts.requireAvatar;
   var out = [];
   (index.entities || []).forEach(function (e) {
     if (!isFemaleEntity(e)) return;
@@ -2687,6 +2738,8 @@ function listActressEntities(index, opts) {
       var aliases = Array.isArray(e.aliases) ? e.aliases.join(" ").toLowerCase() : "";
       if (name.indexOf(kw) < 0 && slug.indexOf(kw) < 0 && aliases.indexOf(kw) < 0) return;
     }
+    if (requireAvatar && !resolveActressAvatar(e, e.slug)) return;
+    if (censoredOnly && !actressHasPreferredCensoredWorks(index, e)) return;
     out.push(e);
   });
   out.sort(function (a, b) {
@@ -2951,21 +3004,49 @@ async function loadTodayWho(params) {
     // rex: 横向人物点击会重开「本模块」并带 peopleId → 必须返回该女友作品，不能再返回看谁列表
     if (peopleId) {
       console.log("[javranking][loadTodayWho] peopleId=", peopleId);
-      return await loadActressWorksByName(peopleId, index, codeMap, params);
+      // 作品也只保留有码非 FC2，避免点进后仍出现无图片
+      var works = await loadActressWorksByName(peopleId, index, codeMap, params);
+      return (works || []).filter(function (it) {
+        var code = normalizeCode(it && it.id) || normalizeCode(it && it.title);
+        var meta = (code && codeMap[code]) || null;
+        if (meta) return isPreferredCensoredVideo(meta);
+        return code && !isFc2LikeCode(code);
+      });
     }
 
     var count = Math.max(6, Math.min(48, Number(params.count || 24) || 24));
-    var pool = listActressEntities(index, { minScore: Number(params.minScore || 1) || 1 });
+    // 仅有码关联女优，且尽量有头像
+    var pool = listActressEntities(index, {
+      minScore: Number(params.minScore || 1) || 1,
+      censoredOnly: true,
+      requireAvatar: true,
+    });
+    if (!pool.length) {
+      pool = listActressEntities(index, {
+        minScore: Number(params.minScore || 1) || 1,
+        censoredOnly: true,
+      });
+    }
     if (!pool.length) {
       var md = await fetchMarkdown("most-awarded-actors", params);
       var sections = parsePowerSections(md);
-      pool = sections.map(function (sec) {
-        return { name: sec.name, score: sec.score, slug: "", imageUrl: "", videoCount: (sec.works && sec.works.length) || 0 };
-      });
+      pool = sections
+        .map(function (sec) {
+          return findActressEntityInIndex(index, sec.name) || {
+            name: sec.name,
+            score: sec.score,
+            slug: "",
+            imageUrl: "",
+            videoCount: (sec.works && sec.works.length) || 0,
+          };
+        })
+        .filter(function (ent) {
+          return resolveActressAvatar(ent, ent.slug) || actressHasPreferredCensoredWorks(index, ent);
+        });
     }
     var picked = shuffleCopy(pool).slice(0, count);
     return picked.map(function (ent) {
-      return mapActressEntity(ent, { desc: "今天冲谁" });
+      return mapActressEntity(ent, { desc: "今天冲谁·有码" });
     });
   } catch (error) {
     console.error("[javranking][loadTodayWho] 失败:", error.message || error);
