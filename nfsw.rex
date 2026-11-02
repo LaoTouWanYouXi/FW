@@ -4,6 +4,15 @@
   "icon": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/9331.jpeg",
   "widgets": [
     {
+      "id": "guangya_jav",
+      "title": "光鸭-番号",
+      "description": "搜索番号聚合",
+      "requiredVersion": "0.0.1",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/guangya_jav.js"
+    },
+    {
       "id": "javranking.cc",
       "title": "JavRanking",
       "description": "JavRanking",
