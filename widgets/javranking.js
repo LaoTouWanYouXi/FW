@@ -405,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.4.2",
+  version: "1.4.3",
   requiredVersion: "0.0.1",
   description:
-    "列表横图展示；详情顶图 DMM 高清横图；演员可点进作品；随机/冲谁仅有码非FC2；光鸭最小保留 MB。",
+    "影片列表横图位；详情顶图 DMM 高清竖图；演员可点进作品；随机/冲谁仅有码非FC2；光鸭最小保留 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -1111,6 +1111,29 @@ function toLandscapeCoverFields(landscape, fallback) {
     posterPath: land,
     backdropPath: land,
     detailPoster: land,
+  };
+}
+
+/** 详情竖图：poster/detailPoster/cover 用竖图，backdrop 保留横图 */
+function toDetailPortraitCoverFields(portrait, landscape) {
+  var port =
+    resolveSiteCoverFallback(portrait) ||
+    getText(portrait) ||
+    resolveSiteCoverFallback(landscape) ||
+    getText(landscape) ||
+    "";
+  var land =
+    resolveSiteCoverFallback(landscape) ||
+    getText(landscape) ||
+    port;
+  if (!port && !land) {
+    return { coverUrl: undefined, posterPath: undefined, backdropPath: undefined, detailPoster: undefined };
+  }
+  return {
+    coverUrl: port || land,
+    posterPath: port || land,
+    detailPoster: port || land,
+    backdropPath: land || port,
   };
 }
 
@@ -2207,9 +2230,9 @@ async function loadVideoDetail(owned, params) {
   } catch (e0) {}
 
   var coverCandFallback = resolveVideoCoverCandidates(videoId, indexMeta && indexMeta.coverUrl);
-  var landFallback = toLandscapeCoverFields(
-    coverCandFallback.backdrop || coverCandFallback.primary,
-    coverCandFallback.poster
+  var detailFallback = toDetailPortraitCoverFields(
+    coverCandFallback.poster || coverCandFallback.primary,
+    coverCandFallback.backdrop || coverCandFallback.primary
   );
   var base = indexMeta
     ? buildDetailFromIndex(indexMeta, params)
@@ -2221,10 +2244,10 @@ async function loadVideoDetail(owned, params) {
         link: buildVideoLink(videoId, codeHint),
         previewUrl: sitePreviewUrl(videoId),
         videoUrl: sitePreviewUrl(videoId),
-        coverUrl: landFallback.coverUrl,
-        posterPath: landFallback.posterPath,
-        detailPoster: landFallback.detailPoster,
-        backdropPath: landFallback.backdropPath,
+        coverUrl: detailFallback.coverUrl,
+        posterPath: detailFallback.posterPath,
+        detailPoster: detailFallback.detailPoster,
+        backdropPath: detailFallback.backdropPath,
       };
 
   // HTML 补全磁力 / 剧照 / JSON-LD（失败则返回 JSON 基础详情）
@@ -2910,7 +2933,11 @@ function buildDetailFromIndex(meta, params) {
   var title = getText(meta.title || code || videoId);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var coverCand = resolveVideoCoverCandidates(videoId, meta.coverUrl);
-  var landFields = toLandscapeCoverFields(coverCand.backdrop || coverCand.primary, coverCand.poster);
+  // 详情占位：竖图用 cover，横图用 og；HTML 补全后再换 DMM 竖图
+  var detailFields = toDetailPortraitCoverFields(
+    coverCand.poster || coverCand.primary,
+    coverCand.backdrop || coverCand.primary
+  );
   var preview = sitePreviewUrl(videoId);
   var actors = [];
   var peoples = [];
@@ -2938,7 +2965,7 @@ function buildDetailFromIndex(meta, params) {
   if (meta.releaseDate) descParts.push(String(meta.releaseDate).slice(0, 10));
   if (meta.scope) descParts.push(meta.scope);
   var trailers = [];
-  var coverForTrailer = landFields.backdropPath || landFields.coverUrl || "";
+  var coverForTrailer = detailFields.backdropPath || detailFields.coverUrl || "";
   try {
     if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, coverForTrailer);
     else if (preview) trailers = [{ coverUrl: coverForTrailer || undefined, url: preview }];
@@ -2954,10 +2981,10 @@ function buildDetailFromIndex(meta, params) {
     releaseDate: meta.releaseDate ? String(meta.releaseDate).slice(0, 10) : "",
     rating: Number(meta.score || 0) || 0,
     description: descParts.join(" · "),
-    coverUrl: landFields.coverUrl,
-    posterPath: landFields.posterPath,
-    detailPoster: landFields.detailPoster,
-    backdropPath: landFields.backdropPath,
+    coverUrl: detailFields.coverUrl,
+    posterPath: detailFields.posterPath,
+    detailPoster: detailFields.detailPoster,
+    backdropPath: detailFields.backdropPath,
     previewUrl: preview || undefined,
     videoUrl: preview || undefined,
     peoples: peoples.length ? peoples : undefined,
@@ -3021,15 +3048,22 @@ async function enrichDetailFromHtml(base, videoId, params) {
   var title = getText(ld.name || base.title || code);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
 
-  // 详情顶图：优先 DMM/MGStage 高清横图(pl)，失败回退本站 og/cover
+  // 详情顶图：优先 DMM/MGStage 高清竖图(ps)，失败回退本站 cover；backdrop 用横图
   var coverCand = resolveVideoCoverCandidates(videoId, getText(ld.image) || base.coverUrl);
   var covers = await applyHdCoversAsync(code || title, coverCand.primary, coverCand.poster);
+  var portrait =
+    covers.posterPath ||
+    covers.detailPoster ||
+    coverCand.poster ||
+    coverCand.primary ||
+    "";
   var land =
     covers.backdropPath ||
     covers.coverUrl ||
     coverCand.backdrop ||
     coverCand.primary ||
-    "";
+    portrait;
+  var detailFields = toDetailPortraitCoverFields(portrait, land);
   var preview = (ld.video && (ld.video.contentUrl || ld.video.url)) || sitePreviewUrl(videoId) || base.previewUrl;
   var rating = (ld.aggregateRating && Number(ld.aggregateRating.ratingValue)) || base.rating || 0;
   var durationMin = durationFromIso(ld.duration) || base.duration || 0;
@@ -3082,7 +3116,6 @@ async function enrichDetailFromHtml(base, videoId, params) {
     if (preview) trailers = [{ coverUrl: land || undefined, url: preview }];
   }
 
-  var landFields = toLandscapeCoverFields(land, coverCand.primary);
   return {
     id: code || videoId,
     type: "url",
@@ -3094,11 +3127,11 @@ async function enrichDetailFromHtml(base, videoId, params) {
     duration: durationMin || undefined,
     durationText: durationMin ? durationMin + "分钟" : "",
     description: descParts.join(" · ") || base.description,
-    // 顶图横图位优先读 backdropPath；列表位也统一横图
-    coverUrl: landFields.coverUrl,
-    posterPath: landFields.posterPath,
-    detailPoster: landFields.detailPoster,
-    backdropPath: landFields.backdropPath,
+    // 详情竖图位：poster/detailPoster/cover；backdrop 横图
+    coverUrl: detailFields.coverUrl,
+    posterPath: detailFields.posterPath,
+    detailPoster: detailFields.detailPoster,
+    backdropPath: detailFields.backdropPath,
     backdropPaths: backdropPaths.length ? backdropPaths : undefined,
     previewUrl: preview || undefined,
     videoUrl: preview || undefined,
