@@ -405,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.4.0",
+  version: "1.4.1",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力；详情点演员可看作品；封面索引优先并兼容番号；随机/冲谁仅有码非FC2；光鸭最小保留 MB。",
+    "权威榜单 / 神作 / 女优战力；详情演员可点进作品；封面本站优先；随机/冲谁仅有码非FC2；光鸭最小保留 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -451,7 +451,7 @@ WidgetMetadata = {
       id: "loadRanking",
       title: "权威榜单",
       functionName: "loadRanking",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: [
         {
           name: "ranking",
@@ -488,7 +488,7 @@ WidgetMetadata = {
       id: "loadHallOfFame",
       title: "全站神作总榜",
       functionName: "loadHallOfFame",
-      cacheDuration: 3600,
+      cacheDuration: 0,
       params: [
         { name: "page", title: "页码", type: "page", value: "1" },
         { name: "peopleId", title: "人物ID", type: "input", value: "" },
@@ -1304,17 +1304,17 @@ function siteOgUrl(videoId) {
   return id ? STATIC_ORIGIN + "/video/og/" + id + ".webp" : "";
 }
 
-/** 封面候选：索引 coverUrl 优先（对 LOVE/ACC 等无 DMM 高清片更稳），再本站 cover/og */
+/** 封面候选：本站 cover/og 优先，索引 coverUrl 仅作兜底 */
 function resolveVideoCoverCandidates(videoId, indexCover) {
-  var fromIndex = resolveSiteCoverFallback(indexCover) || getText(indexCover);
   var fromSite = siteCoverUrl(videoId);
   var fromOg = siteOgUrl(videoId);
-  var primary = fromIndex || fromSite || fromOg || "";
-  var poster = fromIndex || fromSite || fromOg || "";
+  var fromIndex = resolveSiteCoverFallback(indexCover) || getText(indexCover);
+  var primary = fromSite || fromOg || fromIndex || "";
+  var poster = fromSite || fromOg || fromIndex || "";
   return {
     primary: primary,
     poster: poster,
-    backdrop: fromOg || fromIndex || fromSite || primary,
+    backdrop: fromOg || fromSite || fromIndex || primary,
   };
 }
 
@@ -2152,17 +2152,20 @@ function peopleFromLd(ld, entityMap) {
       ent = (slug && entityMap["slug:" + slug.toLowerCase()]) || entityMap["name:" + name.toLowerCase()];
     }
     var avatar = resolveActressAvatar(ent, slug || id);
+    // 必须带 type+link：详情点击走 loadDetail(jvr:actress:...) 返回作品列表
     peoples.push({
       id: String(id),
+      type: "url",
+      mediaType: "person",
       title: name,
       role: role || "演员",
-      mediaType: "person",
+      link: buildActressLink(slug || name),
       avatar: avatar || undefined,
     });
   }
   if (Array.isArray(ld.actor)) ld.actor.forEach(function (a) { pushPerson(a, "演员"); });
   else pushPerson(ld.actor, "演员");
-  // 导演不注入 peopleId 作品流（避免点开空列表）
+  // 导演不注入作品流（避免点开空列表）
   return peoples;
 }
 
@@ -2923,9 +2926,11 @@ function buildDetailFromIndex(meta, params) {
       var slug = getText(a.slug);
       peoples.push({
         id: String(slug || n),
+        type: "url",
+        mediaType: "person",
         title: n,
         role: gender === "male" ? "男优" : "演员",
-        mediaType: "person",
+        link: buildActressLink(slug || n),
         avatar: resolveActressAvatar(null, slug) || undefined,
       });
     });
@@ -3019,26 +3024,21 @@ async function enrichDetailFromHtml(base, videoId, params) {
   var title = getText(ld.name || base.title || code);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
 
-  var index = null;
-  try {
-    index = await getSearchIndex(params);
-  } catch (e3) {}
-  var indexMeta = null;
-  try {
-    if (index) indexMeta = lookupVideoByCode(buildCodeMap(index), code);
-  } catch (e3b) {}
-  var coverCand = resolveVideoCoverCandidates(
-    videoId,
-    (indexMeta && indexMeta.coverUrl) || getText(ld.image) || base.coverUrl
-  );
-  var covers = await applyHdCoversAsync(code || title, coverCand.primary, coverCand.poster);
+  // 详情封面：本站图优先，同步组装（不做高清 HEAD，避免拖慢详情）
+  var coverCand = resolveVideoCoverCandidates(videoId, getText(ld.image) || base.coverUrl);
+  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
   var preview = (ld.video && (ld.video.contentUrl || ld.video.url)) || sitePreviewUrl(videoId) || base.previewUrl;
   var rating = (ld.aggregateRating && Number(ld.aggregateRating.ratingValue)) || base.rating || 0;
   var durationMin = durationFromIso(ld.duration) || base.duration || 0;
   var releaseDate = getText(ld.datePublished).slice(0, 10) || base.releaseDate || "";
   var maker = (ld.productionCompany && ld.productionCompany.name) || "";
 
-  var entityMap = index ? buildEntityMap(index) : {};
+  // 演员头像尽量用 JSON-LD；search-index 命中缓存时补全，失败不阻塞
+  var entityMap = {};
+  try {
+    var index = await getSearchIndex(params);
+    entityMap = buildEntityMap(index);
+  } catch (e3) {}
   var peoples = peopleFromLd(ld, entityMap);
   if (!peoples.length && base.peoples) peoples = base.peoples;
 
