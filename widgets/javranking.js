@@ -405,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.4.3",
+  version: "1.4.0",
   requiredVersion: "0.0.1",
   description:
-    "影片列表横图位；详情顶图 DMM 高清竖图；演员可点进作品；随机/冲谁仅有码非FC2；光鸭最小保留 MB。",
+    "权威榜单 / 神作 / 女优战力；详情点演员可看作品；今天冲可选制式（默认有码）；封面本站优先；光鸭最小保留 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -533,6 +533,18 @@ WidgetMetadata = {
             { title: "48", value: "48" },
           ],
         },
+        {
+          name: "scope",
+          title: "制式",
+          type: "enumeration",
+          value: "censored",
+          enumOptions: [
+            { title: "有码", value: "censored" },
+            { title: "无码", value: "uncensored" },
+            { title: "FC2", value: "fc2" },
+            { title: "全部", value: "all" },
+          ],
+        },
         { name: "page", title: "页码", type: "page", value: "1" },
         // App 横向人物点击会重开本模块并注入 peopleId（见 SKILL rex）
         { name: "peopleId", title: "人物ID", type: "input", value: "" },
@@ -560,12 +572,12 @@ WidgetMetadata = {
           name: "scope",
           title: "制式",
           type: "enumeration",
-          value: "all",
+          value: "censored",
           enumOptions: [
-            { title: "全部", value: "all" },
             { title: "有码", value: "censored" },
             { title: "无码", value: "uncensored" },
             { title: "FC2", value: "fc2" },
+            { title: "全部", value: "all" },
           ],
         },
         { name: "peopleId", title: "人物ID", type: "input", value: "" },
@@ -1097,43 +1109,6 @@ function buildCoverBundleFromUrls(poster, backdrop) {
     detailPoster: poster,
     coverUrl: backdrop,
     image: backdrop,
-  };
-}
-
-/** 列表强制横图位：三字段都填横图，避免竖图墙抢占 */
-function toLandscapeCoverFields(landscape, fallback) {
-  var land = resolveSiteCoverFallback(landscape) || resolveSiteCoverFallback(fallback) || getText(landscape) || getText(fallback) || "";
-  if (!land) {
-    return { coverUrl: undefined, posterPath: undefined, backdropPath: undefined, detailPoster: undefined };
-  }
-  return {
-    coverUrl: land,
-    posterPath: land,
-    backdropPath: land,
-    detailPoster: land,
-  };
-}
-
-/** 详情竖图：poster/detailPoster/cover 用竖图，backdrop 保留横图 */
-function toDetailPortraitCoverFields(portrait, landscape) {
-  var port =
-    resolveSiteCoverFallback(portrait) ||
-    getText(portrait) ||
-    resolveSiteCoverFallback(landscape) ||
-    getText(landscape) ||
-    "";
-  var land =
-    resolveSiteCoverFallback(landscape) ||
-    getText(landscape) ||
-    port;
-  if (!port && !land) {
-    return { coverUrl: undefined, posterPath: undefined, backdropPath: undefined, detailPoster: undefined };
-  }
-  return {
-    coverUrl: port || land,
-    posterPath: port || land,
-    detailPoster: port || land,
-    backdropPath: land || port,
   };
 }
 
@@ -1769,8 +1744,32 @@ async function applyHdCoversAsync(code, siteCover, sitePoster) {
 }
 
 async function enrichItemsWithVerifiedHdCovers(items) {
-  // 列表已统一本站横图，不再批量 HEAD 高清（详情顶图单独走 DMM）
-  return items || [];
+  items = items || [];
+  if (!items.length) return items;
+  var started = Date.now();
+  var tasks = items.map(function (item) {
+    return (async function () {
+      if (!item) return item;
+      if (Date.now() - started > HD_IMAGE_BATCH_BUDGET_MS) return item;
+      var code = normalizeCode(item.id) || normalizeCode(item.title) || "";
+      if (!code) return item;
+      var site =
+        resolveSiteCoverFallback(item.posterPath) ||
+        resolveSiteCoverFallback(item.coverUrl) ||
+        resolveSiteCoverFallback(item.backdropPath) ||
+        "";
+      var covers = await applyHdCoversAsync(code, site, site);
+      if (covers.coverUrl) item.coverUrl = covers.coverUrl;
+      if (covers.posterPath) item.posterPath = covers.posterPath;
+      if (covers.detailPoster) item.detailPoster = covers.detailPoster;
+      if (covers.backdropPath) item.backdropPath = covers.backdropPath;
+      return item;
+    })();
+  });
+  try {
+    await Promise.all(tasks);
+  } catch (e) {}
+  return items;
 }
 
 function mapIndexVideo(v, extra) {
@@ -1780,10 +1779,8 @@ function mapIndexVideo(v, extra) {
   var code = normalizeCode(v.code);
   var title = getText(v.title || code || videoId);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
-  // 列表：本站横图（og/cover），三字段统一横图位
   var coverCand = resolveVideoCoverCandidates(videoId, v.coverUrl);
-  var land = coverCand.backdrop || coverCand.primary || "";
-  var landFields = toLandscapeCoverFields(land, coverCand.poster);
+  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
   var actors = [];
   if (Array.isArray(v.actorLinks)) {
     v.actorLinks.forEach(function (a) {
@@ -1806,10 +1803,10 @@ function mapIndexVideo(v, extra) {
     releaseDate: v.releaseDate ? String(v.releaseDate).slice(0, 10) : "",
     rating: Number(v.score || 0) || 0,
     description: descParts.join(" · "),
-    coverUrl: landFields.coverUrl,
-    posterPath: landFields.posterPath,
-    detailPoster: landFields.detailPoster,
-    backdropPath: landFields.backdropPath,
+    coverUrl: covers.coverUrl || coverCand.primary || undefined,
+    posterPath: covers.posterPath || coverCand.poster || undefined,
+    detailPoster: covers.detailPoster || covers.posterPath || coverCand.poster || undefined,
+    backdropPath: covers.backdropPath || coverCand.backdrop || coverCand.primary || undefined,
     previewUrl: videoId ? sitePreviewUrl(videoId) : undefined,
   };
 }
@@ -1823,8 +1820,7 @@ function mapRankingRow(row, codeMap, rankFallback) {
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var videoId = String(row.videoId || "").replace(/[^\d]/g, "");
   var coverCand = resolveVideoCoverCandidates(videoId, row.coverUrl || row.cover);
-  var land = coverCand.backdrop || coverCand.primary || "";
-  var landFields = toLandscapeCoverFields(land, coverCand.poster);
+  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
   return {
     id: code || title,
     type: "url",
@@ -1836,10 +1832,10 @@ function mapRankingRow(row, codeMap, rankFallback) {
         ? LINK_PREFIX + "code:" + encodeURIComponent(code)
         : "",
     description: rank ? "#" + rank : "",
-    coverUrl: landFields.coverUrl,
-    posterPath: landFields.posterPath,
-    detailPoster: landFields.detailPoster,
-    backdropPath: landFields.backdropPath,
+    coverUrl: covers.coverUrl || coverCand.primary || undefined,
+    posterPath: covers.posterPath || coverCand.poster || undefined,
+    detailPoster: covers.detailPoster || covers.posterPath || undefined,
+    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
   };
 }
 
@@ -2230,9 +2226,10 @@ async function loadVideoDetail(owned, params) {
   } catch (e0) {}
 
   var coverCandFallback = resolveVideoCoverCandidates(videoId, indexMeta && indexMeta.coverUrl);
-  var detailFallback = toDetailPortraitCoverFields(
-    coverCandFallback.poster || coverCandFallback.primary,
-    coverCandFallback.backdrop || coverCandFallback.primary
+  var coversFallback = applyHdCovers(
+    codeHint || videoId,
+    coverCandFallback.primary,
+    coverCandFallback.poster
   );
   var base = indexMeta
     ? buildDetailFromIndex(indexMeta, params)
@@ -2244,10 +2241,10 @@ async function loadVideoDetail(owned, params) {
         link: buildVideoLink(videoId, codeHint),
         previewUrl: sitePreviewUrl(videoId),
         videoUrl: sitePreviewUrl(videoId),
-        coverUrl: detailFallback.coverUrl,
-        posterPath: detailFallback.posterPath,
-        detailPoster: detailFallback.detailPoster,
-        backdropPath: detailFallback.backdropPath,
+        coverUrl: coversFallback.coverUrl || coverCandFallback.primary || undefined,
+        posterPath: coversFallback.posterPath || coverCandFallback.poster || undefined,
+        detailPoster: coversFallback.detailPoster || coversFallback.posterPath || undefined,
+        backdropPath: coversFallback.backdropPath || coverCandFallback.backdrop || undefined,
       };
 
   // HTML 补全磁力 / 剧照 / JSON-LD（失败则返回 JSON 基础详情）
@@ -2315,17 +2312,17 @@ async function fetchActressWorksFromActorPage(slugOrName, index, codeMap, params
       if (byId) return mapIndexVideo(byId);
       if (!row.videoId && !row.code) return null;
       var coverCand = resolveVideoCoverCandidates(row.videoId, row.coverUrl);
-      var landFields = toLandscapeCoverFields(coverCand.backdrop || coverCand.primary, coverCand.poster);
+      var covers = applyHdCovers(row.code || row.videoId, coverCand.primary, coverCand.poster);
       return {
         id: row.code || row.videoId,
         type: "url",
         mediaType: "movie",
         title: (row.code ? row.code + " " : "") + (row.title || row.videoId),
         link: buildVideoLink(row.videoId, row.code),
-        coverUrl: landFields.coverUrl,
-        posterPath: landFields.posterPath,
-        backdropPath: landFields.backdropPath,
-        detailPoster: landFields.detailPoster,
+        coverUrl: covers.coverUrl || coverCand.primary || undefined,
+        posterPath: covers.posterPath || coverCand.poster || undefined,
+        backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
+        detailPoster: covers.detailPoster || covers.posterPath || undefined,
       };
     })
     .filter(function (x) {
@@ -2473,9 +2470,16 @@ async function loadActressWorksByName(name, index, codeMap, params) {
       works.push(v);
     });
   }
-  // 今天冲谁等场景：作品侧也只要有码非 FC2
-  if (params.censoredOnly) {
-    works = works.filter(isPreferredCensoredVideo);
+  // 今天冲谁等场景：按制式过滤作品
+  if (params.censoredOnly || params.scope) {
+    var scopeFilter = normalizeTodayScope(
+      params.censoredOnly && !params.scope ? { scope: "censored" } : params
+    );
+    if (scopeFilter !== "all") {
+      works = works.filter(function (v) {
+        return videoMatchesTodayScope(v, scopeFilter);
+      });
+    }
   }
 
   var mapped = [];
@@ -2787,7 +2791,7 @@ function isFc2LikeCode(code) {
   return /^FC2([-_]?\d)/i.test(c) || /^FC2PPV/i.test(c);
 }
 
-/** 有码且非 FC2（随机神作 / 今天冲谁 用，避免无图） */
+/** 有码且非 FC2（随机神作 / 今天冲谁默认制式） */
 function isPreferredCensoredVideo(v) {
   if (!v || !v.videoId) return false;
   if (isFc2LikeCode(v.code)) return false;
@@ -2795,6 +2799,57 @@ function isPreferredCensoredVideo(v) {
   // 无 scope 时仍排除 FC2；有 scope 则必须 censored
   if (scope && scope !== "censored") return false;
   return true;
+}
+
+function normalizeTodayScope(params) {
+  var s = getText((params && params.scope) || "censored").toLowerCase();
+  if (s === "all" || s === "censored" || s === "uncensored" || s === "fc2") return s;
+  return "censored";
+}
+
+function videoMatchesTodayScope(v, scope) {
+  if (!v || !v.videoId) return false;
+  scope = getText(scope || "censored").toLowerCase();
+  if (scope === "all") return true;
+  if (scope === "censored") return isPreferredCensoredVideo(v);
+  var vs = getText(v.scope).toLowerCase();
+  if (scope === "fc2") return isFc2LikeCode(v.code) || vs === "fc2";
+  if (scope === "uncensored") {
+    if (isFc2LikeCode(v.code) || vs === "fc2") return false;
+    return !vs || vs === "uncensored";
+  }
+  return true;
+}
+
+function buildActressKeySetForScope(index, scope) {
+  scope = getText(scope || "censored").toLowerCase();
+  if (scope === "censored") return buildPreferredCensoredActressKeySet(index);
+  if (!index) return Object.create(null);
+  var cacheKey = "_jvrActressKeys_" + scope;
+  if (index[cacheKey]) return index[cacheKey];
+  var keys = Object.create(null);
+  if (scope === "all") {
+    index[cacheKey] = keys;
+    return keys;
+  }
+  var videos = index.videos || [];
+  for (var i = 0; i < videos.length; i++) {
+    var v = videos[i];
+    if (!videoMatchesTodayScope(v, scope)) continue;
+    var links = v.actorLinks;
+    if (!Array.isArray(links)) continue;
+    for (var j = 0; j < links.length; j++) {
+      var a = links[j] || {};
+      var gender = getText(a.gender).toLowerCase();
+      if (gender && gender !== "female") continue;
+      var n = getText(a.name).toLowerCase();
+      var slug = getText(a.slug).toLowerCase();
+      if (n) keys[n] = 1;
+      if (slug) keys[slug] = 1;
+    }
+  }
+  index[cacheKey] = keys;
+  return keys;
 }
 
 /** 一次扫描 videos，建立「有有码非FC2作品」的女优 name/slug 集合（O(V) 缓存） */
@@ -2841,10 +2896,14 @@ function listActressEntities(index, opts) {
   opts = opts || {};
   var kw = getText(opts.keyword).toLowerCase();
   var minScore = Number(opts.minScore || 0) || 0;
-  var censoredOnly = !!opts.censoredOnly;
+  var scope = getText(opts.scope || (opts.censoredOnly ? "censored" : "")).toLowerCase();
+  var censoredOnly = !!opts.censoredOnly || scope === "censored";
   var requireAvatar = !!opts.requireAvatar;
   var preferAvatar = !!opts.preferAvatar;
-  var keySet = censoredOnly ? buildPreferredCensoredActressKeySet(index) : null;
+  var filterByScope = scope === "censored" || scope === "uncensored" || scope === "fc2" || censoredOnly;
+  var keySet = filterByScope
+    ? buildActressKeySetForScope(index, scope || "censored")
+    : null;
   var withAvatar = [];
   var withoutAvatar = [];
   (index.entities || []).forEach(function (e) {
@@ -2857,7 +2916,7 @@ function listActressEntities(index, opts) {
       var aliases = Array.isArray(e.aliases) ? e.aliases.join(" ").toLowerCase() : "";
       if (name.indexOf(kw) < 0 && slug.indexOf(kw) < 0 && aliases.indexOf(kw) < 0) return;
     }
-    if (censoredOnly && !actressInCensoredKeySet(e, keySet)) return;
+    if (keySet && !actressInCensoredKeySet(e, keySet)) return;
     var hasAvatar = !!resolveActressAvatar(e, e.slug);
     if (requireAvatar && !hasAvatar) return;
     if (preferAvatar && hasAvatar) withAvatar.push(e);
@@ -2933,11 +2992,7 @@ function buildDetailFromIndex(meta, params) {
   var title = getText(meta.title || code || videoId);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var coverCand = resolveVideoCoverCandidates(videoId, meta.coverUrl);
-  // 详情占位：竖图用 cover，横图用 og；HTML 补全后再换 DMM 竖图
-  var detailFields = toDetailPortraitCoverFields(
-    coverCand.poster || coverCand.primary,
-    coverCand.backdrop || coverCand.primary
-  );
+  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
   var preview = sitePreviewUrl(videoId);
   var actors = [];
   var peoples = [];
@@ -2965,7 +3020,7 @@ function buildDetailFromIndex(meta, params) {
   if (meta.releaseDate) descParts.push(String(meta.releaseDate).slice(0, 10));
   if (meta.scope) descParts.push(meta.scope);
   var trailers = [];
-  var coverForTrailer = detailFields.backdropPath || detailFields.coverUrl || "";
+  var coverForTrailer = covers.coverUrl || coverCand.primary || "";
   try {
     if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, coverForTrailer);
     else if (preview) trailers = [{ coverUrl: coverForTrailer || undefined, url: preview }];
@@ -2981,10 +3036,10 @@ function buildDetailFromIndex(meta, params) {
     releaseDate: meta.releaseDate ? String(meta.releaseDate).slice(0, 10) : "",
     rating: Number(meta.score || 0) || 0,
     description: descParts.join(" · "),
-    coverUrl: detailFields.coverUrl,
-    posterPath: detailFields.posterPath,
-    detailPoster: detailFields.detailPoster,
-    backdropPath: detailFields.backdropPath,
+    coverUrl: covers.coverUrl || coverCand.primary || undefined,
+    posterPath: covers.posterPath || coverCand.poster || undefined,
+    detailPoster: covers.detailPoster || covers.posterPath || coverCand.poster || undefined,
+    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
     previewUrl: preview || undefined,
     videoUrl: preview || undefined,
     peoples: peoples.length ? peoples : undefined,
@@ -3048,22 +3103,14 @@ async function enrichDetailFromHtml(base, videoId, params) {
   var title = getText(ld.name || base.title || code);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
 
-  // 详情顶图：优先 DMM/MGStage 高清竖图(ps)，失败回退本站 cover；backdrop 用横图
+  // 详情封面：优先 DMM/MGStage 高清，失败回退本站
   var coverCand = resolveVideoCoverCandidates(videoId, getText(ld.image) || base.coverUrl);
   var covers = await applyHdCoversAsync(code || title, coverCand.primary, coverCand.poster);
-  var portrait =
-    covers.posterPath ||
-    covers.detailPoster ||
-    coverCand.poster ||
+  var coverMain =
+    covers.coverUrl ||
+    covers.backdropPath ||
     coverCand.primary ||
     "";
-  var land =
-    covers.backdropPath ||
-    covers.coverUrl ||
-    coverCand.backdrop ||
-    coverCand.primary ||
-    portrait;
-  var detailFields = toDetailPortraitCoverFields(portrait, land);
   var preview = (ld.video && (ld.video.contentUrl || ld.video.url)) || sitePreviewUrl(videoId) || base.previewUrl;
   var rating = (ld.aggregateRating && Number(ld.aggregateRating.ratingValue)) || base.rating || 0;
   var durationMin = durationFromIso(ld.duration) || base.duration || 0;
@@ -3096,7 +3143,7 @@ async function enrichDetailFromHtml(base, videoId, params) {
   var relatedItems = buildMagnetRelatedItems(magnets, {
     code: code,
     title: title,
-    cover: land,
+    cover: coverMain,
   });
 
   var descParts = [];
@@ -3110,10 +3157,10 @@ async function enrichDetailFromHtml(base, videoId, params) {
 
   var trailers = [];
   try {
-    if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, land);
-    else if (preview) trailers = [{ coverUrl: land || undefined, url: preview }];
+    if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, coverMain);
+    else if (preview) trailers = [{ coverUrl: coverMain || undefined, url: preview }];
   } catch (e5) {
-    if (preview) trailers = [{ coverUrl: land || undefined, url: preview }];
+    if (preview) trailers = [{ coverUrl: coverMain || undefined, url: preview }];
   }
 
   return {
@@ -3127,11 +3174,10 @@ async function enrichDetailFromHtml(base, videoId, params) {
     duration: durationMin || undefined,
     durationText: durationMin ? durationMin + "分钟" : "",
     description: descParts.join(" · ") || base.description,
-    // 详情竖图位：poster/detailPoster/cover；backdrop 横图
-    coverUrl: detailFields.coverUrl,
-    posterPath: detailFields.posterPath,
-    detailPoster: detailFields.detailPoster,
-    backdropPath: detailFields.backdropPath,
+    coverUrl: covers.coverUrl || coverCand.primary || undefined,
+    posterPath: covers.posterPath || coverCand.poster || undefined,
+    detailPoster: covers.detailPoster || covers.posterPath || coverCand.poster || undefined,
+    backdropPath: covers.backdropPath || coverCand.backdrop || coverCand.primary || undefined,
     backdropPaths: backdropPaths.length ? backdropPaths : undefined,
     previewUrl: preview || undefined,
     videoUrl: preview || undefined,
@@ -3147,18 +3193,30 @@ async function loadTodayWho(params) {
   params = params || {};
   rememberParams(params);
   try {
+    var scope = normalizeTodayScope(params);
     var peopleId = resolvePeopleIdFromParams(params);
     var index = await getSearchIndex(params);
     var codeMap = buildCodeMap(index);
+    var scopeLabel =
+      scope === "censored"
+        ? "有码"
+        : scope === "uncensored"
+          ? "无码"
+          : scope === "fc2"
+            ? "FC2"
+            : "全部";
 
     // rex: 横向人物点击会重开「本模块」并带 peopleId → 必须返回该女友作品，不能再返回看谁列表
     if (peopleId) {
-      console.log("[javranking][loadTodayWho] peopleId=", peopleId);
+      console.log("[javranking][loadTodayWho] peopleId=", peopleId, "scope=", scope);
       return await loadActressWorksByName(
         peopleId,
         index,
         codeMap,
-        Object.assign({}, params, { censoredOnly: true })
+        Object.assign({}, params, {
+          scope: scope,
+          censoredOnly: scope === "censored",
+        })
       );
     }
 
@@ -3166,11 +3224,12 @@ async function loadTodayWho(params) {
     // 一次扫描缓存女优集合 + 优先有头像，避免对每位女优全表扫作品
     var pool = listActressEntities(index, {
       minScore: Number(params.minScore || 1) || 1,
-      censoredOnly: true,
+      scope: scope,
+      censoredOnly: scope === "censored",
       preferAvatar: true,
     });
     if (!pool.length) {
-      var keySet = buildPreferredCensoredActressKeySet(index);
+      var keySet = buildActressKeySetForScope(index, scope);
       var md = await fetchMarkdown("most-awarded-actors", params);
       var sections = parsePowerSections(md);
       pool = sections
@@ -3184,12 +3243,13 @@ async function loadTodayWho(params) {
           };
         })
         .filter(function (ent) {
+          if (scope === "all") return true;
           return actressInCensoredKeySet(ent, keySet) || resolveActressAvatar(ent, ent.slug);
         });
     }
     var picked = shuffleCopy(pool.slice(0, Math.max(count * 6, Math.min(pool.length, 120)))).slice(0, count);
     return picked.map(function (ent) {
-      return mapActressEntity(ent, { desc: "今天冲谁·有码" });
+      return mapActressEntity(ent, { desc: "今天冲谁·" + scopeLabel });
     });
   } catch (error) {
     console.error("[javranking][loadTodayWho] 失败:", error.message || error);
@@ -3204,17 +3264,17 @@ async function loadTodayWhat(params) {
     var byPeople = await loadWorksIfPeopleId(params);
     if (byPeople) return byPeople;
     var count = Math.max(6, Math.min(48, Number(params.count || 24) || 24));
-    var scope = getText(params.scope || "all").toLowerCase();
+    var scope = normalizeTodayScope(params);
     var index = await getSearchIndex(params);
     var pool = (index.videos || []).filter(function (v) {
-      if (!v || !v.videoId) return false;
-      if (scope && scope !== "all") {
-        var vs = getText(v.scope).toLowerCase();
-        if (vs && vs !== scope) return false;
-      }
+      if (!videoMatchesTodayScope(v, scope)) return false;
       return Number(v.score || 0) > 0 || (Array.isArray(v.rankingAppearances) && v.rankingAppearances.length);
     });
-    if (!pool.length) pool = (index.videos || []).slice();
+    if (!pool.length) {
+      pool = (index.videos || []).filter(function (v) {
+        return videoMatchesTodayScope(v, scope);
+      });
+    }
     // 偏向高分：先取前 40% 高分再随机
     pool = pool.slice().sort(function (a, b) {
       return (Number(b.score || 0) || 0) - (Number(a.score || 0) || 0);
