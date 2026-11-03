@@ -14,7 +14,7 @@
  * 图片：复用“解密javdb.可视化.js”的 direct-dmm / MGStage 高清候选策略
  * 详情：按番号生成高清封面/剧照；简介含剧情+短评；trailers 预告片模块
  * 磁力：relatedItems 合并 JavDB API / 短评；展示体积·特征·来源，简介含文件名与转存说明
- * 播放：loadResource(stream) 按番号匹配光鸭网盘文件直链
+ * 光鸭：仅磁力转存（无顶层搜索、无 loadResource 播放源）
  * 浏览：可视化厂牌/分类 + 榜单（热播/有码/无码/FC2/欧美/女优等）；已移除全量演员/系列/标签/片商枚举
  */
 
@@ -1310,9 +1310,9 @@ function firstEnumValue(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.9.0",
+  version: "4.9.2",
   requiredVersion: "0.0.1",
-  description: "JavDB：榜单/厂牌/分类浏览；详情磁力转存光鸭，播放源匹配光鸭网盘",
+  description: "JavDB：榜单/厂牌/分类浏览；详情磁力转存光鸭（不提供播放源）",
   author: "老头",
   site: API_SITE,
   detailCacheDuration: 3600,
@@ -1355,7 +1355,7 @@ WidgetMetadata = {
       name: "guangya_token",
       title: "光鸭 refresh_token",
       type: "input",
-      description: "gy.- 开头；用于磁力转存与详情播放源匹配网盘文件",
+      description: "gy.- 开头；用于详情磁力转存光鸭云盘",
       value: "",
     },
     {
@@ -1381,15 +1381,6 @@ WidgetMetadata = {
     },
   ],
   modules: [
-    {
-      id: "loadResource",
-      title: "光鸭云盘",
-      description: "按番号自动匹配光鸭网盘文件作为播放源",
-      functionName: "loadResource",
-      type: "stream",
-      cacheDuration: 30,
-      params: [],
-    },
     {
       id: "latest",
       title: "最近更新",
@@ -3148,14 +3139,7 @@ WidgetMetadata = {
       ],
     },
   ],
-  search: {
-    title: "全局搜索",
-    functionName: "searchGlobal",
-    params: [
-      { name: "keyword", title: "关键词", type: "input", value: "" },
-      { name: "page", title: "页码", type: "page", value: "1" },
-    ],
-  },
+  // 无顶层 WidgetMetadata.search；无 loadResource（不提供光鸭播放源）
 };
 
 /* ===== module: 04-storage.js ===== */
@@ -6548,403 +6532,6 @@ async function handleGuangyaMagnetSave(hash, params) {
   }
 }
 
-/* ===== module: 14-guangya-stream.js ===== */
-
-/* ========================= 光鸭番号播放源（stream） ========================= */
-/* 移植自 guangya_jav.js：按番号匹配网盘视频并返回直链，供详情页播放源调用 */
-
-var GY_STREAM_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-var GY_STREAM_WESTERN_NOISE = /\b(?:xxx|1080p|2160p|4k|mp4|mkv|x264|x265|hevc|web-dl|webdl|ktr|n1c)\b/gi;
-var GY_STREAM_FILE_CACHE = {};
-
-function gyStreamIsVideoFile(name) {
-  var ext = String(name || "")
-    .split(".")
-    .pop()
-    .toLowerCase();
-  return !!GY_VIDEO_EXTS[ext];
-}
-
-function gyStreamFormatSize(bytes) {
-  var n = Number(bytes || 0);
-  if (!n) return "";
-  var units = ["B", "KB", "MB", "GB", "TB"];
-  var i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1);
-  return (n / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + " " + units[i];
-}
-
-function gyStreamNormalizeFile(item) {
-  item = item || {};
-  return {
-    fileId: String(item.fileId || item.id || ""),
-    filename: item.fileName || item.name || "",
-    size: Number(item.fileSize || item.size || 0),
-    isDir: item.resType === 2 || item.isDir === true,
-    parentId: String(item.parentId || ""),
-  };
-}
-
-function gyStreamGuessQuality(filename) {
-  var fn = String(filename || "").toLowerCase();
-  if (fn.indexOf("2160") !== -1 || fn.indexOf("4k") !== -1) return "4K";
-  if (fn.indexOf("1080") !== -1) return "1080P";
-  if (fn.indexOf("720") !== -1) return "720P";
-  return "";
-}
-
-function gyStreamExtractNumber(text) {
-  var s = safeText(text).toUpperCase();
-  if (!s) return "";
-  s = s.replace(/^[A-Z0-9]+(?:\.[A-Z0-9]+)+@/, "");
-  s = s.replace(/^(?:HHD800|HHB800)[_\-@.\s]?/, "");
-  var normalized = s.replace(/_/g, "-").replace(/\s+/g, " ").trim();
-  var patterns = [
-    /\bFC2(?:[- ]?PPV)?[- ]?(\d{5,8})\b/,
-    /\bCARIB[- ]?(\d{6,8})\b/,
-    /\b1PONDO[- ]?(\d{6,8})\b/,
-    /\bHEYZO[- ]?(\d{3,6})\b/,
-    /\bT28[- ]?(\d{6,8})\b/,
-    /\b([A-Z]{2,15})[- ]?(\d{2,10})\b/,
-    /\b(\d{6}[-_]\d{2,3})\b/,
-  ];
-  for (var i = 0; i < patterns.length; i++) {
-    var match = normalized.match(patterns[i]);
-    if (!match) continue;
-    if (match[1] && match[2]) return match[1] + "-" + match[2];
-    if (match[1]) return String(match[1]).replace(/\s+/g, "");
-  }
-  return "";
-}
-
-function gyStreamNormalizeToken(text) {
-  return String(text || "")
-    .replace(/[^a-z0-9]/gi, "")
-    .toLowerCase();
-}
-
-function gyStreamBuildSearchTexts(number) {
-  var raw = safeText(number);
-  var texts = [];
-  function add(value) {
-    value = safeText(value);
-    if (!value || texts.indexOf(value) >= 0) return;
-    texts.push(value);
-  }
-  add(raw.toLowerCase());
-  add(gyStreamNormalizeToken(raw));
-  add(raw.toUpperCase());
-  return texts;
-}
-
-function gyStreamFilenameMatches(filename, target) {
-  var fn = gyStreamNormalizeToken(filename);
-  return !!target && fn.indexOf(target) !== -1;
-}
-
-function gyStreamExtractWesternSceneKey(text) {
-  var s = safeText(text).toLowerCase();
-  if (!s) return null;
-  s = s.replace(GY_STREAM_WESTERN_NOISE, "");
-  var clean = s
-    .replace(/[_\s:]+/g, ".")
-    .replace(/\.+/g, ".")
-    .replace(/^\.|\.$/g, "")
-    .trim();
-  if (!clean) return null;
-  var dateMatch = clean.match(/(\d{2})[-.](\d{2})[-.](\d{2})/);
-  if (!dateMatch) return null;
-  var dateStr = dateMatch[0];
-  var dateIndex = dateMatch.index || 0;
-  var beforeRaw = clean.slice(0, dateIndex).replace(/\.+$/, "").replace(/^\.+/, "");
-  var beforeParts = beforeRaw.split(".").filter(Boolean);
-  var studio = beforeParts.length ? beforeParts[beforeParts.length - 1] : "";
-  var afterRaw = clean.slice(dateIndex + dateStr.length).replace(/^\.+/, "").replace(/\.+$/, "");
-  var performerParts = afterRaw.split(".").filter(Boolean);
-  if (!studio || !performerParts.length) return null;
-  return {
-    type: "western",
-    key: studio + "." + dateStr + "." + performerParts.join("."),
-    searchText: studio,
-    strictTarget: (studio + dateStr.replace(/\./g, "") + performerParts.join(".")).replace(/[^a-z0-9]/g, ""),
-  };
-}
-
-function gyStreamExtractWesternDateKey(text) {
-  var s = safeText(text).toLowerCase();
-  if (!s) return null;
-  s = s.replace(GY_STREAM_WESTERN_NOISE, "");
-  var clean = s
-    .replace(/[_\s:]+/g, ".")
-    .replace(/\.+/g, ".")
-    .replace(/^\.|\.$/g, "")
-    .trim();
-  var dateMatch = clean.match(/(\d{2})[-.](\d{2})[-.](\d{2})/);
-  if (!dateMatch) return null;
-  var dateStr = dateMatch[0];
-  var studio =
-    clean
-      .slice(0, dateMatch.index || 0)
-      .replace(/\.+$/, "")
-      .split(".")
-      .filter(Boolean)
-      .pop() || "";
-  if (!studio) return null;
-  return {
-    type: "western_date",
-    key: studio + "." + dateStr,
-    searchText: studio,
-    strictTarget: (studio + dateStr.replace(/\./g, "")).replace(/[^a-z0-9]/g, ""),
-  };
-}
-
-function gyStreamExtractMatchKey(text) {
-  var number = gyStreamExtractNumber(text);
-  if (number) {
-    return {
-      type: "jav",
-      key: number,
-      searchText: number.toLowerCase(),
-    };
-  }
-  var western = gyStreamExtractWesternSceneKey(text);
-  if (western) return western;
-  return gyStreamExtractWesternDateKey(text);
-}
-
-function gyStreamScoreWesternFile(file) {
-  var fn = String((file && file.filename) || "").toLowerCase();
-  var score = 0;
-  if (fn.indexOf("trailer") !== -1 || fn.indexOf("sample") !== -1 || fn.indexOf("preview") !== -1) score -= 100;
-  var size = Number((file && file.size) || 0);
-  if (size >= 2 * 1024 * 1024 * 1024) score += 30;
-  else if (size >= 1024 * 1024 * 1024) score += 20;
-  else if (size < 50 * 1024 * 1024) score -= 20;
-  return score;
-}
-
-async function gyStreamApiPost(accessToken, did, path, body) {
-  var url = String(path || "").indexOf("http") === 0 ? path : GUANGYA_API_BASE + path;
-  var data = await gyHttpPost(url, gyApiHeaders(accessToken, did), body || {}, 15000);
-  if (!data) throw new Error("光鸭空响应");
-  if (data.error || (data.msg && data.msg !== "success")) {
-    throw new Error(data.msg || data.error_description || data.error || "光鸭 API 错误");
-  }
-  return data;
-}
-
-async function gyStreamSearchFiles(accessToken, did, keyword, page, pageSize) {
-  var data = await gyStreamApiPost(accessToken, did, "/userres/v1/file/search_files", {
-    name: keyword,
-    page: Math.max(0, (page || 1) - 1),
-    pageSize: pageSize || 50,
-  });
-  var list = (data.data && data.data.list) || [];
-  return list.map(gyStreamNormalizeFile).filter(function (f) {
-    return !!f.fileId;
-  });
-}
-
-async function gyStreamListFolder(accessToken, did, parentId, page, pageSize) {
-  var data = await gyStreamApiPost(accessToken, did, "/userres/v1/file/get_file_list", {
-    parentId: parentId || "",
-    page: Math.max(0, (page || 1) - 1),
-    pageSize: pageSize || 100,
-  });
-  var list = (data.data && data.data.list) || [];
-  return list.map(gyStreamNormalizeFile).filter(function (f) {
-    return !!f.fileId;
-  });
-}
-
-async function gyStreamGetDownloadUrl(accessToken, did, fileId) {
-  var data = await gyStreamApiPost(accessToken, did, "/nd.bizuserres.s/v1/get_res_download_url", {
-    fileId: fileId,
-  });
-  return (data.data && data.data.signedURL) || "";
-}
-
-async function gyStreamSearchByMatchKey(accessToken, did, matchKey) {
-  if (matchKey.type !== "jav") {
-    return await gyStreamSearchFiles(accessToken, did, matchKey.searchText, 1, 50);
-  }
-  var texts = gyStreamBuildSearchTexts(matchKey.key);
-  for (var i = 0; i < texts.length; i++) {
-    var files = await gyStreamSearchFiles(accessToken, did, texts[i], 1, 50);
-    if (files.length) return files;
-  }
-  return [];
-}
-
-async function gyStreamExpandMatched(accessToken, did, files, matchKey, target) {
-  var expanded = [];
-  var seen = {};
-  function push(file) {
-    if (!file || !file.fileId || seen[file.fileId]) return;
-    seen[file.fileId] = true;
-    expanded.push(file);
-  }
-  for (var i = 0; i < (files || []).length; i++) {
-    var file = files[i];
-    if (file.isDir) {
-      var folderKey = gyStreamNormalizeToken(file.filename);
-      if (
-        matchKey.type === "jav" &&
-        folderKey.indexOf(target) === -1 &&
-        target.indexOf(folderKey) === -1
-      ) {
-        continue;
-      }
-      var children = await gyStreamListFolder(accessToken, did, file.fileId, 1, 100);
-      for (var j = 0; j < children.length; j++) {
-        if (children[j].isDir) continue;
-        if (matchKey.type === "jav") {
-          if (folderKey.indexOf(target) !== -1 || gyStreamFilenameMatches(children[j].filename, target)) {
-            push(children[j]);
-          }
-        } else {
-          push(children[j]);
-        }
-      }
-      continue;
-    }
-    push(file);
-  }
-  return expanded;
-}
-
-function gyStreamCacheFile(file) {
-  if (file && file.fileId) {
-    GY_STREAM_FILE_CACHE[file.fileId] = {
-      fileId: file.fileId,
-      filename: file.filename,
-      size: file.size,
-    };
-  }
-}
-
-async function gyStreamBuildSources(accessToken, did, file) {
-  if (!file || !file.fileId || !gyStreamIsVideoFile(file.filename)) return [];
-  gyStreamCacheFile(file);
-  var url = await gyStreamGetDownloadUrl(accessToken, did, file.fileId);
-  if (!url) return [];
-  var label = gyStreamGuessQuality(file.filename);
-  var number = gyStreamExtractNumber(file.filename);
-  return [
-    {
-      id: "guangya:" + file.fileId,
-      name: "光鸭云盘" + (label ? " (" + label + ")" : ""),
-      description:
-        (number ? "番号: " + number + "\n" : "") +
-        "文件: " +
-        file.filename +
-        (file.size ? "\n大小: " + gyStreamFormatSize(file.size) : ""),
-      url: url,
-      customHeaders: {
-        Referer: GUANGYA_SITE + "/",
-        "User-Agent": GY_STREAM_UA,
-      },
-    },
-  ];
-}
-
-function gyStreamCollectTexts(params) {
-  params = params || {};
-  var texts = [];
-  function add(v) {
-    v = safeText(v);
-    if (v) texts.push(v);
-  }
-  add(params.title);
-  add(params.name);
-  add(params.originalTitle);
-  add(params.id);
-  add(params.number);
-  add(params.code);
-  add(params.description);
-  add(params.episodeName);
-  add(params.seriesName);
-  add(params.link);
-  add(params.videoId);
-  return texts;
-}
-
-async function gyStreamEnsureAuth(params) {
-  var cfg = await getGuangyaConfig(params || {});
-  var refresh = normalizeGuangyaToken(cfg.guangya_token || "");
-  if (!refresh) return null;
-  var did = await ensureGuangyaDeviceId();
-  var accessToken = await ensureGuangyaAccessToken(refresh, did);
-  return { accessToken: accessToken, did: did, refresh: refresh };
-}
-
-async function loadResource(params) {
-  params = params || {};
-  try {
-    var auth = await gyStreamEnsureAuth(params);
-    if (!auth) {
-      console.log("[javdb/stream] skipped: no guangya token");
-      return [];
-    }
-
-    var texts = gyStreamCollectTexts(params);
-    var matchKey = gyStreamExtractMatchKey(texts.join(" "));
-    if (!matchKey) {
-      console.log("[javdb/stream] no match key from:", texts.slice(0, 3).join(" | "));
-      return [];
-    }
-    console.log("[javdb/stream] match:", matchKey.type, matchKey.key);
-
-    var files = await gyStreamSearchByMatchKey(auth.accessToken, auth.did, matchKey);
-    if (!files.length) return [];
-
-    var matched = [];
-    if (matchKey.type === "jav") {
-      var target = gyStreamNormalizeToken(matchKey.key);
-      for (var i = 0; i < files.length; i++) {
-        var file = files[i];
-        if (file.isDir) {
-          var folderKey = gyStreamNormalizeToken(file.filename);
-          if (folderKey.indexOf(target) !== -1 || target.indexOf(folderKey) !== -1) matched.push(file);
-          continue;
-        }
-        if (gyStreamFilenameMatches(file.filename, target)) matched.push(file);
-      }
-      matched = await gyStreamExpandMatched(auth.accessToken, auth.did, matched, matchKey, target);
-    } else {
-      var strict = matchKey.strictTarget;
-      for (var w = 0; w < files.length; w++) {
-        var wfn = gyStreamNormalizeToken(files[w].filename);
-        if (wfn.indexOf(strict) !== -1) matched.push(files[w]);
-      }
-      if (matchKey.type === "western_date" && matched.length > 1) {
-        matched.sort(function (a, b) {
-          return gyStreamScoreWesternFile(b) - gyStreamScoreWesternFile(a);
-        });
-        matched = matched.filter(function (f) {
-          return gyStreamScoreWesternFile(f) >= 0;
-        });
-        if (!matched.length) matched = files.slice(0, 1);
-      }
-    }
-
-    if (!matched.length) return [];
-
-    var streams = [];
-    for (var s = 0; s < matched.length; s++) {
-      if (!gyStreamIsVideoFile(matched[s].filename)) continue;
-      var part = await gyStreamBuildSources(auth.accessToken, auth.did, matched[s]);
-      if (part.length) streams = streams.concat(part);
-      if (streams.length >= 3) break;
-    }
-    console.log("[javdb/stream] sources:", streams.length);
-    return streams;
-  } catch (err) {
-    console.error("[javdb/stream] failed:", (err && err.message) || err);
-    return [];
-  }
-}
-
 /* ===== module: 10-visual-hd-images.js ===== */
 
 /* ========================= 高清图片（可视化版策略） ========================= */
@@ -7744,10 +7331,6 @@ async function loadDetail(link, params) {
     } else if (resolveGuangyaTokenSync()) {
       descParts.push("磁力: 暂无可用磁链");
     }
-    if (resolveGuangyaTokenSync()) {
-      descParts.push("播放: 点击播放将按番号匹配光鸭网盘文件");
-    }
-
     var item = {
       id: code || movie.id || movieId,
       type: "detail",
@@ -7761,7 +7344,7 @@ async function loadDetail(link, params) {
       genreItems: meta.genreItems,
       peoples: meta.peoples,
       description: descParts.join("\n\n"),
-      // 预告走 trailers；正片播放源由 loadResource(stream) 按光鸭网盘匹配
+      // 预告走 trailers；本脚本不提供正片播放源
       trailers: trailers,
       videoId: movie.id || movieId,
       number: code || "",
@@ -7829,8 +7412,6 @@ if (typeof module !== "undefined" && module.exports) {
     mergeAndDedupeMagnets: mergeAndDedupeMagnets,
     buildMagnetItemDescription: buildMagnetItemDescription,
     formatMagnetSourceTip: formatMagnetSourceTip,
-    loadResource: loadResource,
-    gyStreamExtractMatchKey: gyStreamExtractMatchKey,
     dedupeMagnetsByGbBucket: dedupeMagnetsByGbBucket,
     compareMagnetPriority: compareMagnetPriority,
     gyFilterResolvedFiles: gyFilterResolvedFiles,

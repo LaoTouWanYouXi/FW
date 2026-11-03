@@ -405,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.4.1",
+  version: "1.4.2",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力；详情演员可点进作品；封面本站优先；随机/冲谁仅有码非FC2；光鸭最小保留 MB。",
+    "列表横图展示；详情顶图 DMM 高清横图；演员可点进作品；随机/冲谁仅有码非FC2；光鸭最小保留 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -1100,6 +1100,20 @@ function buildCoverBundleFromUrls(poster, backdrop) {
   };
 }
 
+/** 列表强制横图位：三字段都填横图，避免竖图墙抢占 */
+function toLandscapeCoverFields(landscape, fallback) {
+  var land = resolveSiteCoverFallback(landscape) || resolveSiteCoverFallback(fallback) || getText(landscape) || getText(fallback) || "";
+  if (!land) {
+    return { coverUrl: undefined, posterPath: undefined, backdropPath: undefined, detailPoster: undefined };
+  }
+  return {
+    coverUrl: land,
+    posterPath: land,
+    backdropPath: land,
+    detailPoster: land,
+  };
+}
+
 async function isHdImageAvailable(url) {
   var clean = sanitizeCoverUrl(url) || String(url || "").trim();
   if (!clean || isInvalidCoverTarget(clean)) return false;
@@ -1732,34 +1746,8 @@ async function applyHdCoversAsync(code, siteCover, sitePoster) {
 }
 
 async function enrichItemsWithVerifiedHdCovers(items) {
-  items = items || [];
-  if (!items.length) return items;
-  var started = Date.now();
-  var tasks = items.map(function (item) {
-    return (async function () {
-      if (!item) return item;
-      // 批量总预算：超时后剩余条目保留本站图，已开始的仍会跑完优先高清逻辑
-      if (Date.now() - started > HD_IMAGE_BATCH_BUDGET_MS) return item;
-      var code = normalizeCode(item.id) || normalizeCode(item.title) || "";
-      if (!code) return item;
-      var site =
-        resolveSiteCoverFallback(item.posterPath) ||
-        resolveSiteCoverFallback(item.coverUrl) ||
-        resolveSiteCoverFallback(item.backdropPath) ||
-        "";
-      // 优先 DMM/MGStage 高清；失败回退本站
-      var covers = await applyHdCoversAsync(code, site, site);
-      if (covers.coverUrl) item.coverUrl = covers.coverUrl;
-      if (covers.posterPath) item.posterPath = covers.posterPath;
-      if (covers.detailPoster) item.detailPoster = covers.detailPoster;
-      if (covers.backdropPath) item.backdropPath = covers.backdropPath;
-      return item;
-    })();
-  });
-  try {
-    await Promise.all(tasks);
-  } catch (e) {}
-  return items;
+  // 列表已统一本站横图，不再批量 HEAD 高清（详情顶图单独走 DMM）
+  return items || [];
 }
 
 function mapIndexVideo(v, extra) {
@@ -1769,9 +1757,10 @@ function mapIndexVideo(v, extra) {
   var code = normalizeCode(v.code);
   var title = getText(v.title || code || videoId);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
-  // LOVE/ACC 等无 DMM 高清：优先用索引自带 coverUrl，避免空图/坏图
+  // 列表：本站横图（og/cover），三字段统一横图位
   var coverCand = resolveVideoCoverCandidates(videoId, v.coverUrl);
-  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
+  var land = coverCand.backdrop || coverCand.primary || "";
+  var landFields = toLandscapeCoverFields(land, coverCand.poster);
   var actors = [];
   if (Array.isArray(v.actorLinks)) {
     v.actorLinks.forEach(function (a) {
@@ -1794,10 +1783,10 @@ function mapIndexVideo(v, extra) {
     releaseDate: v.releaseDate ? String(v.releaseDate).slice(0, 10) : "",
     rating: Number(v.score || 0) || 0,
     description: descParts.join(" · "),
-    coverUrl: covers.coverUrl || coverCand.primary || undefined,
-    posterPath: covers.posterPath || coverCand.poster || undefined,
-    detailPoster: covers.detailPoster || covers.posterPath || coverCand.poster || undefined,
-    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
+    coverUrl: landFields.coverUrl,
+    posterPath: landFields.posterPath,
+    detailPoster: landFields.detailPoster,
+    backdropPath: landFields.backdropPath,
     previewUrl: videoId ? sitePreviewUrl(videoId) : undefined,
   };
 }
@@ -1811,7 +1800,8 @@ function mapRankingRow(row, codeMap, rankFallback) {
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var videoId = String(row.videoId || "").replace(/[^\d]/g, "");
   var coverCand = resolveVideoCoverCandidates(videoId, row.coverUrl || row.cover);
-  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
+  var land = coverCand.backdrop || coverCand.primary || "";
+  var landFields = toLandscapeCoverFields(land, coverCand.poster);
   return {
     id: code || title,
     type: "url",
@@ -1823,10 +1813,10 @@ function mapRankingRow(row, codeMap, rankFallback) {
         ? LINK_PREFIX + "code:" + encodeURIComponent(code)
         : "",
     description: rank ? "#" + rank : "",
-    coverUrl: covers.coverUrl || coverCand.primary || undefined,
-    posterPath: covers.posterPath || coverCand.poster || undefined,
-    detailPoster: covers.detailPoster || covers.posterPath || undefined,
-    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
+    coverUrl: landFields.coverUrl,
+    posterPath: landFields.posterPath,
+    detailPoster: landFields.detailPoster,
+    backdropPath: landFields.backdropPath,
   };
 }
 
@@ -2217,6 +2207,10 @@ async function loadVideoDetail(owned, params) {
   } catch (e0) {}
 
   var coverCandFallback = resolveVideoCoverCandidates(videoId, indexMeta && indexMeta.coverUrl);
+  var landFallback = toLandscapeCoverFields(
+    coverCandFallback.backdrop || coverCandFallback.primary,
+    coverCandFallback.poster
+  );
   var base = indexMeta
     ? buildDetailFromIndex(indexMeta, params)
     : {
@@ -2227,9 +2221,10 @@ async function loadVideoDetail(owned, params) {
         link: buildVideoLink(videoId, codeHint),
         previewUrl: sitePreviewUrl(videoId),
         videoUrl: sitePreviewUrl(videoId),
-        coverUrl: coverCandFallback.primary || undefined,
-        posterPath: coverCandFallback.poster || undefined,
-        backdropPath: coverCandFallback.backdrop || undefined,
+        coverUrl: landFallback.coverUrl,
+        posterPath: landFallback.posterPath,
+        detailPoster: landFallback.detailPoster,
+        backdropPath: landFallback.backdropPath,
       };
 
   // HTML 补全磁力 / 剧照 / JSON-LD（失败则返回 JSON 基础详情）
@@ -2297,15 +2292,17 @@ async function fetchActressWorksFromActorPage(slugOrName, index, codeMap, params
       if (byId) return mapIndexVideo(byId);
       if (!row.videoId && !row.code) return null;
       var coverCand = resolveVideoCoverCandidates(row.videoId, row.coverUrl);
+      var landFields = toLandscapeCoverFields(coverCand.backdrop || coverCand.primary, coverCand.poster);
       return {
         id: row.code || row.videoId,
         type: "url",
         mediaType: "movie",
         title: (row.code ? row.code + " " : "") + (row.title || row.videoId),
         link: buildVideoLink(row.videoId, row.code),
-        coverUrl: coverCand.primary || undefined,
-        posterPath: coverCand.poster || undefined,
-        backdropPath: coverCand.backdrop || undefined,
+        coverUrl: landFields.coverUrl,
+        posterPath: landFields.posterPath,
+        backdropPath: landFields.backdropPath,
+        detailPoster: landFields.detailPoster,
       };
     })
     .filter(function (x) {
@@ -2913,7 +2910,7 @@ function buildDetailFromIndex(meta, params) {
   var title = getText(meta.title || code || videoId);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var coverCand = resolveVideoCoverCandidates(videoId, meta.coverUrl);
-  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
+  var landFields = toLandscapeCoverFields(coverCand.backdrop || coverCand.primary, coverCand.poster);
   var preview = sitePreviewUrl(videoId);
   var actors = [];
   var peoples = [];
@@ -2941,7 +2938,7 @@ function buildDetailFromIndex(meta, params) {
   if (meta.releaseDate) descParts.push(String(meta.releaseDate).slice(0, 10));
   if (meta.scope) descParts.push(meta.scope);
   var trailers = [];
-  var coverForTrailer = covers.coverUrl || coverCand.primary || "";
+  var coverForTrailer = landFields.backdropPath || landFields.coverUrl || "";
   try {
     if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, coverForTrailer);
     else if (preview) trailers = [{ coverUrl: coverForTrailer || undefined, url: preview }];
@@ -2957,10 +2954,10 @@ function buildDetailFromIndex(meta, params) {
     releaseDate: meta.releaseDate ? String(meta.releaseDate).slice(0, 10) : "",
     rating: Number(meta.score || 0) || 0,
     description: descParts.join(" · "),
-    coverUrl: covers.coverUrl || coverCand.primary || undefined,
-    posterPath: covers.posterPath || coverCand.poster || undefined,
-    detailPoster: covers.detailPoster || covers.posterPath || coverCand.poster || undefined,
-    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
+    coverUrl: landFields.coverUrl,
+    posterPath: landFields.posterPath,
+    detailPoster: landFields.detailPoster,
+    backdropPath: landFields.backdropPath,
     previewUrl: preview || undefined,
     videoUrl: preview || undefined,
     peoples: peoples.length ? peoples : undefined,
@@ -3024,9 +3021,15 @@ async function enrichDetailFromHtml(base, videoId, params) {
   var title = getText(ld.name || base.title || code);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
 
-  // 详情封面：本站图优先，同步组装（不做高清 HEAD，避免拖慢详情）
+  // 详情顶图：优先 DMM/MGStage 高清横图(pl)，失败回退本站 og/cover
   var coverCand = resolveVideoCoverCandidates(videoId, getText(ld.image) || base.coverUrl);
-  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
+  var covers = await applyHdCoversAsync(code || title, coverCand.primary, coverCand.poster);
+  var land =
+    covers.backdropPath ||
+    covers.coverUrl ||
+    coverCand.backdrop ||
+    coverCand.primary ||
+    "";
   var preview = (ld.video && (ld.video.contentUrl || ld.video.url)) || sitePreviewUrl(videoId) || base.previewUrl;
   var rating = (ld.aggregateRating && Number(ld.aggregateRating.ratingValue)) || base.rating || 0;
   var durationMin = durationFromIso(ld.duration) || base.duration || 0;
@@ -3056,11 +3059,10 @@ async function enrichDetailFromHtml(base, videoId, params) {
     genres.unshift({ id: maker, title: maker });
   }
 
-  var coverForMagnet = covers.backdropPath || covers.coverUrl || coverCand.primary || "";
   var relatedItems = buildMagnetRelatedItems(magnets, {
     code: code,
     title: title,
-    cover: coverForMagnet,
+    cover: land,
   });
 
   var descParts = [];
@@ -3074,12 +3076,13 @@ async function enrichDetailFromHtml(base, videoId, params) {
 
   var trailers = [];
   try {
-    if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, coverForMagnet);
-    else if (preview) trailers = [{ coverUrl: coverForMagnet || undefined, url: preview }];
+    if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, land);
+    else if (preview) trailers = [{ coverUrl: land || undefined, url: preview }];
   } catch (e5) {
-    if (preview) trailers = [{ coverUrl: coverForMagnet || undefined, url: preview }];
+    if (preview) trailers = [{ coverUrl: land || undefined, url: preview }];
   }
 
+  var landFields = toLandscapeCoverFields(land, coverCand.primary);
   return {
     id: code || videoId,
     type: "url",
@@ -3091,10 +3094,11 @@ async function enrichDetailFromHtml(base, videoId, params) {
     duration: durationMin || undefined,
     durationText: durationMin ? durationMin + "分钟" : "",
     description: descParts.join(" · ") || base.description,
-    coverUrl: covers.coverUrl || coverCand.primary || undefined,
-    posterPath: covers.posterPath || coverCand.poster || undefined,
-    detailPoster: covers.detailPoster || covers.posterPath || coverCand.poster || undefined,
-    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
+    // 顶图横图位优先读 backdropPath；列表位也统一横图
+    coverUrl: landFields.coverUrl,
+    posterPath: landFields.posterPath,
+    detailPoster: landFields.detailPoster,
+    backdropPath: landFields.backdropPath,
     backdropPaths: backdropPaths.length ? backdropPaths : undefined,
     previewUrl: preview || undefined,
     videoUrl: preview || undefined,
