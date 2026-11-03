@@ -405,10 +405,10 @@ var ACTRESS_FILTER_OPTIONS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.3.9",
+  version: "1.4.0",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力（作品排序）/ 随机神作与今天冲谁仅有码非FC2（一次扫描优化）；封面 DMM 优先；光鸭最小保留 MB。",
+    "权威榜单 / 神作 / 女优战力；详情点演员可看作品；封面索引优先并兼容番号；随机/冲谁仅有码非FC2；光鸭最小保留 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -480,6 +480,8 @@ WidgetMetadata = {
           ],
         },
         { name: "page", title: "页码", type: "page", value: "1" },
+        // 详情点演员会重开本模块并注入 peopleId
+        { name: "peopleId", title: "人物ID", type: "input", value: "" },
       ],
     },
     {
@@ -487,7 +489,10 @@ WidgetMetadata = {
       title: "全站神作总榜",
       functionName: "loadHallOfFame",
       cacheDuration: 3600,
-      params: [{ name: "page", title: "页码", type: "page", value: "1" }],
+      params: [
+        { name: "page", title: "页码", type: "page", value: "1" },
+        { name: "peopleId", title: "人物ID", type: "input", value: "" },
+      ],
     },
     {
       id: "loadRandomMasterpiece",
@@ -507,6 +512,7 @@ WidgetMetadata = {
             { title: "48", value: "48" },
           ],
         },
+        { name: "peopleId", title: "人物ID", type: "input", value: "" },
       ],
     },
     {
@@ -562,6 +568,7 @@ WidgetMetadata = {
             { title: "FC2", value: "fc2" },
           ],
         },
+        { name: "peopleId", title: "人物ID", type: "input", value: "" },
       ],
     },
     {
@@ -1297,6 +1304,46 @@ function siteOgUrl(videoId) {
   return id ? STATIC_ORIGIN + "/video/og/" + id + ".webp" : "";
 }
 
+/** 封面候选：索引 coverUrl 优先（对 LOVE/ACC 等无 DMM 高清片更稳），再本站 cover/og */
+function resolveVideoCoverCandidates(videoId, indexCover) {
+  var fromIndex = resolveSiteCoverFallback(indexCover) || getText(indexCover);
+  var fromSite = siteCoverUrl(videoId);
+  var fromOg = siteOgUrl(videoId);
+  var primary = fromIndex || fromSite || fromOg || "";
+  var poster = fromIndex || fromSite || fromOg || "";
+  return {
+    primary: primary,
+    poster: poster,
+    backdrop: fromOg || fromIndex || fromSite || primary,
+  };
+}
+
+/** ACC-006 / ACC-6 等零填充兼容键 */
+function codeLookupKeys(code) {
+  var c = normalizeCode(code);
+  if (!c) return [];
+  var keys = [c];
+  var parts = parseStandardCodeParts(c);
+  if (parts) {
+    var base = parts.prefix + "-" + parts.number + (parts.suffix || "");
+    if (keys.indexOf(base) < 0) keys.push(base);
+    [2, 3, 4, 5].forEach(function (w) {
+      var n = parts.number.length >= w ? parts.number : ("00000" + parts.number).slice(-w);
+      var k = parts.prefix + "-" + n + (parts.suffix || "");
+      if (keys.indexOf(k) < 0) keys.push(k);
+    });
+  }
+  return keys;
+}
+
+function lookupVideoByCode(codeMap, code) {
+  var keys = codeLookupKeys(code);
+  for (var i = 0; i < keys.length; i++) {
+    if (codeMap[keys[i]]) return codeMap[keys[i]];
+  }
+  return null;
+}
+
 function siteActorOgUrl(slug) {
   var s = getText(slug);
   if (!s) return "";
@@ -1504,8 +1551,11 @@ function buildCodeMap(index) {
   var map = {};
   (index.videos || []).forEach(function (v) {
     var code = normalizeCode(v && v.code);
-    if (!code || map[code]) return;
-    map[code] = v;
+    if (!code) return;
+    var keys = codeLookupKeys(code);
+    for (var i = 0; i < keys.length; i++) {
+      if (!map[keys[i]]) map[keys[i]] = v;
+    }
   });
   return map;
 }
@@ -1568,6 +1618,7 @@ function normalizePeopleKey(raw) {
 }
 
 function findActressWorks(index, nameOrSlug) {
+  // 详情点演员（含男优）需能出片；不再按 gender 过滤
   var target = normalizePeopleKey(nameOrSlug).toLowerCase();
   if (!target) return [];
   var out = [];
@@ -1577,8 +1628,6 @@ function findActressWorks(index, nameOrSlug) {
       var a = v.actorLinks[i] || {};
       var n = getText(a.name).toLowerCase();
       var slug = getText(a.slug).toLowerCase();
-      var gender = getText(a.gender).toLowerCase();
-      if (gender && gender !== "female") continue;
       if (
         n === target ||
         slug === target ||
@@ -1590,8 +1639,17 @@ function findActressWorks(index, nameOrSlug) {
       }
     }
   });
-  // 默认代表作优先；具体排序由 sortActressWorks 按 works_sort 决定
   return out;
+}
+
+/** 详情点演员：重开任意列表模块时带 peopleId → 返回该演员作品 */
+async function loadWorksIfPeopleId(params) {
+  var peopleId = resolvePeopleIdFromParams(params);
+  if (!peopleId) return null;
+  console.log("[javranking] peopleId → works", peopleId);
+  var index = await getSearchIndex(params);
+  var codeMap = buildCodeMap(index);
+  return await loadActressWorksByName(peopleId, index, codeMap, params);
 }
 
 function resolveWorksSort(params) {
@@ -1711,8 +1769,9 @@ function mapIndexVideo(v, extra) {
   var code = normalizeCode(v.code);
   var title = getText(v.title || code || videoId);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
-  var siteCover = siteCoverUrl(videoId) || getText(v.coverUrl) || "";
-  var covers = applyHdCovers(code || title, siteCover, siteCover);
+  // LOVE/ACC 等无 DMM 高清：优先用索引自带 coverUrl，避免空图/坏图
+  var coverCand = resolveVideoCoverCandidates(videoId, v.coverUrl);
+  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
   var actors = [];
   if (Array.isArray(v.actorLinks)) {
     v.actorLinks.forEach(function (a) {
@@ -1735,33 +1794,39 @@ function mapIndexVideo(v, extra) {
     releaseDate: v.releaseDate ? String(v.releaseDate).slice(0, 10) : "",
     rating: Number(v.score || 0) || 0,
     description: descParts.join(" · "),
-    coverUrl: covers.coverUrl || siteCover || undefined,
-    posterPath: covers.posterPath || siteCover || undefined,
-    detailPoster: covers.detailPoster || covers.posterPath || undefined,
-    backdropPath: covers.backdropPath || siteOgUrl(videoId) || siteCover || undefined,
+    coverUrl: covers.coverUrl || coverCand.primary || undefined,
+    posterPath: covers.posterPath || coverCand.poster || undefined,
+    detailPoster: covers.detailPoster || covers.posterPath || coverCand.poster || undefined,
+    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
     previewUrl: videoId ? sitePreviewUrl(videoId) : undefined,
   };
 }
 
 function mapRankingRow(row, codeMap, rankFallback) {
   var code = normalizeCode(row.code);
-  var meta = (code && codeMap[code]) || null;
+  var meta = (code && lookupVideoByCode(codeMap, code)) || null;
   var rank = Number(row.rank || rankFallback || 0) || 0;
   if (meta) return mapIndexVideo(meta, { rankLabel: rank ? "#" + rank : "" });
   var title = getText(row.title || code);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
-  var covers = applyHdCovers(code || title, "", "");
+  var videoId = String(row.videoId || "").replace(/[^\d]/g, "");
+  var coverCand = resolveVideoCoverCandidates(videoId, row.coverUrl || row.cover);
+  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
   return {
     id: code || title,
     type: "url",
     mediaType: "movie",
     title: title,
-    link: code ? LINK_PREFIX + "code:" + encodeURIComponent(code) : "",
+    link: videoId
+      ? buildVideoLink(videoId, code)
+      : code
+        ? LINK_PREFIX + "code:" + encodeURIComponent(code)
+        : "",
     description: rank ? "#" + rank : "",
-    coverUrl: covers.coverUrl || undefined,
-    posterPath: covers.posterPath || undefined,
-    detailPoster: covers.detailPoster || undefined,
-    backdropPath: covers.backdropPath || undefined,
+    coverUrl: covers.coverUrl || coverCand.primary || undefined,
+    posterPath: covers.posterPath || coverCand.poster || undefined,
+    detailPoster: covers.detailPoster || covers.posterPath || undefined,
+    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
   };
 }
 
@@ -1877,7 +1942,7 @@ async function rankingRowsToItems(rows, params) {
   for (var i = 0; i < pageRows.length; i++) {
     var item = mapRankingRow(pageRows[i], codeMap, pageRows[i].rank);
     if ((!item.link || item.link.indexOf("jvr:code:") === 0) && pageRows[i].code) {
-      var meta = codeMap[normalizeCode(pageRows[i].code)];
+      var meta = lookupVideoByCode(codeMap, pageRows[i].code);
       if (meta) item = mapIndexVideo(meta, { rankLabel: pageRows[i].rank ? "#" + pageRows[i].rank : "" });
     }
     if (item.link) items.push(item);
@@ -2091,19 +2156,19 @@ function peopleFromLd(ld, entityMap) {
       id: String(id),
       title: name,
       role: role || "演员",
+      mediaType: "person",
       avatar: avatar || undefined,
     });
   }
   if (Array.isArray(ld.actor)) ld.actor.forEach(function (a) { pushPerson(a, "演员"); });
   else pushPerson(ld.actor, "演员");
-  if (Array.isArray(ld.director)) ld.director.forEach(function (d) { pushPerson(d, "导演"); });
-  else pushPerson(ld.director, "导演");
+  // 导演不注入 peopleId 作品流（避免点开空列表）
   return peoples;
 }
 
 async function resolveVideoIdByCode(code, params) {
   var index = await getSearchIndex(params);
-  return buildCodeMap(index)[normalizeCode(code)] || null;
+  return lookupVideoByCode(buildCodeMap(index), code);
 }
 
 async function fetchVideoDetailHtml(videoId, params) {
@@ -2135,7 +2200,7 @@ async function loadVideoDetail(owned, params) {
     if (!indexMeta) {
       var index = await getSearchIndex(params);
       var codeMap = buildCodeMap(index);
-      if (codeHint && codeMap[normalizeCode(codeHint)]) indexMeta = codeMap[normalizeCode(codeHint)];
+      if (codeHint) indexMeta = lookupVideoByCode(codeMap, codeHint);
       if (!indexMeta) {
         (index.videos || []).some(function (v) {
           if (String(v.videoId) === String(videoId)) {
@@ -2148,6 +2213,7 @@ async function loadVideoDetail(owned, params) {
     }
   } catch (e0) {}
 
+  var coverCandFallback = resolveVideoCoverCandidates(videoId, indexMeta && indexMeta.coverUrl);
   var base = indexMeta
     ? buildDetailFromIndex(indexMeta, params)
     : {
@@ -2158,9 +2224,9 @@ async function loadVideoDetail(owned, params) {
         link: buildVideoLink(videoId, codeHint),
         previewUrl: sitePreviewUrl(videoId),
         videoUrl: sitePreviewUrl(videoId),
-        coverUrl: siteCoverUrl(videoId) || undefined,
-        posterPath: siteCoverUrl(videoId) || undefined,
-        backdropPath: siteOgUrl(videoId) || siteCoverUrl(videoId) || undefined,
+        coverUrl: coverCandFallback.primary || undefined,
+        posterPath: coverCandFallback.poster || undefined,
+        backdropPath: coverCandFallback.backdrop || undefined,
       };
 
   // HTML 补全磁力 / 剧照 / JSON-LD（失败则返回 JSON 基础详情）
@@ -2215,7 +2281,8 @@ async function fetchActressWorksFromActorPage(slugOrName, index, codeMap, params
   }
   return rows
     .map(function (row) {
-      if (row.code && codeMap[row.code]) return mapIndexVideo(codeMap[row.code]);
+      var meta = row.code ? lookupVideoByCode(codeMap, row.code) : null;
+      if (meta) return mapIndexVideo(meta);
       var byId = null;
       (index.videos || []).some(function (v) {
         if (String(v.videoId) === String(row.videoId)) {
@@ -2226,15 +2293,16 @@ async function fetchActressWorksFromActorPage(slugOrName, index, codeMap, params
       });
       if (byId) return mapIndexVideo(byId);
       if (!row.videoId && !row.code) return null;
+      var coverCand = resolveVideoCoverCandidates(row.videoId, row.coverUrl);
       return {
         id: row.code || row.videoId,
         type: "url",
         mediaType: "movie",
         title: (row.code ? row.code + " " : "") + (row.title || row.videoId),
         link: buildVideoLink(row.videoId, row.code),
-        coverUrl: siteCoverUrl(row.videoId) || undefined,
-        posterPath: siteCoverUrl(row.videoId) || undefined,
-        backdropPath: siteOgUrl(row.videoId) || siteCoverUrl(row.videoId) || undefined,
+        coverUrl: coverCand.primary || undefined,
+        posterPath: coverCand.poster || undefined,
+        backdropPath: coverCand.backdrop || undefined,
       };
     })
     .filter(function (x) {
@@ -2297,6 +2365,8 @@ async function loadRanking(params) {
   params = params || {};
   rememberParams(params);
   try {
+    var byPeople = await loadWorksIfPeopleId(params);
+    if (byPeople) return byPeople;
     var slug = getText(params.ranking || params.slug || "javdb-top250");
     var md = await fetchMarkdown("rankings/" + slug, params);
     var rows = parseRankingMarkdownTable(md);
@@ -2312,6 +2382,8 @@ async function loadHallOfFame(params) {
   params = params || {};
   rememberParams(params);
   try {
+    var byPeople = await loadWorksIfPeopleId(params);
+    if (byPeople) return byPeople;
     var rows = await resolveHallOfFameRows(params);
     if (!rows.length) throw new Error("神作总榜为空");
     return await rankingRowsToItems(rows, params);
@@ -2325,6 +2397,8 @@ async function loadRandomMasterpiece(params) {
   params = params || {};
   rememberParams(params);
   try {
+    var byPeople = await loadWorksIfPeopleId(params);
+    if (byPeople) return byPeople;
     var count = Math.max(6, Math.min(48, Number(params.count || 24) || 24));
     // 直接从索引抽有码非 FC2 池：一次过滤，避免神作榜逐条反查 + HD 探测拖慢
     var index = await getSearchIndex(params);
@@ -2394,7 +2468,7 @@ async function loadActressWorksByName(name, index, codeMap, params) {
     var mdWorks = await loadWorksFromActressMarkdown(mdName, params);
     var mdMapped = mdWorks
       .map(function (w) {
-        var meta = codeMap[normalizeCode(w.code)];
+        var meta = lookupVideoByCode(codeMap, w.code);
         return meta || { code: w.code, title: w.title, score: 0, rank: 1e9, releaseDate: "" };
       })
       .filter(Boolean);
@@ -2835,8 +2909,8 @@ function buildDetailFromIndex(meta, params) {
   var code = normalizeCode(meta.code);
   var title = getText(meta.title || code || videoId);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
-  var siteCover = siteCoverUrl(videoId) || getText(meta.coverUrl) || "";
-  var covers = applyHdCovers(code || title, siteCover, siteCover);
+  var coverCand = resolveVideoCoverCandidates(videoId, meta.coverUrl);
+  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
   var preview = sitePreviewUrl(videoId);
   var actors = [];
   var peoples = [];
@@ -2846,11 +2920,13 @@ function buildDetailFromIndex(meta, params) {
       if (!n) return;
       actors.push(n);
       var gender = getText(a.gender).toLowerCase();
+      var slug = getText(a.slug);
       peoples.push({
-        id: getText(a.slug) || n,
+        id: String(slug || n),
         title: n,
         role: gender === "male" ? "男优" : "演员",
-        avatar: undefined,
+        mediaType: "person",
+        avatar: resolveActressAvatar(null, slug) || undefined,
       });
     });
   }
@@ -2860,11 +2936,12 @@ function buildDetailFromIndex(meta, params) {
   if (meta.releaseDate) descParts.push(String(meta.releaseDate).slice(0, 10));
   if (meta.scope) descParts.push(meta.scope);
   var trailers = [];
+  var coverForTrailer = covers.coverUrl || coverCand.primary || "";
   try {
-    if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, covers.coverUrl || siteCover);
-    else if (preview) trailers = [{ coverUrl: covers.coverUrl || siteCover, url: preview }];
+    if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, coverForTrailer);
+    else if (preview) trailers = [{ coverUrl: coverForTrailer || undefined, url: preview }];
   } catch (e) {
-    if (preview) trailers = [{ coverUrl: covers.coverUrl || siteCover, url: preview }];
+    if (preview) trailers = [{ coverUrl: coverForTrailer || undefined, url: preview }];
   }
   return {
     id: code || videoId,
@@ -2875,10 +2952,10 @@ function buildDetailFromIndex(meta, params) {
     releaseDate: meta.releaseDate ? String(meta.releaseDate).slice(0, 10) : "",
     rating: Number(meta.score || 0) || 0,
     description: descParts.join(" · "),
-    coverUrl: covers.coverUrl || siteCover || undefined,
-    posterPath: covers.posterPath || siteCover || undefined,
-    detailPoster: covers.detailPoster || covers.posterPath || undefined,
-    backdropPath: covers.backdropPath || siteOgUrl(videoId) || siteCover || undefined,
+    coverUrl: covers.coverUrl || coverCand.primary || undefined,
+    posterPath: covers.posterPath || coverCand.poster || undefined,
+    detailPoster: covers.detailPoster || covers.posterPath || coverCand.poster || undefined,
+    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
     previewUrl: preview || undefined,
     videoUrl: preview || undefined,
     peoples: peoples.length ? peoples : undefined,
@@ -2941,18 +3018,26 @@ async function enrichDetailFromHtml(base, videoId, params) {
   var code = normalizeCode(ld.alternateName || base.id || "");
   var title = getText(ld.name || base.title || code);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
-  var siteCover = siteCoverUrl(videoId) || getText(ld.image) || base.coverUrl || "";
-  var covers = await applyHdCoversAsync(code || title, siteCover, siteCover);
+
+  var index = null;
+  try {
+    index = await getSearchIndex(params);
+  } catch (e3) {}
+  var indexMeta = null;
+  try {
+    if (index) indexMeta = lookupVideoByCode(buildCodeMap(index), code);
+  } catch (e3b) {}
+  var coverCand = resolveVideoCoverCandidates(
+    videoId,
+    (indexMeta && indexMeta.coverUrl) || getText(ld.image) || base.coverUrl
+  );
+  var covers = await applyHdCoversAsync(code || title, coverCand.primary, coverCand.poster);
   var preview = (ld.video && (ld.video.contentUrl || ld.video.url)) || sitePreviewUrl(videoId) || base.previewUrl;
   var rating = (ld.aggregateRating && Number(ld.aggregateRating.ratingValue)) || base.rating || 0;
   var durationMin = durationFromIso(ld.duration) || base.duration || 0;
   var releaseDate = getText(ld.datePublished).slice(0, 10) || base.releaseDate || "";
   var maker = (ld.productionCompany && ld.productionCompany.name) || "";
 
-  var index = null;
-  try {
-    index = await getSearchIndex(params);
-  } catch (e3) {}
   var entityMap = index ? buildEntityMap(index) : {};
   var peoples = peopleFromLd(ld, entityMap);
   if (!peoples.length && base.peoples) peoples = base.peoples;
@@ -2971,10 +3056,11 @@ async function enrichDetailFromHtml(base, videoId, params) {
     genres.unshift({ id: maker, title: maker });
   }
 
+  var coverForMagnet = covers.backdropPath || covers.coverUrl || coverCand.primary || "";
   var relatedItems = buildMagnetRelatedItems(magnets, {
     code: code,
     title: title,
-    cover: covers.backdropPath || covers.coverUrl || siteCover,
+    cover: coverForMagnet,
   });
 
   var descParts = [];
@@ -2988,10 +3074,10 @@ async function enrichDetailFromHtml(base, videoId, params) {
 
   var trailers = [];
   try {
-    if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, covers.coverUrl || siteCover);
-    else if (preview) trailers = [{ coverUrl: covers.coverUrl || siteCover, url: preview }];
+    if (typeof buildDetailTrailers === "function") trailers = buildDetailTrailers(preview, coverForMagnet);
+    else if (preview) trailers = [{ coverUrl: coverForMagnet || undefined, url: preview }];
   } catch (e5) {
-    if (preview) trailers = [{ coverUrl: covers.coverUrl || siteCover, url: preview }];
+    if (preview) trailers = [{ coverUrl: coverForMagnet || undefined, url: preview }];
   }
 
   return {
@@ -3005,10 +3091,10 @@ async function enrichDetailFromHtml(base, videoId, params) {
     duration: durationMin || undefined,
     durationText: durationMin ? durationMin + "分钟" : "",
     description: descParts.join(" · ") || base.description,
-    coverUrl: covers.coverUrl || siteCover || undefined,
-    posterPath: covers.posterPath || siteCover || undefined,
-    detailPoster: covers.detailPoster || covers.posterPath || undefined,
-    backdropPath: covers.backdropPath || siteOgUrl(videoId) || siteCover || undefined,
+    coverUrl: covers.coverUrl || coverCand.primary || undefined,
+    posterPath: covers.posterPath || coverCand.poster || undefined,
+    detailPoster: covers.detailPoster || covers.posterPath || coverCand.poster || undefined,
+    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
     backdropPaths: backdropPaths.length ? backdropPaths : undefined,
     previewUrl: preview || undefined,
     videoUrl: preview || undefined,
@@ -3078,6 +3164,8 @@ async function loadTodayWhat(params) {
   params = params || {};
   rememberParams(params);
   try {
+    var byPeople = await loadWorksIfPeopleId(params);
+    if (byPeople) return byPeople;
     var count = Math.max(6, Math.min(48, Number(params.count || 24) || 24));
     var scope = getText(params.scope || "all").toLowerCase();
     var index = await getSearchIndex(params);

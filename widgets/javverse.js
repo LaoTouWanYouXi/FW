@@ -13,10 +13,10 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.4.6",
+  version: "1.4.7",
   requiredVersion: "0.0.1",
   description:
-    "JAV Verse：作品池 / 抽一部 / 千级类别（直走 CF 代理 /browse，不前置直连 403）/ 详情 id=标准番号 / 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+    "JAV Verse：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javverse.com/",
   icon: "https://javverse.com/apple-icon.png",
@@ -952,20 +952,63 @@ async function safePost(url, body, headers, opt) {
   }
 }
 
-async function softBrowseGate() {
+// 详情慢的主因：每次 fetchJson/fetchHtml 都先 WebView 打门禁，且串行。
+// 门禁短时复用；仅在 403 时再强制打一次。
+var GATE_TTL_MS = 3 * 60 * 1000;
+var _gateState = { at: 0, inflight: null };
+
+async function softBrowseGate(force) {
+  if (!force && _gateState.at && Date.now() - _gateState.at < GATE_TTL_MS) return true;
+  if (_gateState.inflight) {
+    try {
+      await _gateState.inflight;
+    } catch (e) {}
+    return !!(_gateState.at && Date.now() - _gateState.at < GATE_TTL_MS);
+  }
+  _gateState.inflight = (async function () {
+    var headers = apiHeaders({
+      "x-jv-gate": "1",
+      "Content-Type": "text/plain;charset=UTF-8",
+      Referer: SITE + "/",
+    });
+    // 先普通请求（快）；失败/403 再 WebView（慢）
+    var got = await safePost(SITE + "/_browse/gate", "", headers, { timeout: 8000 });
+    if (
+      got.status === 403 ||
+      isCloudflareChallenge(got.body) ||
+      (got.error && isForbiddenError(got.error))
+    ) {
+      got = await safePost(SITE + "/_browse/gate", "", headers, {
+        requiresWebView: true,
+        timeout: 20000,
+      });
+    }
+    if (
+      !(
+        got.status === 403 ||
+        isCloudflareChallenge(got.body) ||
+        (got.error && isForbiddenError(got.error))
+      )
+    ) {
+      _gateState.at = Date.now();
+    }
+  })();
   try {
-    // 门禁接口本身也可能被 CF 拦，尽量走 WebView
-    await safePost(
-      SITE + "/_browse/gate",
-      "",
-      apiHeaders({
-        "x-jv-gate": "1",
-        "Content-Type": "text/plain;charset=UTF-8",
-        Referer: SITE + "/",
-      }),
-      { requiresWebView: true }
-    );
-  } catch (e) {}
+    await _gateState.inflight;
+  } catch (e) {
+  } finally {
+    _gateState.inflight = null;
+  }
+  return !!(_gateState.at && Date.now() - _gateState.at < GATE_TTL_MS);
+}
+
+function isBlockedResponse(got, body) {
+  var text = body != null ? body : got && got.body;
+  return (
+    (got && got.status === 403) ||
+    isCloudflareChallenge(text) ||
+    (got && got.error && isForbiddenError(got.error))
+  );
 }
 
 async function fetchJson(pathOrUrl, opt) {
@@ -980,22 +1023,21 @@ async function fetchJson(pathOrUrl, opt) {
     )
   );
 
-  await softBrowseGate();
-
+  // 不再每次前置门禁；Cookie 已带 jv-gate。仅 403 时补门禁再试一次。
   var got =
     opt.method === "POST"
       ? await safePost(url, opt.body == null ? {} : opt.body, headers)
       : await safeGet(url, headers);
 
-  if (got.status === 403 || isCloudflareChallenge(got.body) || (got.error && isForbiddenError(got.error))) {
-    await softBrowseGate();
+  if (isBlockedResponse(got)) {
+    await softBrowseGate(true);
     got =
       opt.method === "POST"
         ? await safePost(url, opt.body == null ? {} : opt.body, headers)
         : await safeGet(url, headers);
   }
 
-  if (got.status === 403 || isCloudflareChallenge(got.body) || (got.error && isForbiddenError(got.error))) {
+  if (isBlockedResponse(got)) {
     throw new Error(forbidHint(url));
   }
 
@@ -1007,14 +1049,13 @@ async function fetchJson(pathOrUrl, opt) {
 
 async function fetchHtml(pathOrUrl, referer) {
   var url = /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : SITE + pathOrUrl;
-  await softBrowseGate();
   var got = await safeGet(url, htmlHeaders(referer || SITE + "/"));
-  if (got.status === 403 || isCloudflareChallenge(got.body) || (got.error && isForbiddenError(got.error))) {
-    await softBrowseGate();
+  if (isBlockedResponse(got)) {
+    await softBrowseGate(true);
     got = await safeGet(url, htmlHeaders(referer || SITE + "/"));
   }
   var html = typeof got.body === "string" ? got.body : String(got.body || "");
-  if (got.status === 403 || isCloudflareChallenge(html) || (got.error && isForbiddenError(got.error))) {
+  if (isBlockedResponse(got, html)) {
     throw new Error(forbidHint(url));
   }
   if (!html || html.length < 200) throw got.error || new Error("空 HTML: " + url);
@@ -1856,12 +1897,22 @@ async function loadDetail(link, params) {
     var covers = buildCoverBundle(card.cover || "", "detail");
     var ownedLink = buildOwnedLink(workId, code);
 
+    // HTML（女优/类别/剧照）与磁力互不依赖，并行拉取，避免串行加倍耗时
     var html = "";
-    try {
-      html = await fetchHtml("/work/" + workId, SITE + "/");
-    } catch (e) {
-      console.log("[javverse] detail html skip:", (e && e.message) || e);
-    }
+    var magnets = [];
+    var detailPair = await Promise.all([
+      (async function () {
+        try {
+          return await fetchHtml("/work/" + workId, SITE + "/");
+        } catch (e) {
+          console.log("[javverse] detail html skip:", (e && e.message) || e);
+          return "";
+        }
+      })(),
+      fetchMagnets(workId),
+    ]);
+    html = detailPair[0] || "";
+    magnets = detailPair[1] || [];
 
     var genres = extractLinks(html, "genre");
     var actresses = extractLinks(html, "actress");
@@ -1869,7 +1920,6 @@ async function loadDetail(link, params) {
     var stills = extractStillsFromHtml(html);
     if (!stills.length) stills = stillsFromCover(card.cover, 12);
 
-    var magnets = await fetchMagnets(workId);
     var relatedItems = buildMagnetRelatedItems(magnets, {
       workId: workId,
       code: code,
