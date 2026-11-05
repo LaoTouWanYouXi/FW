@@ -13,7 +13,7 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.4.9",
+  version: "1.5.0",
   requiredVersion: "0.0.1",
   description:
     "JAV Verse：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
@@ -1269,6 +1269,66 @@ function buildCoverBundle(cover, mode) {
   };
 }
 
+/**
+ * 上映日期规范化 → YYYY-MM-DD
+ * 接受：YYYY-MM-DD、YYYY/MM/DD、YYYY.MM.DD、ISO 时间、YYYYMMDD、
+ * 10 位秒时间戳、13 位毫秒时间戳；其余/空值返回 ""
+ */
+function fmtDateUTC(d) {
+  var y = d.getUTCFullYear();
+  var mo = d.getUTCMonth() + 1;
+  var da = d.getUTCDate();
+  return y + "-" + (mo < 10 ? "0" + mo : String(mo)) + "-" + (da < 10 ? "0" + da : String(da));
+}
+
+function normalizeReleaseDate(v) {
+  if (v == null) return "";
+  var s = getText(v);
+  if (!s) return "";
+  var d;
+  if (/^\d+$/.test(s)) {
+    if (s.length === 13) d = new Date(Number(s));
+    else if (s.length === 10) d = new Date(Number(s) * 1000);
+    else if (s.length === 8) {
+      var mo8 = Number(s.slice(4, 6));
+      var da8 = Number(s.slice(6, 8));
+      if (mo8 < 1 || mo8 > 12 || da8 < 1 || da8 > 31) return "";
+      return s.slice(0, 4) + "-" + s.slice(4, 6) + "-" + s.slice(6, 8);
+    } else return "";
+    if (isNaN(d.getTime())) return "";
+    return fmtDateUTC(d);
+  }
+  var m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) {
+    var mo = Number(m[2]);
+    var da = Number(m[3]);
+    if (mo < 1 || mo > 12 || da < 1 || da > 31) return "";
+    return m[1] + "-" + (mo < 10 ? "0" + mo : String(mo)) + "-" + (da < 10 ? "0" + da : String(da));
+  }
+  d = new Date(s);
+  if (isNaN(d.getTime())) return "";
+  return fmtDateUTC(d);
+}
+
+// 从多个可能字段取上映日期：releaseDate / delivery_date / release_date / date …
+function resolveReleaseDate(row) {
+  row = row || {};
+  var candidates = [
+    row.releaseDate,
+    row.delivery_date,
+    row.deliveryDate,
+    row.release_date,
+    row.releaseDateStr,
+    row.delivery_at,
+    row.date,
+  ];
+  for (var i = 0; i < candidates.length; i++) {
+    var n = normalizeReleaseDate(candidates[i]);
+    if (n) return n;
+  }
+  return "";
+}
+
 function toVideoItem(row) {
   var workId = String(row.workId || "").replace(/[^\d]/g, "");
   var code = resolveItemCode(row);
@@ -1289,7 +1349,7 @@ function toVideoItem(row) {
     videoId: workId || undefined,
     coverUrl: covers.coverUrl,
     backdropPath: covers.backdropPath,
-    releaseDate: getText(row.releaseDate) || undefined,
+    releaseDate: resolveReleaseDate(row) || undefined,
     description: row.description || (code ? "番号: " + code : undefined),
     link: link,
   };
@@ -1319,6 +1379,7 @@ function itemsFromPool(works, offset, limit) {
         title: w.title_zh || w.title,
         coverUrl: w.cover_url || w.cover,
         releaseDate: w.delivery_date,
+        delivery_date: w.delivery_date,
       })
     );
   }
@@ -1719,6 +1780,7 @@ async function loadRandom(params) {
           title: w.title_zh || w.title,
           coverUrl: w.cover_url || w.cover,
           releaseDate: w.delivery_date,
+          delivery_date: w.delivery_date,
           description: "今晚看什么 · 抽一部",
         });
       })
@@ -1799,6 +1861,11 @@ async function loadGenreWorks(params) {
         if (rich.cover) c.coverUrl = rich.cover;
         if (rich.title_zh || rich.title) c.title = rich.title_zh || rich.title;
         if (rich.code) c.code = normalizeCode(rich.code) || rich.code;
+        // 类别卡片本身无日期，从 /api/cards 批量结果里补
+        if (rich.delivery_date || rich.deliveryDate || rich.release_date || rich.releaseDate) {
+          c.releaseDate = resolveReleaseDate(rich) || c.releaseDate;
+          c.delivery_date = rich.delivery_date || rich.deliveryDate || c.delivery_date;
+        }
       }
     } catch (e3) {
       console.log("[javverse] genre cards enrich skip:", (e3 && e3.message) || e3);
@@ -1814,6 +1881,8 @@ async function loadGenreWorks(params) {
           code: row.code,
           title: row.title || row.code || "作品 " + row.workId,
           coverUrl: row.coverUrl,
+          releaseDate: row.releaseDate,
+          delivery_date: row.delivery_date,
           description: "类别: " + genreTitleById(genreId),
         })
       );
@@ -1901,6 +1970,7 @@ async function loadDetail(link, params) {
               code: hit.code_display || hit.code || want,
               title: hit.title_zh || hit.title || want,
               cover: hit.cover_url || hit.cover || "",
+              delivery_date: hit.delivery_date || hit.deliveryDate || "",
             };
           }
         }
@@ -1966,8 +2036,10 @@ async function loadDetail(link, params) {
       genreItems.unshift({ id: "maker:" + makers[0].id, title: makerName });
     }
 
+    var releaseDate = resolveReleaseDate(card);
     var descParts = [];
     if (code) descParts.push("番号: " + code);
+    if (releaseDate) descParts.push("上映: " + releaseDate);
     if (makerName) descParts.push("片商: " + makerName);
     if (magnets.length) descParts.push("磁力×" + magnets.length + "（相似作品区点击转存光鸭）");
     if (actresses.length) {
@@ -1996,6 +2068,7 @@ async function loadDetail(link, params) {
       posterPath: covers.posterPath,
       detailPoster: covers.detailPoster,
       backdropPath: covers.backdropPath,
+      releaseDate: releaseDate || undefined,
       backdropPaths: stills.length ? stills : undefined,
       description: descParts.join(" · ") || undefined,
       genreItems: genreItems.length ? genreItems : undefined,
