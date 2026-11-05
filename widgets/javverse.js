@@ -13,7 +13,7 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.4.7",
+  version: "1.4.8",
   requiredVersion: "0.0.1",
   description:
     "JAV Verse：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
@@ -448,7 +448,7 @@ function codeFromCoverUrl(url) {
 
 function isStandardHinban(code) {
   code = getText(code).toUpperCase();
-  return /^([A-Z]{2,15}|T28|R18|3DSVR)-[1-9]\d{0,7}[A-Z]?$/.test(code);
+  return /^([A-Z]{2,15}|T28|R18|3DSVR)-(?!0+[A-Z]?$)\d{1,8}[A-Z]?$/.test(code);
 }
 
 function resolveItemCode(row) {
@@ -1166,14 +1166,18 @@ async function fetchGenreRsc(genreId, page) {
  * ssis00999 → SSIS-999
  * 42vrpn00022 → VRPN-22
  * 已是 PIYO-241 则原样规范化
+ * 已带连字符的番号原样保留数字段（含前导 0）：MOOC-031 → MOOC-031，
+ * 不再经 parseInt 去零；只有无连字符的 FANZA cid（数字段补零到 5 位，
+ * 如 ssis00999 / mooc00031 的前者）才去前导 0，数字段不足 5 位时原样保留。
  */
 function normalizeCode(code) {
   code = getText(code).toUpperCase();
   if (!code) return "";
 
-  // 已是标准品番（含数字片商前缀如 T28 / 3DSVR）
-  var hy = code.match(/^([A-Z]{2,15}|T28|R18|3DSVR)-0*([0-9]+)([A-Z]?)$/);
-  if (hy) return hy[1] + "-" + String(parseInt(hy[2], 10)) + (hy[3] || "");
+  // 已是标准品番（含数字片商前缀如 T28 / 3DSVR）：数字段原样保留，
+  // 前导 0 是番号的一部分（MOOC-031 ≠ MOOC-31），禁止 parseInt 去零
+  var hy = code.match(/^([A-Z]{2,15}|T28|R18|3DSVR)-([0-9]+)([A-Z]?)$/);
+  if (hy) return hy[1] + "-" + hy[2] + (hy[3] || "");
 
   // 去掉包装：cid=、AI 重制后缀、非字母数字分隔
   code = code.replace(/^CID[=:]?/i, "");
@@ -1183,17 +1187,22 @@ function normalizeCode(code) {
   code = code.replace(/[^A-Z0-9]+/g, "");
   if (!code) return "";
 
-  // 特殊：片商代号本身含数字
-  var special = code.match(/^(T28|R18|3DSVR)0*([0-9]+)([A-Z]?)$/);
-  if (special) {
-    return special[1] + "-" + String(parseInt(special[2], 10)) + (special[3] || "");
+  // 特殊：片商代号本身含数字（无连字符的 cid 形式）
+  // 数字段 ≥5 位视为 FANZA 补零才去零；不足 5 位（如 T28031）原样保留前导 0
+  var special = code.match(/^(T28|R18|3DSVR)([0-9]+)([A-Z]?)$/);
+  if (special && String(parseInt(special[2], 10)) !== "0") {
+    var sNum = special[2].length >= 5 ? String(parseInt(special[2], 10)) : special[2];
+    return special[1] + "-" + sNum + (special[3] || "");
   }
 
   // 典型 cid：可选开头数字(配信/片商区分) + 英字 + 零填充流水号 + 可选末尾字母
   // 1PIYO00241 / 42VRPN00022 / SSIS00999 / MXGS01451
-  var m = code.match(/^(\d{0,4})([A-Z]{2,15})0*([0-9]{1,8})([A-Z]?)$/);
+  // 数字段 ≥5 位视为 FANZA 补零到 5 位才去零；不足 5 位（如 MOOC031）
+  // 是无连字符的原番号写法，原样保留前导 0 → MOOC-031
+  var m = code.match(/^(\d{0,4})([A-Z]{2,15})([0-9]{1,8})([A-Z]?)$/);
   if (m && m[2] && m[3] && String(parseInt(m[3], 10)) !== "0") {
-    return m[2] + "-" + String(parseInt(m[3], 10)) + (m[4] || "");
+    var cNum = m[3].length >= 5 ? String(parseInt(m[3], 10)) : m[3];
+    return m[2] + "-" + cNum + (m[4] || "");
   }
 
   // 兜底：已是 LETTERS-DIGITS
