@@ -13,7 +13,7 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.4.8",
+  version: "1.4.9",
   requiredVersion: "0.0.1",
   description:
     "JAV Verse：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
@@ -1166,18 +1166,32 @@ async function fetchGenreRsc(genreId, page) {
  * ssis00999 → SSIS-999
  * 42vrpn00022 → VRPN-22
  * 已是 PIYO-241 则原样规范化
- * 已带连字符的番号原样保留数字段（含前导 0）：MOOC-031 → MOOC-031，
- * 不再经 parseInt 去零；只有无连字符的 FANZA cid（数字段补零到 5 位，
- * 如 ssis00999 / mooc00031 的前者）才去前导 0，数字段不足 5 位时原样保留。
+ * 带连字符的番号：数字段不足 5 位原样保留（MOOC-031 → MOOC-031，
+ * MOOC-31 → MOOC-31）；数字段 ≥5 位是站内 5 位补零写法，去补零后
+ * 至少保留 3 位：MOOC-00031 → MOOC-031，SSIS-00999 → SSIS-999，
+ * MXGS-01451 → MXGS-1451。无连字符的 FANZA cid 仍按旧规则去零
+ * （ssis00999 → SSIS-999，mooc00031 → MOOC-31）。
  */
+// 5 位补零数字段 → 去零后至少保留 3 位：00031 → 031，00999 → 999，01451 → 1451
+function stripPaddedDigits(digits) {
+  var s = String(parseInt(digits, 10));
+  while (s.length < 3) s = "0" + s;
+  return s;
+}
+
 function normalizeCode(code) {
   code = getText(code).toUpperCase();
   if (!code) return "";
 
-  // 已是标准品番（含数字片商前缀如 T28 / 3DSVR）：数字段原样保留，
-  // 前导 0 是番号的一部分（MOOC-031 ≠ MOOC-31），禁止 parseInt 去零
+  // 已是标准品番（含数字片商前缀如 T28 / 3DSVR）
+  // 不足 5 位：数字段原样保留（MOOC-031 → MOOC-031）
+  // ≥5 位：站内 5 位补零写法，去补零后至少保留 3 位（MOOC-00031 → MOOC-031），
+  // 不能直接 parseInt（会丢成 MOOC-31），也不能原样保留（会留成 MOOC-00031）
   var hy = code.match(/^([A-Z]{2,15}|T28|R18|3DSVR)-([0-9]+)([A-Z]?)$/);
-  if (hy) return hy[1] + "-" + hy[2] + (hy[3] || "");
+  if (hy) {
+    var hNum = hy[2].length >= 5 ? stripPaddedDigits(hy[2]) : hy[2];
+    return hy[1] + "-" + hNum + (hy[3] || "");
+  }
 
   // 去掉包装：cid=、AI 重制后缀、非字母数字分隔
   code = code.replace(/^CID[=:]?/i, "");
