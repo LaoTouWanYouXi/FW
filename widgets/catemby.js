@@ -1551,7 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
-  version: "1.10.3",
+  version: "1.10.4",
   requiredVersion: "0.0.2",
   detailCacheDuration: 3600,
   globalParams: [
@@ -2538,6 +2538,48 @@ function pickResolveVariant(data) {
   return picked && picked.sourceUrl ? picked : null;
 }
 
+// ---- 播放源排序（1.10.4）：站点现把部分分片伪装成图片/字体下发，系统播放器无法直接播 ----
+// 实测（SSIS-001，2026-11-06）：
+// - fcjav/getav 的 TikTok CDN 分片形如 ...~tplv-...-origin.image，文件头是 70 字节 1x1 PNG，
+//   之后才是 MPEG-TS（同步头 0x47 在偏移 70 处，188 字节包全部对齐）。系统播放器从第 0 字节
+//   解析，认不出 TS，直接失败；这是“过去能播的源现在播不了”的直接原因。
+// - worldstatic 的 AES-128 变体是标准 HLS：#EXT-X-KEY + 16 字节密钥（密钥地址实测返回 16 字节），
+//   系统播放器可直接播。
+// 因此按 m3u8 内容排序：标准 AES-128 优先，未知形态居中，.image 伪装分片垫底；同时把各变体
+// parts[] 里的独立播放列表也作为候选源放出来，播不了时可换源。
+function resolveSourceRank(item) {
+  const text = String((item && item.sourceUrl) || "");
+  if (/%23EXT-X-KEY|#EXT-X-KEY/i.test(text)) return 0;
+  if (/\.image(%3F|\?|$)/i.test(text)) return 2;
+  return 1;
+}
+
+function collectResolveSources(data) {
+  if (!data || data.error) return [];
+  const usable = collectResolveVariants(data).filter((item) => !isPreviewVariant(item));
+  const out = [];
+  const seen = {};
+  function push(sourceUrl, variant, label, fromPart, partLabel) {
+    const url = String(sourceUrl || "").trim();
+    if (!url || seen[url]) return;
+    seen[url] = true;
+    out.push({ sourceUrl: url, variant: variant || "", label: label || "", fromPart: !!fromPart, partLabel: partLabel || "" });
+  }
+  for (let i = 0; i < usable.length; i++) {
+    const item = usable[i];
+    push(item.sourceUrl, item.variant, item.label, false, "");
+    const parts = Array.isArray(item.parts) ? item.parts : [];
+    for (let j = 0; j < parts.length; j++) {
+      const part = normalizeResolveVariant(parts[j]);
+      if (!part || isPreviewVariant(part)) continue;
+      push(part.sourceUrl, item.variant, item.label, true, part.label || "");
+    }
+  }
+  // 稳定排序：先按 rank 分组，同 rank 内整片变体在前、分段在后，组内保持站点原顺序
+  out.sort((a, b) => resolveSourceRank(a) - resolveSourceRank(b) || (a.fromPart - b.fromPart));
+  return out;
+}
+
 function movieLink(id, code) {
   let link = "/movie/" + encodeURIComponent(String(id || ""));
   const number = safeText(code || "");
@@ -3078,6 +3120,23 @@ async function resolveFullVideo(code, lang) {
     return null;
   }
   return null;
+}
+
+// 供 loadResource 使用：返回排序后的全部可用源。只做内存缓存，不写 Widget.storage，
+// 因为 data: m3u8 单条就数百 KB，整份可达 2MB，写存储会撑爆。
+const RESOLVE_LIST_CACHE = {};
+async function resolveFullVideoList(code, lang) {
+  if (!code) return [];
+  const key = resolveCacheKey(code);
+  if (!key) return [];
+  const mem = RESOLVE_LIST_CACHE[key];
+  if (mem && Date.now() - Number(mem.savedAt) <= RESOLVE_CACHE_TTL_OK_MS) return mem.value;
+  const primary = pickPrimaryResolveCode(code);
+  if (!primary) return [];
+  const data = await siteGet("/api/v/resolve", { code: primary, lang: lang || "zh" }, { allowError: true });
+  const list = collectResolveSources(data);
+  if (list.length) RESOLVE_LIST_CACHE[key] = { value: list, savedAt: Date.now() };
+  return list;
 }
 
 function extractMovieId(link) {
@@ -5377,8 +5436,8 @@ async function loadResource(params) {
     const code = await recoverCodeFromPlaybackParams(params);
     if (!code) return [];
 
-    const fullVideo = await resolveFullVideo(code, "zh");
-    if (!fullVideo || !fullVideo.sourceUrl || isPreviewVariant(fullVideo)) return [];
+    const sources = await resolveFullVideoList(code, "zh");
+    if (!sources.length) return [];
 
     const headers = {
       "User-Agent": UA,
@@ -5386,15 +5445,20 @@ async function loadResource(params) {
       Origin: SITE_BASE,
     };
 
-    return [
-      {
-        name: "Catemby 完整(" + (fullVideo.label || "原版") + ")",
-        description: "番号：" + code + "\n类型：完整视频",
-        url: fullVideo.sourceUrl,
+    return sources.map((item, index) => {
+      const label = item.label || "原版";
+      const name =
+        "Catemby 完整(" + label + (item.fromPart && item.partLabel ? " · " + item.partLabel : "") + ")" +
+        (index === 0 ? "（推荐）" : "");
+      return {
+        name: name,
+        description:
+          "番号：" + code + "\n类型：完整视频\n来源：" + label + (item.fromPart ? "（分段）" : ""),
+        url: item.sourceUrl,
         playerType: "system",
         customHeaders: headers,
-      },
-    ];
+      };
+    });
   } catch (e) {
     console.error("[catemby] loadResource 失败:", e && e.message ? e.message : e);
     return [];
