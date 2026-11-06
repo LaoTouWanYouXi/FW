@@ -49,6 +49,7 @@ WidgetMetadata = {
   id: "home_stream",
   title: "Home Stream",
   icon: "https://assets.vvebo.vip/scripts/icon.png",
+  iconUrl: "https://assets.vvebo.vip/scripts/icon.png",
   version: "1.2.1",
   requiredVersion: "0.0.1",
   description: "获取聚合VOD影片资源",

@@ -270,6 +270,7 @@ WidgetMetadata = {
     id: "bilibili.official",
     title: "哔哩影视",
     icon: "https://www.bilibili.com/favicon.ico",
+    iconUrl: "https://www.bilibili.com/favicon.ico",
     version: "1.0",
     requiredVersion: "0.0.1",
     description: "哔哩官方番剧、国创、纪录片、综艺（Widget版）",

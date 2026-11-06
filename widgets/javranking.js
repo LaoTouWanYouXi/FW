@@ -412,6 +412,7 @@ WidgetMetadata = {
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
+  iconUrl: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
   detailCacheDuration: 300,
   globalParams: [
     {

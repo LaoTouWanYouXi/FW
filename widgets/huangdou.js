@@ -60,6 +60,7 @@ WidgetMetadata = {
   author: "Forward",
   site: "https://lzlukvca.cc",
   icon: "https://lzlukvca.cc/favicon.ico",
+  iconUrl: "https://lzlukvca.cc/favicon.ico",
   detailCacheDuration: 0,
   globalParams: [
     {

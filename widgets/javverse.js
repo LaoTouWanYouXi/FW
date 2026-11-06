@@ -20,6 +20,7 @@ WidgetMetadata = {
   author: "老头",
   site: "https://javverse.com/",
   icon: "https://javverse.com/apple-icon.png",
+  iconUrl: "https://javverse.com/apple-icon.png",
   detailCacheDuration: 60,
   globalParams: [
     {
