@@ -13,7 +13,7 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.5.0",
+  version: "1.5.1",
   requiredVersion: "0.0.1",
   description:
     "JAV Verse：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
@@ -1225,6 +1225,20 @@ function normalizeCode(code) {
   return code;
 }
 
+// 标题里常带站方原番号（5 位补零写法，如 SONS-00331），与规范化后的 code
+// 是同一部时去掉 raw 前缀，避免标题里仍出现 SONS-00331；不是同一部时不动。
+// 比如 code=SONS-331、标题="SONS-00331 某标题" → 标题变"某标题"，
+// 再由调用处在前面补 code，最终显示 "SONS-331 某标题"。
+function stripSameCodeTitlePrefix(title, code) {
+  var t = getText(title);
+  var c = getText(code);
+  if (!t || !c) return t;
+  var m = t.match(/^([A-Z0-9]+-\d+[A-Z]?|[A-Z]{2,15}\d+[A-Z]?)([\s\u3000:：\-－_\/|｜、,，.。]*)([\s\S]*)$/i);
+  if (!m) return t;
+  if (normalizeCode(m[1]) !== c) return t;
+  return getText(m[3]);
+}
+
 function toLandscapeCover(u) {
   u = cleanImage(u);
   if (!u) return "";
@@ -1335,6 +1349,8 @@ function toVideoItem(row) {
   var code = resolveItemCode(row);
   var link = buildOwnedLink(workId, code);
   var title = getText(row.title) || code || "作品 " + workId;
+  if (code) title = stripSameCodeTitlePrefix(title, code);
+  if (!title) title = code || "作品 " + workId;
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var covers = buildCoverBundle(row.coverUrl || row.cover || "", "list");
   // 聚合工具依赖 id=纯番号（不能是 jv:…）；站点内部 workId 放 videoId / link
@@ -1988,6 +2004,8 @@ async function loadDetail(link, params) {
         coverUrl: card.cover,
       }) || owned.code || "";
     var title = card.title_zh || card.title || code;
+    if (code) title = stripSameCodeTitlePrefix(title, code);
+    if (!title) title = code;
     var covers = buildCoverBundle(card.cover || "", "detail");
     var ownedLink = buildOwnedLink(workId, code);
 
