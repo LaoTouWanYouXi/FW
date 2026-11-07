@@ -13,7 +13,7 @@
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.5.1",
+  version: "1.5.2",
   requiredVersion: "0.0.1",
   description:
     "JAV Verse：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
@@ -30,6 +30,14 @@ WidgetMetadata = {
       value: "",
       placeholder: "jv-gate=1; __suvt=...; __nuvt=...",
       description: "API/类别页 403 时再填；一般可留空",
+    },
+    {
+      name: "clear_site_cookie",
+      title: "清除站点 Cookie",
+      type: "input",
+      value: "",
+      placeholder: "输入 clear 开启无 Cookie 模式",
+      description: "被站方拉黑后用：填 clear 保存，模块每次请求都不带已存 Cookie；确认能访问后改回空恢复正常。注意：同时把上方「站点 Cookie」留空",
     },
     {
       name: "html_proxy_worker",
@@ -507,9 +515,61 @@ function readMagnetCache(hash) {
   }
 }
 
+// 从 params / global / globalParams 里读一个全局参数（Rex 传参形状不固定）
+function readGlobalParam(params, name) {
+  var v = getText(params && params[name]);
+  if (v) return v;
+  if (params && params.global) {
+    v = getText(params.global[name]);
+    if (v) return v;
+  }
+  try {
+    var gp = params && params.globalParams;
+    if (gp) {
+      if (Array.isArray(gp)) {
+        for (var i = 0; i < gp.length; i++) {
+          var it = gp[i];
+          if (!it) continue;
+          if (getText(it.name || it.key) === name) {
+            v = getText(it.value != null ? it.value : it.val);
+            if (v) return v;
+          }
+        }
+      } else {
+        v = getText(gp[name]);
+        if (v) return v;
+      }
+    }
+  } catch (e) {}
+  return "";
+}
+
+// 清除站点 Cookie 入口：clear_site_cookie 填 clear/清除时开启无 Cookie 模式，
+// 本次及之后每次请求都不带已存的 jv_site_cookie，也不把参数里的 Cookie 再存回去。
+// 改回空即恢复正常（重新积累站方发回的 Cookie）。
+function isClearSiteCookieMode(params) {
+  var v = getText(readGlobalParam(params, "clear_site_cookie")).toLowerCase();
+  return v === "clear" || v === "清除" || v === "clear-cookie" || v === "reset";
+}
+
+function clearSiteCookie() {
+  try {
+    if (Widget.storage && typeof Widget.storage.set === "function") {
+      Widget.storage.set("jv_site_cookie", "");
+    }
+  } catch (e) {}
+  try {
+    if (lastRequestParams) lastRequestParams.site_cookie = "";
+  } catch (e2) {}
+}
+
+
 function rememberParams(params) {
   if (params && typeof params === "object") lastRequestParams = params;
-  if (params && getText(params.site_cookie)) persistSiteCookie(params.site_cookie);
+  // 无 Cookie 模式：清掉已存的站点 Cookie，本次请求不带；也不再存入参数里的 Cookie
+  if (isClearSiteCookieMode(params)) {
+    clearSiteCookie();
+  } else if (params && getText(params.site_cookie)) persistSiteCookie(params.site_cookie);
   // 列表请求时把全局光鸭参数落到 storage，供 loadDetail(仅 link) 转存使用
   try {
     var token =
