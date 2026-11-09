@@ -1,11 +1,13 @@
 WidgetMetadata = {
   id: "forward.netflav",
   title: "Netflav",
-  version: "1.4.0",
+  version: "1.5.0",
   requiredVersion: "0.0.1",
   description: "Netflav 手机直连浏览：分类独立模块与分类选择器、搜索与增强详情；18mag 番号磁力、光鸭转存及公开播放线路",
-  author: "Forward",
+  author: "老头",
   site: "https://netflav.com",
+  icon: "https://netflav.com/static/assets/favico/apple-touch-icon.png",
+  iconUrl: "https://netflav.com/static/assets/favico/apple-touch-icon.png",
   detailCacheDuration: 300,
   globalParams: [
     { name: "locale", title: "语言", type: "enumeration", value: "zh", enumOptions: [{ title: "中文", value: "zh" }, { title: "English", value: "en" }] },
@@ -189,9 +191,11 @@ function mapListMovie(movie, params) {
   var title = safeText(params.locale === "en" ? movie.title_en || movie.title : movie.title_zh || movie.title);
   title = title || code || owned.videoId;
   if (code && title.toUpperCase().indexOf(code.toUpperCase()) !== 0) title = code + " " + title;
-  var cover = safeImageUrl(movie.coverUrl || movie.backdropPath || movie.preview);
-  var poster = safeImageUrl(movie.posterPath) || cover;
-  var backdrop = safeImageUrl(movie.backdropPath) || cover;
+  var sitePreview = safeImageUrl(movie.preview) || safeImageUrl(movie.preview_hp);
+  var bundle = nfCoverBundle(code, sitePreview);
+  var cover = bundle.coverUrl;
+  var poster = bundle.posterPath;
+  var backdrop = bundle.backdropPath;
   return {
     id: owned.link, type: "url", mediaType: "movie", link: owned.link,
     title: title, coverUrl: cover || undefined, posterPath: poster || undefined,
@@ -315,12 +319,13 @@ async function loadDetail(link, params) {
   params = await ensureGlobalParams(params);
   if (owned.kind === "magnet") return handleMagnetSave(owned, params);
   var deadline = Date.now() + 40000;
-  var movie = nfNormalizeMovie(await nfGetRawDetail(owned.videoId, deadline));
+  var rawDetail = await nfGetRawDetail(owned.videoId, deadline);
+  var movie = nfNormalizeMovie(rawDetail, false);
   if (!movie || movie.videoId !== owned.videoId) throw new Error("详情身份与请求不一致");
   var result = mapListMovie(movie, params);
   var code = normalizeMovieCode(movie.code);
   if (code) result.id = code;
-  var stills = imageUrls([].concat(Array.isArray(movie.backdropPaths) ? movie.backdropPaths : [], movie.previewImagesUrl ? [movie.previewImagesUrl] : []));
+  var stills = compactUniqueUrls([].concat(nfHdGallery(movie.code, 10), Array.isArray(movie.backdropPaths) ? movie.backdropPaths : [], movie.previewImagesUrl ? [movie.previewImagesUrl] : []));
   if (stills.length) result.backdropPaths = stills;
   var trailer = movie.previewVideo && /\.(?:mp4|m3u8)(?:[?#]|$)/i.test(movie.previewVideo) && nfPublicUrl(movie.previewVideo) ? movie.previewVideo : "";
   if (trailer) result.trailers = [{ coverUrl: result.coverUrl || undefined, url: trailer }];
@@ -340,18 +345,20 @@ async function loadDetail(link, params) {
   if (safeText(movie.label)) meta.push("厂牌: " + safeText(movie.label));
   if (safeText(movie.releaseDate)) meta.push("发行: " + safeText(movie.releaseDate));
   if (Number(movie.views) > 0) meta.push("浏览: " + movie.views);
-  result.description = [result.description, meta.filter(Boolean).join(" | "), safeText(movie.description), "播放线路在起播时解析；依赖线路提供方与播放器网络"].filter(Boolean).join("\n\n");
-  var related = mapMovies(movie.relatedItems, params);
+  var hasSource = nfPlaybackResources(rawDetail, owned.videoId).length > 0;
+  result.description = [result.description, meta.filter(Boolean).join(" | "), safeText(movie.description), hasSource ? "播放线路在起播时解析；依赖线路提供方与播放器网络" : "上游未提供完整播放直链；可通过下方磁力转存到光鸭后播放"].filter(Boolean).join("\n\n");
+  var magnetItems = [];
   if (params.magnet_enabled !== "0") {
     try {
       var magnets = await nfFindMagnets(movie, deadline);
-      related = (await buildMagnetItems(magnets && magnets.items, movie)).concat(related);
+      magnetItems = await buildMagnetItems(magnets && magnets.items, movie);
       if (magnets && magnets.warning) result.description += "\n\n磁力: " + safeText(magnets.warning);
     } catch (error) {
       result.description += "\n\n18mag 磁力暂不可用，不影响影片详情";
     }
   }
-  result.relatedItems = related;
+  // 相似作品影片不再进入详情；关联区只保留当前番号的磁力
+  result.relatedItems = magnetItems;
   return result;
 }
 
@@ -364,7 +371,7 @@ async function loadResource(params) {
     var detail = await nfGetRawDetail(owned.videoId, Date.now() + 15000, true);
     return nfPlaybackResources(detail, owned.videoId);
   } catch (error) {
-    console.log("[netflav/loadResource] 暂无可用公开线路");
+    console.log("[netflav/loadResource] 上游未提供完整播放直链");
     return [];
   }
 }
@@ -690,6 +697,234 @@ function nfGenreOptions() {
     {"title":"AVOPEN2016バラエティ部門","value":"AVOPEN2016バラエティ部門"},
     {"title":"VR専用","value":"VR専用"}
   ];
+}
+/* ========================= 高清封面（移植 javdb 可视化策略，适配 Netflav） ========================= */
+/* 表格与规则复用自 javdb/modules/10-visual-hd-images.js；Netflav 适配点：
+ * - 站点封面回退用 Netflav 自身 preview，不使用 JavDB CDN
+ * - pics.dmm.co.jp 经用户代理实测可达，排在 awsimgsrc 之前（与 javdb 顺序相反）
+ * - 站点在线播放不含完整直链，封面/剧照高清化不影响取数安全
+ */
+var DMM_CONTENT_PREFIX_MAP = {
+  WSA: "2", FSDSS: "1", FCDSS: "1", FNS: "1", FTHTD: "1", FALENO: "1", FGAN: "1", FSNF: "1", FLAV: "1",
+  NAAC: "h_706", NHDTC: "1", KUSE: "1", MBDD: "301", SDNM: "1", STARS: "1", STAR: "1", START: "1",
+  SODS: "1", REBD: "h_346", REBDB: "h_346", GSHRB: "h_346", MOGI: "1", FTAV: "1", HAWA: "1",
+  DFDM: "2", DFE: "2", ECB: "2", SMRA: "2", VDD: "24", NLD: "24", DOKS: "36", PS: "h_113",
+  JUKF: "h_227", AMBI: "h_237", NACT: "h_237", ZRK: "h_1293", CNSTV: "h_1472", EROFV: "h_1472",
+  HMDNV: "h_1472", INSTV: "h_1472", STSK: "h_1605", HNBR: "h_1664", HRSM: "h_1745", ERKR: "h_1838",
+};
+var DMM_CONTENT_ID_OVERRIDES = { "MKMP-362": "84mkmp00362" };
+var DMM_DIRECT_PREFIXES = {
+  SNIS: 1, SNOS: 1, SONE: 1, SSIS: 1, SSNI: 1, STARS: 1, START: 1, SODS: 1, FSDSS: 1, FCDSS: 1,
+  FNS: 1, FTHTD: 1, FSNF: 1, NHDTC: 1, KUSE: 1, MOGI: 1, FTAV: 1, WSA: 1, MIDV: 1, MIDA: 1,
+  MIDE: 1, MIDD: 1, MIFD: 1, MIKR: 1, DASS: 1, HIKA: 1, MKMP: 1, MADM: 1, IPZZ: 1, IPZ: 1,
+  IPX: 1, NGOD: 1, SDNM: 1, AVSA: 1, MNGS: 1, WAAA: 1, OFES: 1, OFJE: 1, OAE: 1, SIVR: 1,
+  HSODA: 1, JUFE: 1, MUKA: 1, MIMK: 1, HMN: 1, ROYD: 1, SDHS: 1, JUR: 1, CAWD: 1, CAWB: 1,
+  REBD: 1, ADN: 1, ATID: 1, JUL: 1, JUMS: 1, JUQ: 1, LULU: 1, MEYD: 1, MIAA: 1, MIAB: 1,
+  MIRD: 1, PRED: 1, PRWF: 1, URE: 1, YUJ: 1, CJOD: 1, EBWH: 1, JYMA: 1, MDHR: 1, DVAJ: 1,
+  ACHJ: 1, MFYD: 1, MBYD: 1, PFES: 1, MDYD: 1, NPJS: 1, ROE: 1, XVSR: 1, MVSD: 1, DVMM: 1,
+  FPRE: 1, HAWA: 1, SAME: 1, FWAY: 1, DFDM: 1, DFE: 1, ECB: 1, SMRA: 1, VDD: 1, NLD: 1,
+  DOKS: 1, UMD: 1, PS: 1, JUKF: 1, AMBI: 1, NACT: 1, ZRK: 1, CNSTV: 1, EROFV: 1, HMDNV: 1,
+  INSTV: 1, STSK: 1, HNBR: 1, HRSM: 1, ERKR: 1, MIZD: 1, PPPE: 1, AJVR: 1, BLOR: 1, BONY: 1,
+  DEAB: 1, DSOD: 1, DSS: 1, EYAN: 1, FJIN: 1, GQHB: 1, HJMO: 1, HNDB: 1, HNDS: 1, HNVR: 1,
+  HOIZ: 1, HUBLK: 1, HUNTB: 1, HUNTC: 1, IDBD: 1, IPVR: 1, JUVR: 1, KBTK: 1, KTB: 1, KTKL: 1,
+  MANX: 1, MBF: 1, MDON: 1, MDVR: 1, MUDR: 1, NPJB: 1, NQTD: 1, NSODN: 1, NTRH: 1, PBD: 1,
+  PKYS: 1, RKI: 1, SAVR: 1, SDAM: 1, SDDE: 1, SDJS: 1, SDMM: 1, SORA: 1, SQDE: 1, SQTE: 1,
+  URVRSP: 1, VRKM: 1, YAHO: 1, YMDD: 1, YMDS: 1,
+};
+var DMM_DIRECT_BLOCKED_CODES = {
+  "START-227": 1, "IPZZ-899": 1, "START-334": 1, "START-302": 1, "START-349": 1, "START-339": 1,
+  "START-310": 1, "START-314": 1, "START-287": 1, "START-273": 1, "START-266": 1, "START-304": 1,
+  "START-285": 1, "START-276": 1, "START-135": 1, "START-62": 1, "START-23": 1, "START-14": 1,
+  "STARS-977": 1, "STARS-917": 1, "STARS-915": 1, "STARS-91501": 1, "SDNM-39101": 1,
+  "MIDD-946": 1, "MIDD-966": 1, "MIKR-12": 1, "MIKR-21": 1, "FLAV-421": 1, "SQTE-257": 1,
+  "SQTE-187": 1, "SQTE-140": 1, "SQTE-128": 1,
+};
+var DMM_DIRECT_BLOCKED_RANGES = [
+  { prefix: "SQTE", min: 1, max: 70 },
+  { prefix: "SDDE", min: 1, max: 100 },
+];
+var MGSTAGE_COVER_RULES = { ABF: { maker: "prestige" }, ABW: { maker: "prestige" }, ABP: { maker: "prestige" }, CHN: { maker: "prestige" }, PPT: { maker: "prestige" } };
+var MGSTAGE_PREFIXES = { ABF: 1, ABW: 1, ABP: 1, CHN: 1, PPT: 1 };
+
+function compactUniqueUrls(urls) {
+  var seen = {};
+  var result = [];
+  for (var i = 0; i < (urls || []).length; i++) {
+    var value = String(urls[i] || "").trim();
+    if (!value) continue;
+    var key = value.toLowerCase().split("?")[0].split("#")[0].replace(/\/+$/, "");
+    if (!key || seen[key]) continue;
+    seen[key] = true;
+    result.push(value);
+  }
+  return result;
+}
+
+function normalizeDmmPrefix(prefix) {
+  var value = String(prefix || "").toUpperCase();
+  return value === "REBDB" ? "REBD" : value;
+}
+
+function extractStandardCode(value) {
+  var text = String(value || "").toUpperCase();
+  if (!text || text.indexOf("XXX-AV") >= 0 || /\bFC2(?:[- ]?PPV)?[- ]?\d{5,8}\b/.test(text)) return "";
+  var match =
+    text.match(/\b([A-Z0-9]{2,10})[\s_-]+(\d{1,8})([A-Z]?)\b/) ||
+    text.match(/\b([A-Z0-9]{1,9}[A-Z])(\d{1,8})([A-Z]?)\b/);
+  if (!match || !/[A-Z]/.test(match[1])) return "";
+  var number = String(parseInt(match[2], 10));
+  if (!number || number === "0" || number === "NaN") return "";
+  return match[1] + "-" + number + (match[3] || "");
+}
+
+function parseStandardCodeParts(value) {
+  var code = extractStandardCode(value);
+  if (!code) return null;
+  var match = code.match(/^([A-Z0-9]+)-(\d{1,8})([A-Z]?)$/);
+  if (!match) return null;
+  var prefix = match[1].toUpperCase();
+  var number = String(parseInt(match[2], 10));
+  if (!number || number === "0" || number === "NaN") return null;
+  return {
+    prefix: prefix,
+    prefixLower: prefix.toLowerCase(),
+    number: number,
+    number3: number.length < 3 ? ("000" + number).slice(-3) : number,
+    number5: number.length < 5 ? ("00000" + number).slice(-5) : number,
+    suffix: match[3] || "",
+    code: prefix + "-" + number + (match[3] || ""),
+  };
+}
+
+function isDmmDirectBlockedCode(parts) {
+  if (!parts) return false;
+  var prefix = normalizeDmmPrefix(parts.prefix);
+  var number = parseInt(parts.number, 10);
+  if (DMM_DIRECT_BLOCKED_CODES[prefix + "-" + parts.number]) return true;
+  if (!isFinite(number)) return false;
+  for (var i = 0; i < DMM_DIRECT_BLOCKED_RANGES.length; i++) {
+    var range = DMM_DIRECT_BLOCKED_RANGES[i];
+    if (range.prefix === prefix && number >= range.min && number <= range.max) return true;
+  }
+  return false;
+}
+
+function isDirectDmmSeries(parts) {
+  return !!(parts && !isDmmDirectBlockedCode(parts) && DMM_DIRECT_PREFIXES[normalizeDmmPrefix(parts.prefix)]);
+}
+
+function buildDmmContentIdFromParts(parts) {
+  if (!parts) return "";
+  var code = String(parts.code || "").toUpperCase();
+  if (code && DMM_CONTENT_ID_OVERRIDES[code]) return DMM_CONTENT_ID_OVERRIDES[code];
+  var prefix = normalizeDmmPrefix(parts.prefix);
+  var numericPrefix = DMM_CONTENT_PREFIX_MAP[prefix] || "";
+  if (!numericPrefix && /^SD[A-Z]{2,3}$/.test(prefix)) numericPrefix = "1";
+  return numericPrefix + prefix.toLowerCase() + parts.number5 + String(parts.suffix || "").toLowerCase();
+}
+
+function buildDmmCoverCandidatesFromContentId(contentId) {
+  var id = String(contentId || "").toLowerCase();
+  if (!id) return { posterCandidates: [], backdropCandidates: [] };
+  return {
+    posterCandidates: [
+      "https://pics.dmm.co.jp/digital/video/" + id + "/" + id + "ps.jpg",
+      "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id + "/" + id + "ps.jpg",
+    ],
+    backdropCandidates: [
+      "https://pics.dmm.co.jp/digital/video/" + id + "/" + id + "pl.jpg",
+      "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/" + id + "/" + id + "pl.jpg",
+    ],
+  };
+}
+
+function buildMgstageCoverCandidatesFromParts(parts, rule) {
+  if (!parts || !rule || !rule.maker) return { posterCandidates: [], backdropCandidates: [] };
+  var prefix = parts.prefixLower;
+  var number = parts.number3;
+  if (!prefix || !number) return { posterCandidates: [], backdropCandidates: [] };
+  var dvdDash = prefix + "-" + number;
+  var base = "https://image.mgstage.com/images/" + rule.maker + "/" + prefix + "/" + number;
+  return {
+    posterCandidates: [base + "/pf_e_" + dvdDash + ".jpg", base + "/pf_o1_" + dvdDash + ".jpg"],
+    backdropCandidates: [base + "/pb_e_" + dvdDash + ".jpg"],
+  };
+}
+
+function buildImageCandidatesFromValue(value) {
+  var parts = parseStandardCodeParts(value);
+  if (!parts) return { strategy: "site", posterCandidates: [], backdropCandidates: [] };
+  if (isDirectDmmSeries(parts)) {
+    var dmm = buildDmmCoverCandidatesFromContentId(buildDmmContentIdFromParts(parts));
+    dmm.strategy = "direct-dmm";
+    dmm.parts = parts;
+    return dmm;
+  }
+  if (MGSTAGE_PREFIXES[parts.prefix]) {
+    var mg = buildMgstageCoverCandidatesFromParts(parts, MGSTAGE_COVER_RULES[parts.prefix]);
+    mg.strategy = "mgstage";
+    mg.parts = parts;
+    return mg;
+  }
+  return { strategy: "site", posterCandidates: [], backdropCandidates: [], parts: parts };
+}
+
+function nfValidCoverUrl(url) {
+  var value = safeText(url);
+  if (!value || value.length > 4096 || /[\r\n]/.test(value)) return "";
+  if (!/^https:\/\/[A-Za-z0-9.-]+\//.test(value)) return "";
+  var lower = value.toLowerCase();
+  if (
+    lower.indexOf("now_printing") >= 0 || lower.indexOf("noimage") >= 0 ||
+    lower.indexOf("no_image") >= 0 || lower.indexOf("no-image") >= 0 ||
+    lower.indexOf("placeholder") >= 0 || /adult_pl\.jpg(?:\?|$)/.test(lower)
+  ) return "";
+  return value;
+}
+
+function chooseFirstCandidate(candidates) {
+  for (var i = 0; i < (candidates || []).length; i++) {
+    var value = nfValidCoverUrl(candidates[i]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function nfCoverBundle(code, sitePreview) {
+  var fallback = nfValidCoverUrl(sitePreview);
+  var candidates = buildImageCandidatesFromValue(code);
+  if (candidates.strategy === "direct-dmm" || candidates.strategy === "mgstage") {
+    var poster = chooseFirstCandidate(candidates.posterCandidates);
+    var backdrop = chooseFirstCandidate(candidates.backdropCandidates);
+    if (poster || backdrop) {
+      return {
+        posterPath: poster || backdrop || fallback,
+        backdropPath: backdrop || poster || fallback,
+        coverUrl: backdrop || poster || fallback,
+      };
+    }
+  }
+  return { posterPath: fallback, backdropPath: fallback, coverUrl: fallback };
+}
+
+function nfHdGallery(code, count) {
+  var candidates = buildImageCandidatesFromValue(code);
+  var parts = candidates.parts;
+  var urls = [];
+  var total = Number(count || 10) || 10;
+  if (candidates.strategy === "direct-dmm" && parts) {
+    var contentId = buildDmmContentIdFromParts(parts);
+    for (var i = 1; i <= total; i++) {
+      urls.push("https://pics.dmm.co.jp/digital/video/" + contentId + "/" + contentId + "jp-" + i + ".jpg");
+    }
+  } else if (candidates.strategy === "mgstage" && parts) {
+    var rule = MGSTAGE_COVER_RULES[parts.prefix] || { maker: "prestige" };
+    var dvdDash = parts.prefixLower + "-" + parts.number;
+    for (var j = 1; j <= total; j++) {
+      urls.push("https://image.mgstage.com/images/" + rule.maker + "/" + parts.prefixLower + "/" + parts.number + "/cap_e_" + j + "_" + dvdDash + ".jpg");
+    }
+  }
+  return compactUniqueUrls(urls.map(nfValidCoverUrl)).filter(Boolean);
 }
 /* ========================= 站点直连 / 结构化数据 ========================= */
 var NF_MAG_SITE = "https://18mag.net";
