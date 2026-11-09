@@ -11,7 +11,7 @@
  * 6. 今天冲谁 / 今天冲什么（search-index 随机）
  * 7. 详情 JSON/MD 优先，HTML 补磁力/剧照
  * 8. loadResource 仅本站 jvr: 预告片（无顶层按番号搜索）
- * 9. LTX 精选榜；片库探索按分类维度 → 具体题材两级筛选（filter-index.json）
+ * 9. LTX 精选榜；片库探索单菜单题材，仅保留影片≥60部的题材（filter-index.json）
  */
 var ACTRESS_FILTER_OPTIONS = [
   {
@@ -403,21 +403,8 @@ var ACTRESS_FILTER_OPTIONS = [
     "value": "前田香织"
   }
 ];
-// 一级分类对应站点分类维度；二级题材仅显示当前维度下的选项。
-var EXPLORE_DIMENSION_OPTIONS = [
-  { title: "全部", value: "all" },
-  { title: "身份角色", value: "role" },
-  { title: "服装道具", value: "outfit" },
-  { title: "剧情题材", value: "theme" },
-  { title: "玩法体位", value: "action" },
-  { title: "身材外貌", value: "body" },
-  { title: "场景地点", value: "scene" },
-  { title: "癖好调教", value: "fetish" },
-];
-
 // 题材显示名及原始值来自网站 filter-index.json；数字 ID 更新后可能重排，不固定 ID。
 var EXPLORE_CATEGORY_OPTIONS = [
-  { title: "全部题材", value: "all", dimension: "all" },
   { title: "中出", value: "中出", dimension: "action" },
   { title: "巨乳", value: "巨乳", dimension: "body" },
   { title: "人妻少妇", value: "人妻少妇", dimension: "role" },
@@ -553,147 +540,28 @@ var EXPLORE_CATEGORY_OPTIONS = [
   { title: "办公室情景", value: "办公室情景", dimension: "scene" },
   { title: "女主播", value: "女主播", dimension: "role" },
   { title: "旅店老板娘", value: "旅店老板娘", dimension: "role" },
-  { title: "共浴洗澡", value: "共浴洗澡", dimension: "scene" },
-  { title: "洛丽塔洋装", value: "洛丽塔洋装", dimension: "outfit" },
-  { title: "灌肠清洁", value: "灌肠清洁", dimension: "action" },
-  { title: "双插双龙", value: "二穴同入", dimension: "action" },
-  { title: "温泉旅馆", value: "温泉旅馆", dimension: "scene" },
-  { title: "千金大小姐", value: "千金大小姐", dimension: "role" },
-  { title: "激烈粗暴", value: "激烈粗暴", dimension: "fetish" },
-  { title: "痴女调教男", value: "痴女调教男", dimension: "theme" },
-  { title: "日式绳缚", value: "日式绳缚", dimension: "fetish" },
-  { title: "催眠洗脑", value: "催眠洗脑", dimension: "theme" },
-  { title: "烂醉捡尸", value: "烂醉捡尸", dimension: "theme" },
-  { title: "车震野战", value: "车震野战", dimension: "scene" },
-  { title: "渔网袜", value: "渔网袜", dimension: "outfit" },
-  { title: "紧身连体衣", value: "紧身连体衣", dimension: "outfit" },
-  { title: "紧身显身材", value: "紧身显身材", dimension: "outfit" },
-  { title: "动作打斗", value: "动作打斗", dimension: "theme" },
-  { title: "母乳出奶", value: "母乳出奶", dimension: "fetish" },
-  { title: "肌肉猛男", value: "肌肉猛男", dimension: "body" },
-  { title: "赛车女郎", value: "赛车女郎", dimension: "role" },
-  { title: "裸体围裙", value: "裸体围裙", dimension: "outfit" },
-  { title: "女王S属性", value: "女王S属性", dimension: "theme" },
-  { title: "棕褐发色", value: "棕褐发色", dimension: "body" },
-  { title: "骑脸", value: "骑脸", dimension: "action" },
-  { title: "两男一女", value: "两男一女", dimension: "theme" },
-  { title: "娇小萝莉", value: "娇小萝莉", dimension: "body" },
-  { title: "金发", value: "金发", dimension: "body" },
-  { title: "舞蹈跳舞", value: "舞蹈跳舞", dimension: "theme" },
-  { title: "女服务员", value: "女服务员", dimension: "role" },
-  { title: "舔舐", value: "舔舐", dimension: "action" },
-  { title: "跨种族", value: "跨种族", dimension: "theme" },
-  { title: "无码步兵", value: "无码步兵", dimension: "theme" },
-  { title: "战斗女英雄", value: "战斗女英雄", dimension: "role" },
-  { title: "旗袍装扮", value: "旗袍装扮", dimension: "outfit" },
-  { title: "小麦肤色", value: "小麦肤色", dimension: "body" },
-  { title: "短裙裙底", value: "短裙裙底", dimension: "outfit" },
-  { title: "绑腿过膝袜", value: "绑腿过膝袜", dimension: "outfit" },
-  { title: "传统体位", value: "传统体位", dimension: "action" },
-  { title: "猫耳娘", value: "猫耳娘", dimension: "outfit" },
-  { title: "残酷硬核", value: "残酷硬核", dimension: "fetish" },
-  { title: "科幻未来", value: "科幻未来", dimension: "theme" },
-  { title: "蕾丝薄纱", value: "蕾丝薄纱", dimension: "outfit" },
-  { title: "暗黑重口", value: "暗黑重口", dimension: "theme" },
-  { title: "电车痴汉", value: "痴漢", dimension: "scene" },
-  { title: "舔肛", value: "舔肛", dimension: "action" },
-  { title: "车站野战", value: "车站野战", dimension: "scene" },
-  { title: "全裸暴露", value: "全裸暴露", dimension: "outfit" },
-  { title: "搞笑恶搞", value: "搞笑恶搞", dimension: "theme" },
-  { title: "颜射口爆", value: "颜射口爆", dimension: "action" },
-  { title: "触手", value: "触手", dimension: "theme" },
-  { title: "二次元动漫", value: "二次元动漫", dimension: "theme" },
-  { title: "女忍者", value: "女忍者", dimension: "role" },
-  { title: "姐妹", value: "姐妹", dimension: "role" },
-  { title: "展台女郎", value: "展台女郎", dimension: "role" },
-  { title: "打屁股", value: "打屁股", dimension: "action" },
-  { title: "欧美白人", value: "欧美白人", dimension: "body" },
-  { title: "浓密阴毛", value: "浓密阴毛", dimension: "body" },
-  { title: "混血美女", value: "混血美女", dimension: "body" },
-  { title: "面具蒙面", value: "面具蒙面", dimension: "outfit" },
-  { title: "女主角", value: "女主角", dimension: "role" },
-  { title: "女祭司巫女", value: "女祭司巫女", dimension: "role" },
-  { title: "比基尼", value: "比基尼", dimension: "outfit" },
-  { title: "泡泡袜", value: "泡泡袜", dimension: "outfit" },
-  { title: "破处见红", value: "破处见红", dimension: "theme" },
-  { title: "內褲", value: "內褲", dimension: "theme" },
-  { title: "前后夹击", value: "前后夹击", dimension: "action" },
-  { title: "拳交重口", value: "拳交重口", dimension: "action" },
-  { title: "泡泡浴风俗", value: "泡泡浴风俗", dimension: "scene" },
-  { title: "女子格斗家", value: "女子格斗家", dimension: "role" },
-  { title: "妈妈的朋友", value: "妈妈的朋友", dimension: "role" },
-  { title: "娇喘浪叫", value: "娇喘浪叫", dimension: "action" },
-  { title: "短发", value: "短发", dimension: "body" },
-  { title: "乘务员车掌", value: "乘务员车掌", dimension: "role" },
-  { title: "唯美感官", value: "唯美感官", dimension: "theme" },
-  { title: "婚纱礼服", value: "婚纱礼服", dimension: "outfit" },
-  { title: "浴室激战", value: "浴室激战", dimension: "scene" },
-  { title: "深度拘束道具", value: "深度拘束道具", dimension: "fetish" },
-  { title: "纹身穿孔", value: "纹身穿孔", dimension: "fetish" },
-  { title: "修剪阴毛", value: "修剪阴毛", dimension: "body" },
-  { title: "修女禁欲", value: "修女禁欲", dimension: "role" },
-  { title: "复古怀旧", value: "复古怀旧", dimension: "theme" },
-  { title: "童颜", value: "童颜", dimension: "body" },
-  { title: "红发", value: "红发", dimension: "body" },
-  { title: "電車", value: "電車", dimension: "theme" },
-  { title: "M字开腿", value: "M字开腿", dimension: "action" },
-  { title: "吊带吊袜带", value: "吊带吊袜带", dimension: "outfit" },
-  { title: "失禁圣水", value: "失禁圣水", dimension: "fetish" },
-  { title: "孕妇怀孕", value: "孕妇怀孕", dimension: "role" },
-  { title: "当众露出", value: "当众露出", dimension: "fetish" },
-  { title: "惊悚恐怖", value: "惊悚恐怖", dimension: "theme" },
-  { title: "欧美混血", value: "欧美混血", dimension: "body" },
-  { title: "老头爷爷", value: "老头爷爷", dimension: "role" },
-  { title: "芭蕾舞服", value: "芭蕾舞服", dimension: "outfit" },
-  { title: "LTX破解", value: "LTX破解", dimension: "theme" },
-  { title: "体育服扮演", value: "体育服扮演", dimension: "outfit" },
-  { title: "公共场所露出", value: "公共场所露出", dimension: "scene" },
-  { title: "养女女儿", value: "养女女儿", dimension: "role" },
-  { title: "唾液调教", value: "唾液调教", dimension: "action" },
-  { title: "性感背心", value: "性感背心", dimension: "outfit" },
-  { title: "情趣警察", value: "情趣警察", dimension: "outfit" },
-  { title: "明星脸", value: "明星脸", dimension: "role" },
-  { title: "比基尼晒痕", value: "比基尼晒痕", dimension: "body" },
-  { title: "泳衣", value: "泳衣", dimension: "theme" },
-  { title: "海外作品", value: "海外作品", dimension: "theme" },
-  { title: "真空无胸罩", value: "真空无胸罩", dimension: "outfit" },
-  { title: "绝顶高潮", value: "绝顶高潮", dimension: "action" },
-  { title: "萝莉扮演", value: "萝莉扮演", dimension: "outfit" },
-  { title: "餐厅包厢", value: "餐厅包厢", dimension: "scene" },
 ];
 
-// Rex / Forward 通过 belongTo 控制参数显示：一级分类 + 一个对应的二级题材菜单。
-// 各维度独立命名，切换一级时不会误用另一个隐藏菜单的旧选择。
+// 全部题材合并为一个菜单，不提供全部选项，默认选择第一项。
 var EXPLORE_FILTER_PARAMS = [
   {
-    name: "dimension",
-    title: "一级分类",
+    name: "category",
+    title: "题材",
     type: "enumeration",
-    value: "all",
-    enumOptions: EXPLORE_DIMENSION_OPTIONS,
-  },
-].concat(EXPLORE_DIMENSION_OPTIONS.map(function (group) {
-  return {
-    name: group.value === "all" ? "category" : "category_" + group.value,
-    title: "二级题材",
-    type: "enumeration",
-    value: "all",
-    belongTo: { paramName: "dimension", value: [group.value] },
-    enumOptions: EXPLORE_CATEGORY_OPTIONS.filter(function (option) {
-      return option.value === "all" || group.value === "all" || option.dimension === group.value;
-    }).map(function (option) {
+    value: EXPLORE_CATEGORY_OPTIONS[0].value,
+    enumOptions: EXPLORE_CATEGORY_OPTIONS.map(function (option) {
       return { title: option.title, value: option.value };
     }),
-  };
-}));
+  },
+];
 
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.6.4",
+  version: "1.6.6",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / LTX 最强 AI 破解 / 片库探索题材 / 神作 / 女优战力；列表阶段获取高清横图，详情复用图片；磁力在相似作品栏显示 LTX破解 标识，点击转存光鸭；详情点演员可看作品。",
+    "权威榜单 / LTX 最强 AI 破解 / 片库探索题材(≥60部) / 神作 / 女优战力；列表阶段获取高清横图，详情复用图片；磁力在相似作品栏显示 LTX破解 标识，点击转存光鸭；详情点演员可看作品。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -2974,13 +2842,6 @@ function findExploreCategory(index, value) {
   return null;
 }
 
-function normalizeExploreDimension(params) {
-  var dimension = getText((params && params.dimension) || "all").toLowerCase();
-  return EXPLORE_DIMENSION_OPTIONS.some(function (group) {
-    return group.value === dimension;
-  }) ? dimension : "all";
-}
-
 function resolveExploreCategoryValue(params) {
   params = params || {};
   // 不再显示 ID 输入框；仍接收 App 从详情页自动注入的题材 ID。
@@ -2989,10 +2850,9 @@ function resolveExploreCategoryValue(params) {
     var value = getText(params[keys[i]]);
     if (value) return value;
   }
-  var dimension = normalizeExploreDimension(params);
-  // 只读取当前一级对应的二级字段，隐藏菜单里的旧选择不参与筛选。
-  if (dimension !== "all") return getText(params["category_" + dimension]) || "all";
-  return getText(params.category) || getText(params.cat) || "all";
+  // 忽略旧一级分类及隐藏菜单；空值/旧全部选项使用第一个题材。
+  var selected = getText(params.category) || getText(params.cat);
+  return !selected || selected.toLowerCase() === "all" ? EXPLORE_FILTER_PARAMS[0].value : selected;
 }
 
 function videoHasExploreCategory(video, categoryId) {
@@ -3017,13 +2877,9 @@ function videoMatchesExploreScope(video, scope) {
 function filterExploreVideos(index, params) {
   params = params || {};
   var value = resolveExploreCategoryValue(params);
-  var key = normalizeExploreCategoryKey(value);
-  var category = key === "all" ? null : findExploreCategory(index, value);
+  var category = findExploreCategory(index, value);
   // 不认识的题材不能回退成全部影片，避免空筛选被误认为命中。
-  if (key !== "all" && !category) return [];
-  var dimension = normalizeExploreDimension(params);
-  var fromDetail = getText(params.genreId) || getText(params.genre_id);
-  if (!fromDetail && dimension !== "all" && category && category.dimension !== dimension) return [];
+  if (!category) return [];
   var scope = normalizeExploreScope(params);
   var releasedOnly = getText(params.released_only == null ? "1" : params.released_only) !== "0";
   var today = new Date().toISOString().slice(0, 10);
