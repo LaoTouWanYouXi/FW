@@ -690,10 +690,10 @@ var EXPLORE_FILTER_PARAMS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.6.2",
+  version: "1.6.3",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / LTX 最强 AI 破解 / 片库探索题材 / 神作 / 女优战力；影视列表横图、详情高清；磁力在相似作品栏显示 LTX破解 标识，点击转存光鸭；详情点演员可看作品。",
+    "权威榜单 / LTX 最强 AI 破解 / 片库探索题材 / 神作 / 女优战力；列表阶段获取高清横图，详情复用图片；磁力在相似作品栏显示 LTX破解 标识，点击转存光鸭；详情点演员可看作品。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -1001,7 +1001,15 @@ var HD_IMAGE_REQUEST_TIMEOUT_MS = 1500;
 var HD_IMAGE_ITEM_BUDGET_MS = 3500;
 var HD_IMAGE_MIN_CONTENT_LENGTH = 3000;
 var HD_IMAGE_AVAILABLE_CACHE = {};
+var HD_IMAGE_CACHE_TS = {};
 var HD_IMAGE_PENDING_REQUESTS = {};
+var HD_COVER_MEMORY_CACHE = {};
+var HD_COVER_PENDING_REQUESTS = {};
+var HD_COVER_STORE_PREFIX = "jvr.cover.v2.";
+var HD_COVER_TTL_MS = 6 * 60 * 60 * 1000;
+var HD_COVER_FAILURE_TTL_MS = 60 * 1000;
+var HD_COVER_LIST_CONCURRENCY = 4;
+var HD_COVER_BATCH_BUDGET_MS = 12000;
 var DMM_CONTENT_PREFIX_MAP = {
   WSA: "2",
   FSDSS: "1",
@@ -1454,8 +1462,13 @@ function buildCoverBundleFromUrls(poster, backdrop) {
 async function isHdImageAvailable(url) {
   var clean = sanitizeCoverUrl(url) || String(url || "").trim();
   if (!clean || isInvalidCoverTarget(clean)) return false;
+  if (!Widget.http || typeof Widget.http.head !== "function") return false;
   if (Object.prototype.hasOwnProperty.call(HD_IMAGE_AVAILABLE_CACHE, clean)) {
-    return !!HD_IMAGE_AVAILABLE_CACHE[clean];
+    var ttl = HD_IMAGE_AVAILABLE_CACHE[clean] ? HD_COVER_TTL_MS : HD_COVER_FAILURE_TTL_MS;
+    if (!HD_IMAGE_CACHE_TS[clean] || Date.now() - HD_IMAGE_CACHE_TS[clean] < ttl) {
+      return !!HD_IMAGE_AVAILABLE_CACHE[clean];
+    }
+    delete HD_IMAGE_AVAILABLE_CACHE[clean];
   }
   if (HD_IMAGE_PENDING_REQUESTS[clean]) {
     return await HD_IMAGE_PENDING_REQUESTS[clean];
@@ -1496,6 +1509,7 @@ async function isHdImageAvailable(url) {
       HD_IMAGE_AVAILABLE_CACHE[clean] = false;
       return false;
     } finally {
+      HD_IMAGE_CACHE_TS[clean] = Date.now();
       delete HD_IMAGE_PENDING_REQUESTS[clean];
     }
   })();
@@ -2195,20 +2209,94 @@ function buildLandscapeListCovers(code, coverCand) {
   return { coverUrl: backdrop, backdropPath: backdrop, detailPoster: poster };
 }
 
+function hdCoverCacheKey(code, videoId) {
+  return (extractStandardCode(code) || normalizeCode(code)) + ":" + String(videoId || "");
+}
+
+function readHdCoverBundle(code, videoId) {
+  var key = hdCoverCacheKey(code, videoId);
+  var entry = HD_COVER_MEMORY_CACHE[key];
+  if (!entry) {
+    try {
+      var raw = Widget.storage.get(HD_COVER_STORE_PREFIX + key);
+      entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch (e) {}
+  }
+  if (!entry || !entry.covers || !entry.ts) return null;
+  var ttl = entry.complete ? HD_COVER_TTL_MS : HD_COVER_FAILURE_TTL_MS;
+  if (Date.now() - entry.ts >= ttl) return null;
+  HD_COVER_MEMORY_CACHE[key] = entry;
+  return entry.covers;
+}
+
+function storeHdCoverBundle(code, videoId, covers) {
+  var key = hdCoverCacheKey(code, videoId);
+  var entry = {
+    ts: Date.now(),
+    complete: HD_IMAGE_AVAILABLE_CACHE[covers.backdropPath] === true && HD_IMAGE_AVAILABLE_CACHE[covers.posterPath] === true,
+    covers: covers,
+  };
+  HD_COVER_MEMORY_CACHE[key] = entry;
+  try {
+    Widget.storage.set(HD_COVER_STORE_PREFIX + key, JSON.stringify(entry));
+  } catch (e) {}
+}
+
+function readDetailCoverBundle(code, videoId, coverCand) {
+  var cached = readHdCoverBundle(code, videoId);
+  if (cached) return cached;
+  var covers = buildLandscapeListCovers(code, coverCand);
+  return buildCoverBundleFromUrls(covers.detailPoster, covers.backdropPath);
+}
+
+async function getListHdCoverBundle(code, videoId, backdrop, poster) {
+  var cached = readHdCoverBundle(code, videoId);
+  if (cached) return cached;
+  var key = hdCoverCacheKey(code, videoId);
+  if (HD_COVER_PENDING_REQUESTS[key]) return await HD_COVER_PENDING_REQUESTS[key];
+  var pending = (async function () {
+    var covers = await applyHdCoversAsync(code, backdrop, poster);
+    storeHdCoverBundle(code, videoId, covers);
+    return covers;
+  })();
+  HD_COVER_PENDING_REQUESTS[key] = pending;
+  try {
+    return await pending;
+  } finally {
+    delete HD_COVER_PENDING_REQUESTS[key];
+  }
+}
+
 async function enrichItemsWithVerifiedHdCovers(items) {
-  // 列表只复用高清缓存，不发请求；人物头像不应用影片横图模式。
-  (items || []).forEach(function (item) {
-    if (!item || item.mediaType === "person") return;
-    var covers = buildLandscapeListCovers(item.id || item.title, {
-      backdrop: item.backdropPath || item.coverUrl || item.posterPath,
-      poster: item.detailPoster || item.posterPath || item.coverUrl,
-    });
-    item.coverUrl = covers.coverUrl;
-    item.backdropPath = covers.backdropPath;
-    item.detailPoster = covers.detailPoster;
-    delete item.posterPath;
-  });
-  return items || [];
+  items = items || [];
+  var cursor = 0;
+  var started = Date.now();
+  // 四个影片 worker；每项横/竖候选并行，整页维持原有顺序。
+  async function worker() {
+    while (cursor < items.length) {
+      var item = items[cursor++];
+      if (!item || item.mediaType === "person") continue;
+      var owned = parseOwnedLink(item.link);
+      var videoId = owned && owned.kind === "video" ? owned.videoId : "";
+      var code = normalizeCode((owned && owned.code) || item.id || item.title);
+      var covers = readHdCoverBundle(code, videoId);
+      if (!covers && Date.now() - started < HD_COVER_BATCH_BUDGET_MS) {
+        covers = await getListHdCoverBundle(code, videoId,
+          item.backdropPath || item.coverUrl || item.posterPath,
+          item.detailPoster || item.posterPath || item.coverUrl);
+      }
+      if (covers) {
+        item.coverUrl = covers.backdropPath;
+        item.backdropPath = covers.backdropPath;
+        item.detailPoster = covers.posterPath;
+      }
+      delete item.posterPath;
+    }
+  }
+  var workers = [];
+  for (var i = 0; i < Math.min(HD_COVER_LIST_CONCURRENCY, items.length); i++) workers.push(worker());
+  await Promise.all(workers);
+  return items;
 }
 
 function mapIndexVideo(v, extra) {
@@ -2804,11 +2892,7 @@ async function loadVideoDetail(owned, params) {
   if (!indexMeta) indexMeta = findVideoInIndexById(readCachedSearchIndex(params), videoId);
 
   var coverCandFallback = resolveVideoCoverCandidates(videoId, indexMeta && indexMeta.coverUrl);
-  var coversFallback = applyHdCovers(
-    codeHint || videoId,
-    coverCandFallback.primary,
-    coverCandFallback.poster
-  );
+  var coversFallback = readDetailCoverBundle(codeHint || videoId, videoId, coverCandFallback);
   var base = indexMeta
     ? buildDetailFromIndex(indexMeta, params)
     : {
@@ -2850,7 +2934,7 @@ async function loadVideoDetail(owned, params) {
 
 async function enrichFallbackDetailCovers(detail, videoId) {
   var coverCand = resolveVideoCoverCandidates(videoId, detail.coverUrl);
-  var covers = await applyHdCoversAsync(detail.id || detail.title, coverCand.primary, coverCand.poster);
+  var covers = readDetailCoverBundle(detail.id || detail.title, videoId, coverCand);
   return Object.assign(detail, covers);
 }
 
@@ -3129,9 +3213,10 @@ async function loadExplore(params) {
     if (byPeople) return byPeople;
     var index = await getFilterIndex(params);
     var videos = sortExploreVideos(filterExploreVideos(index, params), params);
-    return pageSlice(videos, params.page, PAGE_SIZE).map(function (video) {
+    var items = pageSlice(videos, params.page, PAGE_SIZE).map(function (video) {
       return mapIndexVideo(video, { rankLabel: video.hasLtx ? "LTX AI 去码" : "" });
     });
+    return await enrichItemsWithVerifiedHdCovers(items);
   } catch (error) {
     console.error("[javranking][loadExplore] 失败:", error.message || error);
     throw error;
@@ -3189,8 +3274,7 @@ async function loadRandomMasterpiece(params) {
     var items = picked.map(function (v) {
       return mapIndexVideo(v, { rankLabel: "随机神作·有码" });
     });
-    // 列表用本站封面即可，不做高清 HEAD 探测
-    return items;
+    return await enrichItemsWithVerifiedHdCovers(items);
   } catch (error) {
     console.error("[javranking][loadRandomMasterpiece] 失败:", error.message || error);
     throw error;
@@ -3748,7 +3832,7 @@ function buildDetailFromIndex(meta, params) {
   var title = getText(meta.title || code || videoId);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var coverCand = resolveVideoCoverCandidates(videoId, meta.coverUrl);
-  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
+  var covers = readDetailCoverBundle(code || title, videoId, coverCand);
   var preview = sitePreviewUrl(videoId);
   var actors = [];
   var peoples = [];
@@ -3859,9 +3943,9 @@ async function enrichDetailFromHtml(base, videoId, params) {
   var title = getText(ld.name || base.title || code);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
 
-  // 详情封面：优先 DMM/MGStage 高清，失败回退本站
+  // 顶图直接复用列表阶段选定的图片，不再单独探测高清候选。
   var coverCand = resolveVideoCoverCandidates(videoId, getText(ld.image) || base.coverUrl);
-  var covers = await applyHdCoversAsync(code || title, coverCand.primary, coverCand.poster);
+  var covers = readDetailCoverBundle(code || title, videoId, coverCand);
   var coverMain =
     covers.coverUrl ||
     covers.backdropPath ||
