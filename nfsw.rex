@@ -22,13 +22,13 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javranking.js"
     },
     {
-      "id": "javverse.catalog",
-      "title": "JAV Verse",
-      "description": "JAV Verse",
+      "id": "forward.netflav",
+      "title": "netflav",
+      "description": "netflav",
       "requiredVersion": "0.0.1",
       "version": "1.0.0",
       "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/javverse.js"
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/netflav.js"
     },
     {
       "id": "forward.catemby",
