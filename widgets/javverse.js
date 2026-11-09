@@ -9,19 +9,24 @@
  * - POST /api/video/sessions → 代理 m3u8（direct=1）
  * - GET  /genre/{id}（RSC text/x-component 优先，HTML/作品池回退）
  * - GET  /work/{id}（详情补充：女优/类别/剧照）
+ *
+ * 请求强度（1.4.8，降低对站点的压力）：
+ * - 作品池本地缓存 30 分钟；「抽一部/搜索补拉」5 分钟内复用池，不再强制刷新
+ * - 403 冷却 90 秒：被拦期间跳过「门禁+重试」和代理请求，快速失败不放大请求
+ * - 类别页拿到 ≥1 张卡片即停（不再换路径重打）；完全为空才补 RSC
+ * - 类别 /api/cards 只补当前页展示条目（原固定 48 条）
  */
 WidgetMetadata = {
   id: "javverse.catalog",
   title: "JAV Verse",
-  version: "1.5.2",
+  version: "1.4.8",
   requiredVersion: "0.0.1",
   description:
     "JAV Verse：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javverse.com/",
   icon: "https://javverse.com/apple-icon.png",
-  iconUrl: "https://javverse.com/apple-icon.png",
-  detailCacheDuration: 60,
+  detailCacheDuration: 600,
   globalParams: [
     {
       name: "site_cookie",
@@ -30,14 +35,6 @@ WidgetMetadata = {
       value: "",
       placeholder: "jv-gate=1; __suvt=...; __nuvt=...",
       description: "API/类别页 403 时再填；一般可留空",
-    },
-    {
-      name: "clear_site_cookie",
-      title: "清除站点 Cookie",
-      type: "input",
-      value: "",
-      placeholder: "输入 clear 开启无 Cookie 模式",
-      description: "被站方拉黑后用：填 clear 保存，模块每次请求都不带已存 Cookie；确认能访问后改回空恢复正常。注意：同时把上方「站点 Cookie」留空",
     },
     {
       name: "html_proxy_worker",
@@ -94,14 +91,14 @@ WidgetMetadata = {
       id: "loadDiscover",
       title: "作品池",
       functionName: "loadDiscover",
-      cacheDuration: 300,
+      cacheDuration: 1800,
       params: [{ name: "page", title: "页码", type: "page", value: "1" }],
     },
     {
       id: "loadRankings",
       title: "热门池",
       functionName: "loadRankings",
-      cacheDuration: 300,
+      cacheDuration: 1800,
       params: [{ name: "page", title: "页码", type: "page", value: "1" }],
     },
     {
@@ -121,7 +118,7 @@ WidgetMetadata = {
             { title: "抽 12 部", value: "12" },
             { title: "抽 24 部", value: "24" },
           ],
-          description: "对齐官网「抽一部」：每次刷新从 random-pool 重新抽取",
+          description: "客户端随机抽取；作品池 5 分钟内复用，降低请求强度",
         },
       ],
     },
@@ -129,7 +126,7 @@ WidgetMetadata = {
       id: "loadGenre",
       title: "类别",
       functionName: "loadGenreWorks",
-      cacheDuration: 300,
+      cacheDuration: 1800,
       // 类别页无 JSON API，必走 /genre HTML|RSC；非 WebView 会被 Cloudflare 必现 403
       requiresWebView: true,
       params: [
@@ -333,7 +330,10 @@ var MAGNET_STORE_PREFIX = "jv.magnet.v1.";
 var UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 var POOL_CACHE_KEY = "jv_pool_cache_v1";
-var POOL_CACHE_TTL_MS = 5 * 60 * 1000;
+// 作品池缓存 30 分钟：列表/热门/搜索共用，翻页一致性也更好
+var POOL_CACHE_TTL_MS = 30 * 60 * 1000;
+// 「抽一部」/搜索补拉要求池更新鲜，但 5 分钟内也复用（抽取本身是客户端随机）
+var RANDOM_DRAW_POOL_MAX_AGE_MS = 5 * 60 * 1000;
 // 对齐 missav：直连 CF 403 时走 Cloudflare Worker（/browse 真浏览器过盾，/html 边缘拉取）
 var HTML_PROXY_WORKER_DEFAULT = "https://javverse-html-proxy.laotou-bcd.workers.dev";
 var HTML_PROXY_TIMEOUT_MS = 55000;
@@ -457,7 +457,7 @@ function codeFromCoverUrl(url) {
 
 function isStandardHinban(code) {
   code = getText(code).toUpperCase();
-  return /^([A-Z]{2,15}|T28|R18|3DSVR)-(?!0+[A-Z]?$)\d{1,8}[A-Z]?$/.test(code);
+  return /^([A-Z]{2,15}|T28|R18|3DSVR)-[1-9]\d{0,7}[A-Z]?$/.test(code);
 }
 
 function resolveItemCode(row) {
@@ -515,61 +515,9 @@ function readMagnetCache(hash) {
   }
 }
 
-// 从 params / global / globalParams 里读一个全局参数（Rex 传参形状不固定）
-function readGlobalParam(params, name) {
-  var v = getText(params && params[name]);
-  if (v) return v;
-  if (params && params.global) {
-    v = getText(params.global[name]);
-    if (v) return v;
-  }
-  try {
-    var gp = params && params.globalParams;
-    if (gp) {
-      if (Array.isArray(gp)) {
-        for (var i = 0; i < gp.length; i++) {
-          var it = gp[i];
-          if (!it) continue;
-          if (getText(it.name || it.key) === name) {
-            v = getText(it.value != null ? it.value : it.val);
-            if (v) return v;
-          }
-        }
-      } else {
-        v = getText(gp[name]);
-        if (v) return v;
-      }
-    }
-  } catch (e) {}
-  return "";
-}
-
-// 清除站点 Cookie 入口：clear_site_cookie 填 clear/清除时开启无 Cookie 模式，
-// 本次及之后每次请求都不带已存的 jv_site_cookie，也不把参数里的 Cookie 再存回去。
-// 改回空即恢复正常（重新积累站方发回的 Cookie）。
-function isClearSiteCookieMode(params) {
-  var v = getText(readGlobalParam(params, "clear_site_cookie")).toLowerCase();
-  return v === "clear" || v === "清除" || v === "clear-cookie" || v === "reset";
-}
-
-function clearSiteCookie() {
-  try {
-    if (Widget.storage && typeof Widget.storage.set === "function") {
-      Widget.storage.set("jv_site_cookie", "");
-    }
-  } catch (e) {}
-  try {
-    if (lastRequestParams) lastRequestParams.site_cookie = "";
-  } catch (e2) {}
-}
-
-
 function rememberParams(params) {
   if (params && typeof params === "object") lastRequestParams = params;
-  // 无 Cookie 模式：清掉已存的站点 Cookie，本次请求不带；也不再存入参数里的 Cookie
-  if (isClearSiteCookieMode(params)) {
-    clearSiteCookie();
-  } else if (params && getText(params.site_cookie)) persistSiteCookie(params.site_cookie);
+  if (params && getText(params.site_cookie)) persistSiteCookie(params.site_cookie);
   // 列表请求时把全局光鸭参数落到 storage，供 loadDetail(仅 link) 转存使用
   try {
     var token =
@@ -919,6 +867,10 @@ async function fetchViaHtmlProxy(targetUrl, mode) {
 
 async function fetchViaProxyModes(url, preferModes) {
   var modes = preferModes && preferModes.length ? preferModes : ["browse", "html", "fetch"];
+  // 冷却期内不打代理（所有代理模式都失败会计入冷却，防止连环重试）
+  if (inHardBlockBackoff()) {
+    throw new Error("拦截冷却中（剩 " + hardBlockRemainSec() + "s），跳过代理: " + url);
+  }
   var lastErr = null;
   for (var i = 0; i < modes.length; i++) {
     try {
@@ -930,6 +882,7 @@ async function fetchViaProxyModes(url, preferModes) {
       console.log("[javverse] proxy", modes[i], "fail:", (e && e.message) || e);
     }
   }
+  markHardBlock();
   throw lastErr || new Error(forbidHint(url));
 }
 
@@ -1015,8 +968,26 @@ async function safePost(url, body, headers, opt) {
 
 // 详情慢的主因：每次 fetchJson/fetchHtml 都先 WebView 打门禁，且串行。
 // 门禁短时复用；仅在 403 时再强制打一次。
-var GATE_TTL_MS = 3 * 60 * 1000;
+var GATE_TTL_MS = 10 * 60 * 1000;
 var _gateState = { at: 0, inflight: null };
+
+// 连续被拦后的冷却期：期内直接快速失败，不再「门禁+重试」，也不打代理。
+// 被拦状态下，原来每次调用会放大成 3-4 个请求，这是最大的请求来源。
+var HARD_BLOCK_BACKOFF_MS = 90 * 1000;
+var _hardBlockAt = 0;
+
+function markHardBlock() {
+  _hardBlockAt = Date.now();
+}
+
+function hardBlockRemainSec() {
+  var remain = HARD_BLOCK_BACKOFF_MS - (Date.now() - _hardBlockAt);
+  return remain > 0 ? Math.ceil(remain / 1000) : 0;
+}
+
+function inHardBlockBackoff() {
+  return !!_hardBlockAt && Date.now() - _hardBlockAt < HARD_BLOCK_BACKOFF_MS;
+}
 
 async function softBrowseGate(force) {
   if (!force && _gateState.at && Date.now() - _gateState.at < GATE_TTL_MS) return true;
@@ -1091,14 +1062,23 @@ async function fetchJson(pathOrUrl, opt) {
       : await safeGet(url, headers);
 
   if (isBlockedResponse(got)) {
-    await softBrowseGate(true);
-    got =
-      opt.method === "POST"
-        ? await safePost(url, opt.body == null ? {} : opt.body, headers)
-        : await safeGet(url, headers);
+    // 冷却期内快速失败：被拦时不再「门禁+重试」，避免每次调用放大成 3-4 个请求
+    if (inHardBlockBackoff()) {
+      throw new Error(
+        forbidHint(url) + "（拦截冷却剩 " + hardBlockRemainSec() + "s，跳过门禁重试）"
+      );
+    }
+    // 门禁本身都没过就不必重试原请求了
+    if (await softBrowseGate(true)) {
+      got =
+        opt.method === "POST"
+          ? await safePost(url, opt.body == null ? {} : opt.body, headers)
+          : await safeGet(url, headers);
+    }
   }
 
   if (isBlockedResponse(got)) {
+    markHardBlock();
     throw new Error(forbidHint(url));
   }
 
@@ -1112,11 +1092,19 @@ async function fetchHtml(pathOrUrl, referer) {
   var url = /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : SITE + pathOrUrl;
   var got = await safeGet(url, htmlHeaders(referer || SITE + "/"));
   if (isBlockedResponse(got)) {
-    await softBrowseGate(true);
-    got = await safeGet(url, htmlHeaders(referer || SITE + "/"));
+    if (inHardBlockBackoff()) {
+      throw new Error(
+        forbidHint(url) + "（拦截冷却剩 " + hardBlockRemainSec() + "s，跳过门禁重试）"
+      );
+    }
+    // 门禁本身都没过就不必重试原请求了
+    if (await softBrowseGate(true)) {
+      got = await safeGet(url, htmlHeaders(referer || SITE + "/"));
+    }
   }
   var html = typeof got.body === "string" ? got.body : String(got.body || "");
   if (isBlockedResponse(got, html)) {
+    markHardBlock();
     throw new Error(forbidHint(url));
   }
   if (!html || html.length < 200) throw got.error || new Error("空 HTML: " + url);
@@ -1227,32 +1215,14 @@ async function fetchGenreRsc(genreId, page) {
  * ssis00999 → SSIS-999
  * 42vrpn00022 → VRPN-22
  * 已是 PIYO-241 则原样规范化
- * 带连字符的番号：数字段不足 5 位原样保留（MOOC-031 → MOOC-031，
- * MOOC-31 → MOOC-31）；数字段 ≥5 位是站内 5 位补零写法，去补零后
- * 至少保留 3 位：MOOC-00031 → MOOC-031，SSIS-00999 → SSIS-999，
- * MXGS-01451 → MXGS-1451。无连字符的 FANZA cid 仍按旧规则去零
- * （ssis00999 → SSIS-999，mooc00031 → MOOC-31）。
  */
-// 5 位补零数字段 → 去零后至少保留 3 位：00031 → 031，00999 → 999，01451 → 1451
-function stripPaddedDigits(digits) {
-  var s = String(parseInt(digits, 10));
-  while (s.length < 3) s = "0" + s;
-  return s;
-}
-
 function normalizeCode(code) {
   code = getText(code).toUpperCase();
   if (!code) return "";
 
   // 已是标准品番（含数字片商前缀如 T28 / 3DSVR）
-  // 不足 5 位：数字段原样保留（MOOC-031 → MOOC-031）
-  // ≥5 位：站内 5 位补零写法，去补零后至少保留 3 位（MOOC-00031 → MOOC-031），
-  // 不能直接 parseInt（会丢成 MOOC-31），也不能原样保留（会留成 MOOC-00031）
-  var hy = code.match(/^([A-Z]{2,15}|T28|R18|3DSVR)-([0-9]+)([A-Z]?)$/);
-  if (hy) {
-    var hNum = hy[2].length >= 5 ? stripPaddedDigits(hy[2]) : hy[2];
-    return hy[1] + "-" + hNum + (hy[3] || "");
-  }
+  var hy = code.match(/^([A-Z]{2,15}|T28|R18|3DSVR)-0*([0-9]+)([A-Z]?)$/);
+  if (hy) return hy[1] + "-" + String(parseInt(hy[2], 10)) + (hy[3] || "");
 
   // 去掉包装：cid=、AI 重制后缀、非字母数字分隔
   code = code.replace(/^CID[=:]?/i, "");
@@ -1262,41 +1232,22 @@ function normalizeCode(code) {
   code = code.replace(/[^A-Z0-9]+/g, "");
   if (!code) return "";
 
-  // 特殊：片商代号本身含数字（无连字符的 cid 形式）
-  // 数字段 ≥5 位视为 FANZA 补零才去零；不足 5 位（如 T28031）原样保留前导 0
-  var special = code.match(/^(T28|R18|3DSVR)([0-9]+)([A-Z]?)$/);
-  if (special && String(parseInt(special[2], 10)) !== "0") {
-    var sNum = special[2].length >= 5 ? String(parseInt(special[2], 10)) : special[2];
-    return special[1] + "-" + sNum + (special[3] || "");
+  // 特殊：片商代号本身含数字
+  var special = code.match(/^(T28|R18|3DSVR)0*([0-9]+)([A-Z]?)$/);
+  if (special) {
+    return special[1] + "-" + String(parseInt(special[2], 10)) + (special[3] || "");
   }
 
   // 典型 cid：可选开头数字(配信/片商区分) + 英字 + 零填充流水号 + 可选末尾字母
   // 1PIYO00241 / 42VRPN00022 / SSIS00999 / MXGS01451
-  // 数字段 ≥5 位视为 FANZA 补零到 5 位才去零；不足 5 位（如 MOOC031）
-  // 是无连字符的原番号写法，原样保留前导 0 → MOOC-031
-  var m = code.match(/^(\d{0,4})([A-Z]{2,15})([0-9]{1,8})([A-Z]?)$/);
+  var m = code.match(/^(\d{0,4})([A-Z]{2,15})0*([0-9]{1,8})([A-Z]?)$/);
   if (m && m[2] && m[3] && String(parseInt(m[3], 10)) !== "0") {
-    var cNum = m[3].length >= 5 ? String(parseInt(m[3], 10)) : m[3];
-    return m[2] + "-" + cNum + (m[4] || "");
+    return m[2] + "-" + String(parseInt(m[3], 10)) + (m[4] || "");
   }
 
   // 兜底：已是 LETTERS-DIGITS
   if (/^[A-Z0-9]+-\d+[A-Z]?$/.test(code)) return code;
   return code;
-}
-
-// 标题里常带站方原番号（5 位补零写法，如 SONS-00331），与规范化后的 code
-// 是同一部时去掉 raw 前缀，避免标题里仍出现 SONS-00331；不是同一部时不动。
-// 比如 code=SONS-331、标题="SONS-00331 某标题" → 标题变"某标题"，
-// 再由调用处在前面补 code，最终显示 "SONS-331 某标题"。
-function stripSameCodeTitlePrefix(title, code) {
-  var t = getText(title);
-  var c = getText(code);
-  if (!t || !c) return t;
-  var m = t.match(/^([A-Z0-9]+-\d+[A-Z]?|[A-Z]{2,15}\d+[A-Z]?)([\s\u3000:：\-－_\/|｜、,，.。]*)([\s\S]*)$/i);
-  if (!m) return t;
-  if (normalizeCode(m[1]) !== c) return t;
-  return getText(m[3]);
 }
 
 function toLandscapeCover(u) {
@@ -1344,73 +1295,11 @@ function buildCoverBundle(cover, mode) {
   };
 }
 
-/**
- * 上映日期规范化 → YYYY-MM-DD
- * 接受：YYYY-MM-DD、YYYY/MM/DD、YYYY.MM.DD、ISO 时间、YYYYMMDD、
- * 10 位秒时间戳、13 位毫秒时间戳；其余/空值返回 ""
- */
-function fmtDateUTC(d) {
-  var y = d.getUTCFullYear();
-  var mo = d.getUTCMonth() + 1;
-  var da = d.getUTCDate();
-  return y + "-" + (mo < 10 ? "0" + mo : String(mo)) + "-" + (da < 10 ? "0" + da : String(da));
-}
-
-function normalizeReleaseDate(v) {
-  if (v == null) return "";
-  var s = getText(v);
-  if (!s) return "";
-  var d;
-  if (/^\d+$/.test(s)) {
-    if (s.length === 13) d = new Date(Number(s));
-    else if (s.length === 10) d = new Date(Number(s) * 1000);
-    else if (s.length === 8) {
-      var mo8 = Number(s.slice(4, 6));
-      var da8 = Number(s.slice(6, 8));
-      if (mo8 < 1 || mo8 > 12 || da8 < 1 || da8 > 31) return "";
-      return s.slice(0, 4) + "-" + s.slice(4, 6) + "-" + s.slice(6, 8);
-    } else return "";
-    if (isNaN(d.getTime())) return "";
-    return fmtDateUTC(d);
-  }
-  var m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
-  if (m) {
-    var mo = Number(m[2]);
-    var da = Number(m[3]);
-    if (mo < 1 || mo > 12 || da < 1 || da > 31) return "";
-    return m[1] + "-" + (mo < 10 ? "0" + mo : String(mo)) + "-" + (da < 10 ? "0" + da : String(da));
-  }
-  d = new Date(s);
-  if (isNaN(d.getTime())) return "";
-  return fmtDateUTC(d);
-}
-
-// 从多个可能字段取上映日期：releaseDate / delivery_date / release_date / date …
-function resolveReleaseDate(row) {
-  row = row || {};
-  var candidates = [
-    row.releaseDate,
-    row.delivery_date,
-    row.deliveryDate,
-    row.release_date,
-    row.releaseDateStr,
-    row.delivery_at,
-    row.date,
-  ];
-  for (var i = 0; i < candidates.length; i++) {
-    var n = normalizeReleaseDate(candidates[i]);
-    if (n) return n;
-  }
-  return "";
-}
-
 function toVideoItem(row) {
   var workId = String(row.workId || "").replace(/[^\d]/g, "");
   var code = resolveItemCode(row);
   var link = buildOwnedLink(workId, code);
   var title = getText(row.title) || code || "作品 " + workId;
-  if (code) title = stripSameCodeTitlePrefix(title, code);
-  if (!title) title = code || "作品 " + workId;
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var covers = buildCoverBundle(row.coverUrl || row.cover || "", "list");
   // 聚合工具依赖 id=纯番号（不能是 jv:…）；站点内部 workId 放 videoId / link
@@ -1426,7 +1315,7 @@ function toVideoItem(row) {
     videoId: workId || undefined,
     coverUrl: covers.coverUrl,
     backdropPath: covers.backdropPath,
-    releaseDate: resolveReleaseDate(row) || undefined,
+    releaseDate: getText(row.releaseDate) || undefined,
     description: row.description || (code ? "番号: " + code : undefined),
     link: link,
   };
@@ -1456,15 +1345,15 @@ function itemsFromPool(works, offset, limit) {
         title: w.title_zh || w.title,
         coverUrl: w.cover_url || w.cover,
         releaseDate: w.delivery_date,
-        delivery_date: w.delivery_date,
       })
     );
   }
   return dedupeItems(items);
 }
 
-function readPoolCache() {
-  if (memoryPool.works.length && Date.now() - memoryPool.at < POOL_CACHE_TTL_MS) {
+function readPoolCache(maxAgeMs) {
+  var ttl = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : POOL_CACHE_TTL_MS;
+  if (memoryPool.works.length && Date.now() - memoryPool.at < ttl) {
     return memoryPool.works;
   }
   try {
@@ -1472,7 +1361,7 @@ function readPoolCache() {
     if (!raw) return null;
     var obj = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (!obj || !Array.isArray(obj.works)) return null;
-    if (Date.now() - Number(obj.at || 0) > POOL_CACHE_TTL_MS) return null;
+    if (Date.now() - Number(obj.at || 0) > ttl) return null;
     memoryPool = { at: Number(obj.at || Date.now()), works: obj.works };
     return obj.works;
   } catch (e) {
@@ -1492,9 +1381,9 @@ function writePoolCache(works) {
   } catch (e) {}
 }
 
-async function fetchRandomPoolWorks(force) {
+async function fetchRandomPoolWorks(force, maxAgeMs) {
   if (!force) {
-    var cached = readPoolCache();
+    var cached = readPoolCache(maxAgeMs);
     if (cached && cached.length) return cached;
   }
   // 官网「抽一部」即打此接口；加时间戳降低网关短时复用同一份池
@@ -1760,7 +1649,8 @@ async function fetchGenreHtmlCards(genreId, page) {
         proxiedCards = parseGenreRscPayload(proxied);
       }
       if (proxiedCards.length > best.length) best = proxiedCards;
-      if (best.length >= 8) return best;
+      // 拿到 ≥1 张即收手：末页/小类目本来就可能只有几条，不再换路径重打
+      if (best.length > 0) return best;
     } catch (e3) {
       console.log("[javverse] genre proxy skip:", paths[j], (e3 && e3.message) || e3);
     }
@@ -1846,8 +1736,9 @@ async function loadRandom(params) {
     params = params || {};
     rememberParams(params);
     var count = Math.max(1, Math.min(48, Number(params.count || 1) || 1));
-    // 与官网「抽一部」同源：每次强制拉 random-pool，再客户端随机抽取
-    var works = await fetchRandomPoolWorks(true);
+    // 与官网「抽一部」同源；但池 5 分钟内复用（抽取本身是客户端随机的），
+    // 原先每次强制拉 random-pool，连续抽会反复敲站点
+    var works = await fetchRandomPoolWorks(false, RANDOM_DRAW_POOL_MAX_AGE_MS);
     var picked = pickRandomWorks(works, count);
     return dedupeItems(
       picked.map(function (w) {
@@ -1857,7 +1748,6 @@ async function loadRandom(params) {
           title: w.title_zh || w.title,
           coverUrl: w.cover_url || w.cover,
           releaseDate: w.delivery_date,
-          delivery_date: w.delivery_date,
           description: "今晚看什么 · 抽一部",
         });
       })
@@ -1897,8 +1787,8 @@ async function loadGenreWorks(params) {
       console.log("[javverse] genre proxy HTML skip:", (e2 && e2.message) || e2);
     }
 
-    // 代理 HTML 不足时再试代理 RSC（同样不直连）
-    if (!cards || cards.length < 8) {
+    // 完全没拿到卡片才补代理 RSC（原先 <8 条就补，末页只有几条时会白打代理）
+    if (!cards || !cards.length) {
       try {
         var rscCards = await fetchGenreRsc(genreId, page);
         if (rscCards && rscCards.length > (cards ? cards.length : 0)) {
@@ -1925,41 +1815,36 @@ async function loadGenreWorks(params) {
       );
     }
 
+    var size = pageSize(params);
+    // 先切页再补齐：只对本页将展示的 size 条调 /api/cards（原先固定 enrich 48 条）
+    var shown = cards.slice(0, size);
     try {
       var batch = await fetchCardsBatch(
-        cards.slice(0, 48).map(function (c) {
+        shown.map(function (c) {
           return c.workId;
         })
       );
-      for (var i = 0; i < cards.length; i++) {
-        var c = cards[i];
+      for (var i = 0; i < shown.length; i++) {
+        var c = shown[i];
         var rich = batch[String(c.workId)] || batch[c.workId];
         if (!rich) continue;
         if (rich.cover) c.coverUrl = rich.cover;
         if (rich.title_zh || rich.title) c.title = rich.title_zh || rich.title;
         if (rich.code) c.code = normalizeCode(rich.code) || rich.code;
-        // 类别卡片本身无日期，从 /api/cards 批量结果里补
-        if (rich.delivery_date || rich.deliveryDate || rich.release_date || rich.releaseDate) {
-          c.releaseDate = resolveReleaseDate(rich) || c.releaseDate;
-          c.delivery_date = rich.delivery_date || rich.deliveryDate || c.delivery_date;
-        }
       }
     } catch (e3) {
       console.log("[javverse] genre cards enrich skip:", (e3 && e3.message) || e3);
     }
 
-    var size = pageSize(params);
     var items = [];
-    for (var j = 0; j < cards.length && items.length < size; j++) {
-      var row = cards[j];
+    for (var j = 0; j < shown.length; j++) {
+      var row = shown[j];
       items.push(
         toVideoItem({
           workId: row.workId,
           code: row.code,
           title: row.title || row.code || "作品 " + row.workId,
           coverUrl: row.coverUrl,
-          releaseDate: row.releaseDate,
-          delivery_date: row.delivery_date,
           description: "类别: " + genreTitleById(genreId),
         })
       );
@@ -1980,7 +1865,8 @@ async function searchJavverse(params) {
     var works = await fetchRandomPoolWorks(false);
     var filtered = filterWorksByKeyword(works, keyword);
     if (!filtered.length) {
-      works = await fetchRandomPoolWorks(true);
+      // 池内未命中才补拉一次；5 分钟内拉过的不再重复打
+      works = await fetchRandomPoolWorks(false, RANDOM_DRAW_POOL_MAX_AGE_MS);
       filtered = filterWorksByKeyword(works, keyword);
     }
     var size = pageSize(params);
@@ -2047,7 +1933,6 @@ async function loadDetail(link, params) {
               code: hit.code_display || hit.code || want,
               title: hit.title_zh || hit.title || want,
               cover: hit.cover_url || hit.cover || "",
-              delivery_date: hit.delivery_date || hit.deliveryDate || "",
             };
           }
         }
@@ -2064,8 +1949,6 @@ async function loadDetail(link, params) {
         coverUrl: card.cover,
       }) || owned.code || "";
     var title = card.title_zh || card.title || code;
-    if (code) title = stripSameCodeTitlePrefix(title, code);
-    if (!title) title = code;
     var covers = buildCoverBundle(card.cover || "", "detail");
     var ownedLink = buildOwnedLink(workId, code);
 
@@ -2115,10 +1998,8 @@ async function loadDetail(link, params) {
       genreItems.unshift({ id: "maker:" + makers[0].id, title: makerName });
     }
 
-    var releaseDate = resolveReleaseDate(card);
     var descParts = [];
     if (code) descParts.push("番号: " + code);
-    if (releaseDate) descParts.push("上映: " + releaseDate);
     if (makerName) descParts.push("片商: " + makerName);
     if (magnets.length) descParts.push("磁力×" + magnets.length + "（相似作品区点击转存光鸭）");
     if (actresses.length) {
@@ -2147,7 +2028,6 @@ async function loadDetail(link, params) {
       posterPath: covers.posterPath,
       detailPoster: covers.detailPoster,
       backdropPath: covers.backdropPath,
-      releaseDate: releaseDate || undefined,
       backdropPaths: stills.length ? stills : undefined,
       description: descParts.join(" · ") || undefined,
       genreItems: genreItems.length ? genreItems : undefined,
