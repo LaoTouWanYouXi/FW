@@ -690,10 +690,10 @@ var EXPLORE_FILTER_PARAMS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.6.1",
+  version: "1.6.2",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / LTX 最强 AI 破解 / 片库探索题材 / 神作 / 女优战力；磁力放在相似作品栏，点击转存光鸭；列表本站封面优先；详情点演员可看作品。",
+    "权威榜单 / LTX 最强 AI 破解 / 片库探索题材 / 神作 / 女优战力；影视列表横图、详情高清；磁力在相似作品栏显示 LTX破解 标识，点击转存光鸭；详情点演员可看作品。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -2179,28 +2179,34 @@ async function applyHdCoversAsync(code, siteCover, sitePoster) {
   return applyHdCovers(code, siteCover, sitePoster);
 }
 
+function cachedHdCandidate(urls) {
+  for (var i = 0; i < (urls || []).length; i++) {
+    var url = sanitizeCoverUrl(urls[i]);
+    if (url && HD_IMAGE_AVAILABLE_CACHE[url] === true) return url;
+  }
+  return "";
+}
+
+function buildLandscapeListCovers(code, coverCand) {
+  var candidates = buildImageCandidatesFromValue(code);
+  var backdrop = cachedHdCandidate(candidates.backdropCandidates) || coverCand.backdrop || coverCand.primary;
+  var poster = cachedHdCandidate(candidates.posterCandidates) || coverCand.poster || coverCand.primary;
+  // 与 javdb 横图模式一致：列表不填 posterPath；详情海报单独保留。
+  return { coverUrl: backdrop, backdropPath: backdrop, detailPoster: poster };
+}
+
 async function enrichItemsWithVerifiedHdCovers(items) {
-  // 列表不等待第三方图片请求；只复用详情已验证的高清地址。
+  // 列表只复用高清缓存，不发请求；人物头像不应用影片横图模式。
   (items || []).forEach(function (item) {
-    if (!item) return;
-    var candidates = buildImageCandidatesFromValue(item.id || item.title);
-    function cachedCandidate(urls) {
-      for (var i = 0; i < (urls || []).length; i++) {
-        var url = sanitizeCoverUrl(urls[i]);
-        if (url && HD_IMAGE_AVAILABLE_CACHE[url] === true) return url;
-      }
-      return "";
-    }
-    var poster = cachedCandidate(candidates.posterCandidates);
-    var backdrop = cachedCandidate(candidates.backdropCandidates);
-    if (poster) {
-      item.posterPath = poster;
-      item.detailPoster = poster;
-    }
-    if (backdrop) {
-      item.coverUrl = backdrop;
-      item.backdropPath = backdrop;
-    }
+    if (!item || item.mediaType === "person") return;
+    var covers = buildLandscapeListCovers(item.id || item.title, {
+      backdrop: item.backdropPath || item.coverUrl || item.posterPath,
+      poster: item.detailPoster || item.posterPath || item.coverUrl,
+    });
+    item.coverUrl = covers.coverUrl;
+    item.backdropPath = covers.backdropPath;
+    item.detailPoster = covers.detailPoster;
+    delete item.posterPath;
   });
   return items || [];
 }
@@ -2213,7 +2219,7 @@ function mapIndexVideo(v, extra) {
   var title = getText(v.title || code || videoId);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var coverCand = resolveVideoCoverCandidates(videoId, v.coverUrl);
-  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
+  var covers = buildLandscapeListCovers(code || title, coverCand);
   var actors = [];
   if (Array.isArray(v.actorLinks)) {
     v.actorLinks.forEach(function (a) {
@@ -2236,10 +2242,9 @@ function mapIndexVideo(v, extra) {
     releaseDate: v.releaseDate ? String(v.releaseDate).slice(0, 10) : "",
     rating: Number(v.score || 0) || 0,
     description: descParts.join(" · "),
-    coverUrl: covers.coverUrl || coverCand.primary || undefined,
-    posterPath: covers.posterPath || coverCand.poster || undefined,
-    detailPoster: covers.detailPoster || covers.posterPath || coverCand.poster || undefined,
-    backdropPath: covers.backdropPath || coverCand.backdrop || coverCand.primary || undefined,
+    coverUrl: covers.coverUrl || coverCand.backdrop || undefined,
+    detailPoster: covers.detailPoster || coverCand.poster || undefined,
+    backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
     previewUrl: videoId ? sitePreviewUrl(videoId) : undefined,
   };
 }
@@ -2256,7 +2261,7 @@ function mapRankingRow(row, codeMap, rankFallback) {
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var videoId = String(row.videoId || "").replace(/[^\d]/g, "");
   var coverCand = resolveVideoCoverCandidates(videoId, row.coverUrl || row.cover);
-  var covers = applyHdCovers(code || title, coverCand.primary, coverCand.poster);
+  var covers = buildLandscapeListCovers(code || title, coverCand);
   return {
     id: code || title,
     type: "url",
@@ -2268,9 +2273,8 @@ function mapRankingRow(row, codeMap, rankFallback) {
         ? LINK_PREFIX + "code:" + encodeURIComponent(code)
         : "",
     description: rank ? "#" + rank : "",
-    coverUrl: covers.coverUrl || coverCand.primary || undefined,
-    posterPath: covers.posterPath || coverCand.poster || undefined,
-    detailPoster: covers.detailPoster || covers.posterPath || undefined,
+    coverUrl: covers.coverUrl || coverCand.backdrop || undefined,
+    detailPoster: covers.detailPoster || coverCand.poster || undefined,
     backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
   };
 }
@@ -2461,6 +2465,31 @@ function normalizeMagnetUri(uri) {
   return /^magnet:\?/i.test(text) ? text : "";
 }
 
+function magnetDisplayName(magnet) {
+  var uri = normalizeMagnetUri(magnet);
+  var match = uri.match(/[?&]dn=([^&]*)/i);
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1].replace(/\+/g, " "));
+  } catch (e) {
+    return match[1];
+  }
+}
+
+function magnetHasLtx(entry) {
+  var text = [entry.name || "", (entry.tags || []).join(" "), magnetDisplayName(entry.magnet)].join(" ");
+  // 仅认本条磁力明确的 LTX 标识，不把普通无码/去码当作 LTX。
+  return /(?:^|[^a-z])ltx(?:[^a-z]|$)/i.test(text);
+}
+
+function magnetDisplayTags(entry) {
+  var tags = (entry.tags || []).filter(function (tag) {
+    return !/^(?:ltx|ltx\s*破解)$/i.test(getText(tag));
+  });
+  if (magnetHasLtx(entry)) tags.unshift("LTX破解");
+  return tags.filter(function (tag, i) { return tag && tags.indexOf(tag) === i; });
+}
+
 function magnetHashFromUri(uri) {
   var m = String(uri || "").match(/btih:([0-9a-zA-Z]{32,40})/i);
   return m ? m[1].toLowerCase() : "";
@@ -2482,9 +2511,21 @@ function extractMagnetsFromHtml(html) {
     var uri = normalizeMagnetUri(entry.magnet);
     if (!uri) return;
     var hash = entry.hash || magnetHashFromUri(uri) || uri;
-    if (seenHash[hash] || seenHref[uri]) return;
-    seenHash[hash] = true;
-    seenHref[uri] = true;
+    entry.magnet = uri;
+    entry.tags = magnetDisplayTags(entry);
+    var existing = seenHash[hash] || seenHref[uri];
+    if (existing) {
+      if (!existing.size && entry.size) existing.size = entry.size;
+      if ((!existing.name || existing.name === "磁力") && entry.name) existing.name = entry.name;
+      existing.tags = magnetDisplayTags({
+        name: existing.name,
+        magnet: existing.magnet,
+        tags: (existing.tags || []).concat(entry.tags),
+      });
+      return;
+    }
+    seenHash[hash] = entry;
+    seenHref[uri] = entry;
     entry.hash = hash;
     magnets.push(entry);
   }
@@ -2503,7 +2544,7 @@ function extractMagnetsFromHtml(html) {
       ["1080P", /1080p?|fhd/i],
       ["720P", /720p?/i],
       ["中字", /中字|中文字幕|chinese\s*sub|内封字幕|内嵌字幕/i],
-      ["LTX破解", /ltx|破解|去码|uncensor/i],
+      ["LTX破解", /(?:^|[^a-z])ltx(?:[^a-z]|$)/i],
     ];
     kw.forEach(function (pair) {
       if (pair[1].test(ctx) && tags.indexOf(pair[0]) < 0) tags.push(pair[0]);
@@ -2570,8 +2611,8 @@ function extractMagnetsFromHtml(html) {
       name: dnName || "磁力",
       magnet: m[0],
       hash: m[1].toLowerCase(),
-      // 体积只看磁力之后的同级节点，避免吃到前一个磁力块的尺寸
-      size: sizeFromContext(text.slice(m.index + m[0].length, m.index + m[0].length + 300)),
+      // 裸链接无可靠容器，不从相邻磁力块猜体积。
+      size: "",
       tags: tagsFromContext(m[0]),
     });
   }
@@ -2644,7 +2685,8 @@ function buildMagnetRelatedItems(magnets, ctx) {
   sorted.forEach(function (m) {
     var hash = extractMagnetHash(m.magnet);
     if (!hash) return;
-    var tags = (m.tags || []).join(" · ");
+    var displayTags = magnetDisplayTags(m);
+    var tags = displayTags.join(" · ");
     var titleParts = ["🧲 " + (m.name || "磁力")];
     if (m.size) titleParts.push(m.size);
     if (tags) titleParts.push(tags);
@@ -2653,7 +2695,7 @@ function buildMagnetRelatedItems(magnets, ctx) {
       hash: hash,
       name: m.name || "",
       size: m.size || "",
-      tags: m.tags || [],
+      tags: displayTags,
       code: ctx.code || "",
       title: ctx.title || "",
       cover: ctx.cover || "",
@@ -2790,7 +2832,7 @@ async function loadVideoDetail(owned, params) {
       indexMeta = findVideoInIndexById(await getSearchIndex(params), videoId);
       if (indexMeta) {
         var fallback = buildDetailFromIndex(indexMeta, params);
-        if (detail === base) return fallback;
+        if (detail === base) return await enrichFallbackDetailCovers(fallback, videoId);
         if (!detail.rating) detail.rating = fallback.rating;
         if (!detail.releaseDate) detail.releaseDate = fallback.releaseDate;
         if (!detail.peoples) detail.peoples = fallback.peoples;
@@ -2803,7 +2845,13 @@ async function loadVideoDetail(owned, params) {
       console.warn("[javranking] 可选详情索引不可用:", e && e.message);
     }
   }
-  return detail;
+  return detail === base ? await enrichFallbackDetailCovers(detail, videoId) : detail;
+}
+
+async function enrichFallbackDetailCovers(detail, videoId) {
+  var coverCand = resolveVideoCoverCandidates(videoId, detail.coverUrl);
+  var covers = await applyHdCoversAsync(detail.id || detail.title, coverCand.primary, coverCand.poster);
+  return Object.assign(detail, covers);
 }
 
 async function loadWorksFromActressMarkdown(name, params) {
@@ -2867,17 +2915,16 @@ async function fetchActressWorksFromActorPage(slugOrName, index, codeMap, params
       if (byId) return mapIndexVideo(byId);
       if (!row.videoId && !row.code) return null;
       var coverCand = resolveVideoCoverCandidates(row.videoId, row.coverUrl);
-      var covers = applyHdCovers(row.code || row.videoId, coverCand.primary, coverCand.poster);
+      var covers = buildLandscapeListCovers(row.code || row.videoId, coverCand);
       return {
         id: row.code || row.videoId,
         type: "url",
         mediaType: "movie",
         title: (row.code ? row.code + " " : "") + (row.title || row.videoId),
         link: buildVideoLink(row.videoId, row.code),
-        coverUrl: covers.coverUrl || coverCand.primary || undefined,
-        posterPath: covers.posterPath || coverCand.poster || undefined,
+        coverUrl: covers.coverUrl || coverCand.backdrop || undefined,
         backdropPath: covers.backdropPath || coverCand.backdrop || undefined,
-        detailPoster: covers.detailPoster || covers.posterPath || undefined,
+        detailPoster: covers.detailPoster || coverCand.poster || undefined,
       };
     })
     .filter(function (x) {
