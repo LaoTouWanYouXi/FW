@@ -11,6 +11,7 @@
  * 6. 今天冲谁 / 今天冲什么（search-index 随机）
  * 7. 详情 JSON/MD 优先，HTML 补磁力/剧照
  * 8. loadResource 仅本站 jvr: 预告片（无顶层按番号搜索）
+ * 9. LTX 精选榜；片库探索按 filter-index.json 的真实题材标签筛选
  */
 var ACTRESS_FILTER_OPTIONS = [
   {
@@ -402,17 +403,263 @@ var ACTRESS_FILTER_OPTIONS = [
     "value": "前田香织"
   }
 ];
+// 题材显示名及原始值来自网站 filter-index.json；数字 ID 更新后可能重排，不固定 ID。
+var EXPLORE_CATEGORY_OPTIONS = [
+  { title: "全部题材", value: "all" },
+  { title: "中出", value: "中出" },
+  { title: "巨乳", value: "巨乳" },
+  { title: "人妻少妇", value: "人妻少妇" },
+  { title: "痴女主动", value: "痴女主动" },
+  { title: "口交", value: "口交" },
+  { title: "美少女", value: "美少女" },
+  { title: "人妻出轨", value: "人妻出轨" },
+  { title: "苗条", value: "苗条" },
+  { title: "多人群交", value: "多人群交" },
+  { title: "熟女", value: "熟女" },
+  { title: "女上位/骑乘", value: "女上位/骑乘" },
+  { title: "素人纪实", value: "素人纪实" },
+  { title: "素人自拍", value: "素人" },
+  { title: "主观视角", value: "主觀視角" },
+  { title: "潮吹", value: "潮吹" },
+  { title: "剧情向", value: "剧情向" },
+  { title: "乳交", value: "乳交" },
+  { title: "美臀", value: "美臀" },
+  { title: "美乳", value: "美乳" },
+  { title: "姐姐", value: "姐姐" },
+  { title: "接吻", value: "接吻" },
+  { title: "VR", value: "VR" },
+  { title: "自慰", value: "手淫" },
+  { title: "出轨偷情", value: "出轨偷情" },
+  { title: "颜射", value: "颜射" },
+  { title: "淫语", value: "淫语" },
+  { title: "凌辱调教", value: "凌辱调教" },
+  { title: "OL职场", value: "OL职场" },
+  { title: "女高中生", value: "女高中生" },
+  { title: "角色扮演", value: "角色扮演" },
+  { title: "丝袜连裤袜", value: "丝袜连裤袜" },
+  { title: "女教师", value: "女教师" },
+  { title: "束缚捆绑", value: "束缚捆绑" },
+  { title: "情趣玩具", value: "情趣玩具" },
+  { title: "职业制服", value: "职业制服" },
+  { title: "近亲禁忌", value: "近亲禁忌" },
+  { title: "纪录片风格", value: "纪录片风格" },
+  { title: "美腿", value: "美腿" },
+  { title: "羞耻露出", value: "羞耻露出" },
+  { title: "白虎无毛", value: "白虎无毛" },
+  { title: "偶像艺人", value: "偶像艺人" },
+  { title: "精油润滑", value: "精油润滑" },
+  { title: "企划设定", value: "企划设定" },
+  { title: "香汗", value: "香汗" },
+  { title: "百合女同", value: "百合女同" },
+  { title: "美容沙龙", value: "美容沙龙" },
+  { title: "涩谷辣妹", value: "辣妹" },
+  { title: "SM调教", value: "SM调教" },
+  { title: "受虐男", value: "受虐男" },
+  { title: "强制凌辱", value: "强制凌辱" },
+  { title: "颜射吞精", value: "颜射吞精" },
+  { title: "恋乳癖", value: "恋乳癖" },
+  { title: "迎宾接待", value: "迎宾接待" },
+  { title: "妹妹", value: "妹妹" },
+  { title: "特殊恋物", value: "特殊恋物" },
+  { title: "护士医者", value: "护士医者" },
+  { title: "后庭肛交", value: "后庭肛交" },
+  { title: "高挑身材", value: "高挑身材" },
+  { title: "巨根大器", value: "巨根大器" },
+  { title: "精油按摩", value: "精油按摩" },
+  { title: "放尿圣水", value: "放尿圣水" },
+  { title: "偷窥探秘", value: "偷窥探秘" },
+  { title: "和服浴衣", value: "和服浴衣" },
+  { title: "处男破处", value: "处男破处" },
+  { title: "原作改编", value: "原作改编" },
+  { title: "足交", value: "足交" },
+  { title: "女大学生", value: "女大学生" },
+  { title: "迷你短裙", value: "迷你短裙" },
+  { title: "性感内衣", value: "性感内衣" },
+  { title: "贫乳", value: "贫乳" },
+  { title: "舔阴", value: "舔阴" },
+  { title: "母亲熟女", value: "母亲熟女" },
+  { title: "轮奸", value: "轮奸" },
+  { title: "女仆女佣", value: "女仆女佣" },
+  { title: "催情春药", value: "催情春药" },
+  { title: "风俗女郎", value: "风俗女郎" },
+  { title: "户外露出", value: "户外露出" },
+  { title: "高颜值", value: "高颜值" },
+  { title: "高跟鞋", value: "高跟鞋" },
+  { title: "学生制服", value: "学生制服" },
+  { title: "出道单作", value: "出道单作" },
+  { title: "小恶魔属性", value: "小恶魔属性" },
+  { title: "街头搭讪", value: "街头搭讪" },
+  { title: "两女一男", value: "两女一男" },
+  { title: "密室监禁", value: "密室监禁" },
+  { title: "模特写真", value: "模特写真" },
+  { title: "校园题材", value: "校园题材" },
+  { title: "泳装", value: "泳装" },
+  { title: "眼镜娘", value: "眼镜娘" },
+  { title: "后入", value: "后入" },
+  { title: "死库水泳装", value: "死库水泳装" },
+  { title: "绿帽NTR", value: "绿帽NTR" },
+  { title: "娇小身材", value: "娇小身材" },
+  { title: "和服丧服", value: "和服丧服" },
+  { title: "私拍纪实", value: "私拍纪实" },
+  { title: "痴汉骚扰", value: "痴汉骚扰" },
+  { title: "女检察官", value: "女检察官" },
+  { title: "射精", value: "射精" },
+  { title: "雪白肤色", value: "雪白肤色" },
+  { title: "纯爱恋爱", value: "纯爱恋爱" },
+  { title: "69体位", value: "69体位" },
+  { title: "性奴调教", value: "性奴调教" },
+  { title: "情景妄想", value: "情景妄想" },
+  { title: "女秘书", value: "女秘书" },
+  { title: "手指插入", value: "手指插入" },
+  { title: "双女优合演", value: "双女优合演" },
+  { title: "空姐", value: "空姐" },
+  { title: "3P三人行", value: "3P三人行" },
+  { title: "年下小鲜肉", value: "年下小鲜肉" },
+  { title: "暴露情趣服", value: "暴露情趣服" },
+  { title: "打桩抽插", value: "打桩抽插" },
+  { title: "无码", value: "无码" },
+  { title: "丰满微胖", value: "丰满微胖" },
+  { title: "恶作剧搞怪", value: "恶作剧搞怪" },
+  { title: "兔女郎", value: "兔女郎" },
+  { title: "伪娘TS", value: "伪娘TS" },
+  { title: "黑人演员", value: "黑人演员" },
+  { title: "倒追逆推", value: "倒追逆推" },
+  { title: "运动健身", value: "运动健身" },
+  { title: "深喉深入", value: "深喉深入" },
+  { title: "傲娇性格", value: "傲娇性格" },
+  { title: "站立体位", value: "站立体位" },
+  { title: "高筒长靴", value: "高筒长靴" },
+  { title: "水手服", value: "水手服" },
+  { title: "手交", value: "手交" },
+  { title: "未亡人寡妇", value: "未亡人寡妇" },
+  { title: "名器美穴", value: "名器美穴" },
+  { title: "运动体操服", value: "运动体操服" },
+  { title: "反向骑乘", value: "反向骑乘" },
+  { title: "多男对一女", value: "多男对一女" },
+  { title: "无套性交", value: "无套性交" },
+  { title: "魔鬼身材", value: "魔鬼身材" },
+  { title: "办公室情景", value: "办公室情景" },
+  { title: "女主播", value: "女主播" },
+  { title: "旅店老板娘", value: "旅店老板娘" },
+  { title: "共浴洗澡", value: "共浴洗澡" },
+  { title: "洛丽塔洋装", value: "洛丽塔洋装" },
+  { title: "灌肠清洁", value: "灌肠清洁" },
+  { title: "双插双龙", value: "二穴同入" },
+  { title: "温泉旅馆", value: "温泉旅馆" },
+  { title: "千金大小姐", value: "千金大小姐" },
+  { title: "激烈粗暴", value: "激烈粗暴" },
+  { title: "痴女调教男", value: "痴女调教男" },
+  { title: "日式绳缚", value: "日式绳缚" },
+  { title: "催眠洗脑", value: "催眠洗脑" },
+  { title: "烂醉捡尸", value: "烂醉捡尸" },
+  { title: "车震野战", value: "车震野战" },
+  { title: "渔网袜", value: "渔网袜" },
+  { title: "紧身连体衣", value: "紧身连体衣" },
+  { title: "紧身显身材", value: "紧身显身材" },
+  { title: "动作打斗", value: "动作打斗" },
+  { title: "母乳出奶", value: "母乳出奶" },
+  { title: "肌肉猛男", value: "肌肉猛男" },
+  { title: "赛车女郎", value: "赛车女郎" },
+  { title: "裸体围裙", value: "裸体围裙" },
+  { title: "女王S属性", value: "女王S属性" },
+  { title: "棕褐发色", value: "棕褐发色" },
+  { title: "骑脸", value: "骑脸" },
+  { title: "两男一女", value: "两男一女" },
+  { title: "娇小萝莉", value: "娇小萝莉" },
+  { title: "金发", value: "金发" },
+  { title: "舞蹈跳舞", value: "舞蹈跳舞" },
+  { title: "女服务员", value: "女服务员" },
+  { title: "舔舐", value: "舔舐" },
+  { title: "跨种族", value: "跨种族" },
+  { title: "无码步兵", value: "无码步兵" },
+  { title: "战斗女英雄", value: "战斗女英雄" },
+  { title: "旗袍装扮", value: "旗袍装扮" },
+  { title: "小麦肤色", value: "小麦肤色" },
+  { title: "短裙裙底", value: "短裙裙底" },
+  { title: "绑腿过膝袜", value: "绑腿过膝袜" },
+  { title: "传统体位", value: "传统体位" },
+  { title: "猫耳娘", value: "猫耳娘" },
+  { title: "残酷硬核", value: "残酷硬核" },
+  { title: "科幻未来", value: "科幻未来" },
+  { title: "蕾丝薄纱", value: "蕾丝薄纱" },
+  { title: "暗黑重口", value: "暗黑重口" },
+  { title: "电车痴汉", value: "痴漢" },
+  { title: "舔肛", value: "舔肛" },
+  { title: "车站野战", value: "车站野战" },
+  { title: "全裸暴露", value: "全裸暴露" },
+  { title: "搞笑恶搞", value: "搞笑恶搞" },
+  { title: "颜射口爆", value: "颜射口爆" },
+  { title: "触手", value: "触手" },
+  { title: "二次元动漫", value: "二次元动漫" },
+  { title: "女忍者", value: "女忍者" },
+  { title: "姐妹", value: "姐妹" },
+  { title: "展台女郎", value: "展台女郎" },
+  { title: "打屁股", value: "打屁股" },
+  { title: "欧美白人", value: "欧美白人" },
+  { title: "浓密阴毛", value: "浓密阴毛" },
+  { title: "混血美女", value: "混血美女" },
+  { title: "面具蒙面", value: "面具蒙面" },
+  { title: "女主角", value: "女主角" },
+  { title: "女祭司巫女", value: "女祭司巫女" },
+  { title: "比基尼", value: "比基尼" },
+  { title: "泡泡袜", value: "泡泡袜" },
+  { title: "破处见红", value: "破处见红" },
+  { title: "內褲", value: "內褲" },
+  { title: "前后夹击", value: "前后夹击" },
+  { title: "拳交重口", value: "拳交重口" },
+  { title: "泡泡浴风俗", value: "泡泡浴风俗" },
+  { title: "女子格斗家", value: "女子格斗家" },
+  { title: "妈妈的朋友", value: "妈妈的朋友" },
+  { title: "娇喘浪叫", value: "娇喘浪叫" },
+  { title: "短发", value: "短发" },
+  { title: "乘务员车掌", value: "乘务员车掌" },
+  { title: "唯美感官", value: "唯美感官" },
+  { title: "婚纱礼服", value: "婚纱礼服" },
+  { title: "浴室激战", value: "浴室激战" },
+  { title: "深度拘束道具", value: "深度拘束道具" },
+  { title: "纹身穿孔", value: "纹身穿孔" },
+  { title: "修剪阴毛", value: "修剪阴毛" },
+  { title: "修女禁欲", value: "修女禁欲" },
+  { title: "复古怀旧", value: "复古怀旧" },
+  { title: "童颜", value: "童颜" },
+  { title: "红发", value: "红发" },
+  { title: "電車", value: "電車" },
+  { title: "M字开腿", value: "M字开腿" },
+  { title: "吊带吊袜带", value: "吊带吊袜带" },
+  { title: "失禁圣水", value: "失禁圣水" },
+  { title: "孕妇怀孕", value: "孕妇怀孕" },
+  { title: "当众露出", value: "当众露出" },
+  { title: "惊悚恐怖", value: "惊悚恐怖" },
+  { title: "欧美混血", value: "欧美混血" },
+  { title: "老头爷爷", value: "老头爷爷" },
+  { title: "芭蕾舞服", value: "芭蕾舞服" },
+  { title: "LTX破解", value: "LTX破解" },
+  { title: "体育服扮演", value: "体育服扮演" },
+  { title: "公共场所露出", value: "公共场所露出" },
+  { title: "养女女儿", value: "养女女儿" },
+  { title: "唾液调教", value: "唾液调教" },
+  { title: "性感背心", value: "性感背心" },
+  { title: "情趣警察", value: "情趣警察" },
+  { title: "明星脸", value: "明星脸" },
+  { title: "比基尼晒痕", value: "比基尼晒痕" },
+  { title: "泳衣", value: "泳衣" },
+  { title: "海外作品", value: "海外作品" },
+  { title: "真空无胸罩", value: "真空无胸罩" },
+  { title: "绝顶高潮", value: "绝顶高潮" },
+  { title: "萝莉扮演", value: "萝莉扮演" },
+  { title: "餐厅包厢", value: "餐厅包厢" },
+];
+
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.4.0",
+  version: "1.5.0",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / 神作 / 女优战力；详情点演员可看作品；今天冲可选制式（默认有码）；封面本站优先；光鸭最小保留 MB。",
+    "权威榜单 / LTX 最强 AI 破解 / 片库探索题材 / 神作 / 女优战力；详情点演员可看作品；今天冲可选制式（默认有码）；封面本站优先；光鸭最小保留 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
-  iconUrl: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
   detailCacheDuration: 300,
   globalParams: [
     {
@@ -483,6 +730,69 @@ WidgetMetadata = {
         { name: "page", title: "页码", type: "page", value: "1" },
         // 详情点演员会重开本模块并注入 peopleId
         { name: "peopleId", title: "人物ID", type: "input", value: "" },
+      ],
+    },
+    {
+      id: "loadLtxRanking",
+      title: "LTX 最强 AI 破解",
+      functionName: "loadLtxRanking",
+      cacheDuration: 0,
+      params: [
+        { name: "page", title: "页码", type: "page", value: "1" },
+        { name: "peopleId", title: "人物ID", type: "input", value: "" },
+      ],
+    },
+    {
+      id: "loadExplore",
+      title: "片库探索",
+      functionName: "loadExplore",
+      cacheDuration: 0,
+      params: [
+        {
+          name: "category",
+          title: "题材",
+          type: "enumeration",
+          value: "all",
+          enumOptions: EXPLORE_CATEGORY_OPTIONS,
+        },
+        {
+          name: "scope",
+          title: "制式",
+          type: "enumeration",
+          value: "all",
+          enumOptions: [
+            { title: "全部", value: "all" },
+            { title: "LTX AI 去码", value: "ltx" },
+            { title: "有码", value: "censored" },
+            { title: "无码", value: "uncensored" },
+            { title: "FC2", value: "fc2" },
+          ],
+        },
+        {
+          name: "sort",
+          title: "排序",
+          type: "enumeration",
+          value: "random",
+          enumOptions: [
+            { title: "高分优先", value: "score" },
+            { title: "最新发行", value: "newest" },
+            { title: "最早发行", value: "oldest" },
+            { title: "手气不错", value: "random" },
+          ],
+        },
+        {
+          name: "released_only",
+          title: "发行状态",
+          type: "enumeration",
+          value: "1",
+          enumOptions: [
+            { title: "仅已发行", value: "1" },
+            { title: "包括即将发行", value: "0" },
+          ],
+        },
+        { name: "page", title: "页码", type: "page", value: "1" },
+        { name: "peopleId", title: "人物ID", type: "input", value: "" },
+        { name: "genreId", title: "题材ID", type: "input", value: "" },
       ],
     },
     {
@@ -634,6 +944,12 @@ var lastRequestParams = null;
 var SEARCH_INDEX_CACHE_KEY = "jvr_search_index_v5";
 var SEARCH_INDEX_TS_KEY = "jvr_search_index_ts_v5";
 var SEARCH_INDEX_TTL_MS = 6 * 60 * 60 * 1000;
+var FILTER_INDEX_CACHE_PREFIX = "jvr_filter_index_v1.";
+var FILTER_INDEX_TTL_MS = 6 * 60 * 60 * 1000;
+var FILTER_INDEX_MEMORY_CACHE = {};
+var FILTER_INDEX_PENDING_REQUESTS = {};
+var EXPLORE_RANDOM_SEED = 2026;
+var LTX_RANKING_SLUG = "curated-ltx-ai-uncensored";
 var MAGNET_STORE_PREFIX = "jvr.magnet.v1.";
 var UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -1560,6 +1876,67 @@ async function getSearchIndex(params) {
   return data;
 }
 
+function isValidFilterIndex(index) {
+  return !!(index && Array.isArray(index.videos) && Array.isArray(index.categories));
+}
+
+function readCachedFilterIndex(params) {
+  var locale = localeOf(params);
+  var key = FILTER_INDEX_CACHE_PREFIX + locale;
+  var now = Date.now();
+  var memory = FILTER_INDEX_MEMORY_CACHE[locale];
+  if (memory && now - memory.ts < FILTER_INDEX_TTL_MS) return memory.data;
+
+  try {
+    var ts = Number(Widget.storage.get(key + ".ts") || 0);
+    if (ts > 0 && now - ts < FILTER_INDEX_TTL_MS) {
+      var cached = Widget.storage.get(key);
+      if (typeof cached === "string") cached = JSON.parse(cached);
+      if (isValidFilterIndex(cached)) {
+        FILTER_INDEX_MEMORY_CACHE[locale] = { ts: ts, data: cached };
+        return cached;
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+async function getFilterIndex(params) {
+  var locale = localeOf(params);
+  var key = FILTER_INDEX_CACHE_PREFIX + locale;
+  var cached = readCachedFilterIndex(params);
+  if (cached) return cached;
+  if (FILTER_INDEX_PENDING_REQUESTS[locale]) return await FILTER_INDEX_PENDING_REQUESTS[locale];
+  var request = (async function () {
+    var url = SITE_ORIGIN + "/" + locale + "/filter-index.json";
+    var data = await httpGet(url, { Accept: "application/json" });
+    if (typeof data === "string") {
+      try {
+        data = JSON.parse(data);
+      } catch (e) {
+        throw new Error("filter-index.json 解析失败");
+      }
+    }
+    if (!isValidFilterIndex(data)) throw new Error("filter-index.json 无效");
+    var fetchedAt = Date.now();
+    FILTER_INDEX_MEMORY_CACHE[locale] = { ts: fetchedAt, data: data };
+    try {
+      Widget.storage.set(key, JSON.stringify(data));
+      Widget.storage.set(key + ".ts", String(fetchedAt));
+    } catch (e2) {
+      // 索引较大；持久缓存写入失败仍保留当前运行时的内存缓存。
+      console.warn("[javranking] 题材索引缓存写入失败:", e2 && e2.message);
+    }
+    return data;
+  })();
+  FILTER_INDEX_PENDING_REQUESTS[locale] = request;
+  try {
+    return await request;
+  } finally {
+    delete FILTER_INDEX_PENDING_REQUESTS[locale];
+  }
+}
+
 function buildCodeMap(index) {
   var map = {};
   (index.videos || []).forEach(function (v) {
@@ -1816,7 +2193,10 @@ function mapRankingRow(row, codeMap, rankFallback) {
   var code = normalizeCode(row.code);
   var meta = (code && lookupVideoByCode(codeMap, code)) || null;
   var rank = Number(row.rank || rankFallback || 0) || 0;
-  if (meta) return mapIndexVideo(meta, { rankLabel: rank ? "#" + rank : "" });
+  // Markdown 自带详情 ID 时以它为准，避免同番号映射到另一条影片。
+  if (meta && (!row.videoId || String(meta.videoId) === String(row.videoId))) {
+    return mapIndexVideo(meta, { rankLabel: rank ? "#" + rank : "" });
+  }
   var title = getText(row.title || code);
   if (code && title.toUpperCase().indexOf(code) !== 0) title = code + " " + title;
   var videoId = String(row.videoId || "").replace(/[^\d]/g, "");
@@ -1856,7 +2236,12 @@ function parseRankingMarkdownTable(md) {
     var code = cells[2];
     var title = cells[3];
     if (!/^\d+$/.test(rank) || !code) continue;
-    rows.push({ rank: Number(rank), code: code, title: title });
+    var videoMatch = (cells[4] || "").match(
+      /\]\((?:https?:\/\/(?:www\.)?javranking\.cc)?\/(?:zh-hans|en|zh-hant)\/videos\/(\d+)\/?(?:[?#][^)]*)?\)/i
+    );
+    var row = { rank: Number(rank), code: code, title: title };
+    if (videoMatch) row.videoId = videoMatch[1];
+    rows.push(row);
   }
   return rows;
 }
@@ -1945,7 +2330,15 @@ async function fetchHtmlPage(pathName, params) {
 }
 
 async function rankingRowsToItems(rows, params) {
-  var index = await getSearchIndex(params);
+  var index;
+  try {
+    index = await getSearchIndex(params);
+  } catch (e) {
+    var linkedRows = (rows || []).every(function (row) { return row && row.videoId; });
+    if (!linkedRows) throw e;
+    console.warn("[javranking] 榜单索引不可用，使用 Markdown 详情链接:", e && e.message);
+    index = { videos: [] };
+  }
   var codeMap = buildCodeMap(index);
   var pageRows = pageSlice(rows, params && params.page, PAGE_SIZE);
   var items = [];
@@ -2208,12 +2601,27 @@ async function loadVideoDetail(owned, params) {
   }
   if (!videoId) return null;
 
+  // 片库探索已缓存的完整索引可直接提供基础详情，不额外下载另一份索引。
+  var filterIndex = readCachedFilterIndex(params);
+  if (!indexMeta && filterIndex) {
+    filterIndex.videos.some(function (v) {
+      if (String(v.videoId) === String(videoId)) {
+        indexMeta = v;
+        return true;
+      }
+      return false;
+    });
+  }
+
   // JSON 优先：search-index 基础详情
   try {
     if (!indexMeta) {
       var index = await getSearchIndex(params);
       var codeMap = buildCodeMap(index);
-      if (codeHint) indexMeta = lookupVideoByCode(codeMap, codeHint);
+      if (codeHint) {
+        var codeMeta = lookupVideoByCode(codeMap, codeHint);
+        if (codeMeta && String(codeMeta.videoId) === String(videoId)) indexMeta = codeMeta;
+      }
       if (!indexMeta) {
         (index.videos || []).some(function (v) {
           if (String(v.videoId) === String(videoId)) {
@@ -2395,6 +2803,147 @@ async function loadRanking(params) {
     return await rankingRowsToItems(rows, params);
   } catch (error) {
     console.error("[javranking][loadRanking] 失败:", error.message || error);
+    throw error;
+  }
+}
+
+function normalizeExploreCategoryKey(value) {
+  var key = getText(value);
+  try {
+    key = decodeURIComponent(key);
+  } catch (e) {}
+  return key.toLowerCase();
+}
+
+function findExploreCategory(index, value) {
+  var key = normalizeExploreCategoryKey(value);
+  if (!key) return null;
+  var categories = (index && index.categories) || [];
+  for (var i = 0; i < categories.length; i++) {
+    var category = categories[i];
+    if (!category) continue;
+    if (category.id != null && String(category.id) === key) return category;
+    var names = [category.name, category.raw].concat(category.aliases || []);
+    for (var j = 0; j < names.length; j++) {
+      if (normalizeExploreCategoryKey(names[j]) === key) return category;
+    }
+  }
+  return null;
+}
+
+function resolveExploreCategoryValue(params) {
+  params = params || {};
+  // 详情点击题材时，genreId 优先于菜单里保留的 category。
+  var keys = ["genreId", "genre_id", "category", "cat"];
+  for (var i = 0; i < keys.length; i++) {
+    var value = getText(params[keys[i]]);
+    if (value) return value;
+  }
+  return "all";
+}
+
+function videoHasExploreCategory(video, categoryId) {
+  var ids = (video && video.categoryIds) || [];
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i]) === String(categoryId)) return true;
+  }
+  return false;
+}
+
+function normalizeExploreScope(params) {
+  var scope = getText((params && params.scope) || "all").toLowerCase();
+  return ["all", "ltx", "censored", "uncensored", "fc2"].indexOf(scope) >= 0 ? scope : "all";
+}
+
+function videoMatchesExploreScope(video, scope) {
+  if (!video || !getText(video.videoId)) return false;
+  if (scope === "ltx") return video.hasLtx === true;
+  return scope === "all" || getText(video.scope).toLowerCase() === scope;
+}
+
+function filterExploreVideos(index, params) {
+  params = params || {};
+  var value = resolveExploreCategoryValue(params);
+  var key = normalizeExploreCategoryKey(value);
+  var category = key === "all" ? null : findExploreCategory(index, value);
+  // 不认识的题材不能回退成全部影片，避免空筛选被误认为命中。
+  if (key !== "all" && !category) return [];
+  var scope = normalizeExploreScope(params);
+  var releasedOnly = getText(params.released_only == null ? "1" : params.released_only) !== "0";
+  var today = new Date().toISOString().slice(0, 10);
+  return (index.videos || []).filter(function (video) {
+    if (!videoMatchesExploreScope(video, scope)) return false;
+    if (releasedOnly && video.releaseDate && String(video.releaseDate).slice(0, 10) > today) return false;
+    return !category || videoHasExploreCategory(video, category.id);
+  });
+}
+
+function shuffleExploreVideos(videos, seed) {
+  var list = (videos || []).slice();
+  var state = Number(seed);
+  if (!Number.isFinite(state)) state = EXPLORE_RANDOM_SEED;
+  // 与站点一致的带种子 Fisher-Yates；跨页重载不会重新洗牌造成重复/遗漏。
+  function random() {
+    var n = state += 1831565813;
+    n = Math.imul(n ^ (n >>> 15), n | 1);
+    n ^= n + Math.imul(n ^ (n >>> 7), n | 61);
+    return ((n ^ (n >>> 14)) >>> 0) / 4294967296;
+  }
+  for (var i = list.length - 1; i > 0; i--) {
+    var j = Math.floor(random() * (i + 1));
+    var temp = list[i];
+    list[i] = list[j];
+    list[j] = temp;
+  }
+  return list;
+}
+
+function sortExploreVideos(videos, params) {
+  params = params || {};
+  var mode = getText(params.sort || "random").toLowerCase();
+  if (["score", "newest", "oldest"].indexOf(mode) < 0) {
+    return shuffleExploreVideos(videos, params.seed == null ? EXPLORE_RANDOM_SEED : params.seed);
+  }
+  return (videos || []).slice().sort(function (a, b) {
+    var aDate = getText(a.releaseDate);
+    var bDate = getText(b.releaseDate);
+    var scoreDiff = workScoreValue(b) - workScoreValue(a);
+    var idDiff = Number(a.videoId) - Number(b.videoId);
+    if (mode === "newest") return bDate.localeCompare(aDate) || scoreDiff || idDiff;
+    if (mode === "oldest") return (aDate || "9999-99-99").localeCompare(bDate || "9999-99-99") || scoreDiff || idDiff;
+    return scoreDiff || bDate.localeCompare(aDate) || idDiff;
+  });
+}
+
+async function loadExplore(params) {
+  params = params || {};
+  rememberParams(params);
+  try {
+    var byPeople = await loadWorksIfPeopleId(params);
+    if (byPeople) return byPeople;
+    var index = await getFilterIndex(params);
+    var videos = sortExploreVideos(filterExploreVideos(index, params), params);
+    return pageSlice(videos, params.page, PAGE_SIZE).map(function (video) {
+      return mapIndexVideo(video, { rankLabel: video.hasLtx ? "LTX AI 去码" : "" });
+    });
+  } catch (error) {
+    console.error("[javranking][loadExplore] 失败:", error.message || error);
+    throw error;
+  }
+}
+
+async function loadLtxRanking(params) {
+  params = params || {};
+  rememberParams(params);
+  try {
+    var byPeople = await loadWorksIfPeopleId(params);
+    if (byPeople) return byPeople;
+    var md = await fetchMarkdown("rankings/" + LTX_RANKING_SLUG, params);
+    var rows = parseRankingMarkdownTable(md);
+    if (!rows.length) throw new Error("LTX 精选榜为空");
+    return await rankingRowsToItems(rows, params);
+  } catch (error) {
+    console.error("[javranking][loadLtxRanking] 失败:", error.message || error);
     throw error;
   }
 }
