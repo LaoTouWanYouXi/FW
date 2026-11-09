@@ -690,10 +690,10 @@ var EXPLORE_FILTER_PARAMS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.6.0",
+  version: "1.6.1",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / LTX 最强 AI 破解（磁力分级分集，点击转存光鸭）/ 片库探索题材 / 神作 / 女优战力；详情点演员可看作品；今天冲可选制式（默认有码）；封面本站优先；光鸭最小保留 MB。",
+    "权威榜单 / LTX 最强 AI 破解 / 片库探索题材 / 神作 / 女优战力；磁力放在相似作品栏，点击转存光鸭；列表本站封面优先；详情点演员可看作品。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -729,18 +729,6 @@ WidgetMetadata = {
       type: "input",
       value: "0",
       description: "对齐 javdb：过滤广告等小文件；0=仅按相对体积判断小广告片",
-    },
-    {
-      name: "ltx_magnet_episode_enabled",
-      title: "LTX 磁力分级分集",
-      type: "enumeration",
-      value: "true",
-      enumOptions: [
-        { title: "开启", value: "true" },
-        { title: "关闭", value: "false" },
-      ],
-      description:
-        "LTX 影片详情把磁力按画质分级（蓝光原盘/4K/1080P/720P/其他）放入分集列表，点击分集自动转存光鸭云盘；关闭时磁力退回相似作品区",
     },
   ],
   modules: [
@@ -974,6 +962,10 @@ var PAGE_SIZE = 24;
 var lastRequestParams = null;
 var SEARCH_INDEX_CACHE_KEY = "jvr_search_index_v5";
 var SEARCH_INDEX_TS_KEY = "jvr_search_index_ts_v5";
+var SEARCH_INDEX_MEMORY_CACHE = {};
+var SEARCH_INDEX_PENDING_REQUESTS = {};
+var HTTP_REQUEST_TIMEOUT_MS = 8000;
+var INDEX_REQUEST_TIMEOUT_MS = 15000;
 var SEARCH_INDEX_TTL_MS = 6 * 60 * 60 * 1000;
 var FILTER_INDEX_CACHE_PREFIX = "jvr_filter_index_v1.";
 var FILTER_INDEX_TTL_MS = 6 * 60 * 60 * 1000;
@@ -1007,7 +999,6 @@ var DEFAULT_HEADERS = {
 var JAVDB_CDN_BASE = "https://c0.jdbstatic.com";
 var HD_IMAGE_REQUEST_TIMEOUT_MS = 1500;
 var HD_IMAGE_ITEM_BUDGET_MS = 3500;
-var HD_IMAGE_BATCH_BUDGET_MS = 12000;
 var HD_IMAGE_MIN_CONTENT_LENGTH = 3000;
 var HD_IMAGE_AVAILABLE_CACHE = {};
 var HD_IMAGE_PENDING_REQUESTS = {};
@@ -1471,30 +1462,26 @@ async function isHdImageAvailable(url) {
   }
   var pending = (async function () {
     try {
-      if (!Widget.http) {
-        HD_IMAGE_AVAILABLE_CACHE[clean] = false;
-        return false;
-      }
+      if (!Widget.http || typeof Widget.http.head !== "function") return false;
       var headers = {
         "User-Agent": UA,
         Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         Referer: /mgstage\.com/i.test(clean) ? "https://www.mgstage.com/" : "https://www.dmm.co.jp/",
       };
-      var resp = null;
-      if (typeof Widget.http.head === "function") {
-        resp = await Widget.http.head(clean, { headers: headers, timeout: HD_IMAGE_REQUEST_TIMEOUT_MS });
-      } else if (typeof Widget.http.get === "function") {
-        resp = await Widget.http.get(clean, { headers: headers, timeout: HD_IMAGE_REQUEST_TIMEOUT_MS });
-      } else {
-        HD_IMAGE_AVAILABLE_CACHE[clean] = false;
-        return false;
-      }
+      var resp = await requestWithTimeout(function () {
+        return Widget.http.head(clean, { headers: headers, timeout: HD_IMAGE_REQUEST_TIMEOUT_MS });
+      }, HD_IMAGE_REQUEST_TIMEOUT_MS);
       var status = Number((resp && (resp.statusCode != null ? resp.statusCode : resp.status)) || 0);
-      if (status >= 400) {
+      if (status < 200 || status >= 300) {
         HD_IMAGE_AVAILABLE_CACHE[clean] = false;
         return false;
       }
       var hdrs = (resp && resp.headers) || {};
+      var contentType = String(hdrs["content-type"] || hdrs["Content-Type"] || "");
+      if (!/^image\//i.test(contentType)) {
+        HD_IMAGE_AVAILABLE_CACHE[clean] = false;
+        return false;
+      }
       var contentLength = parseInt(
         hdrs["content-length"] || hdrs["Content-Length"] || hdrs["content_length"] || "0",
         10
@@ -1560,12 +1547,13 @@ async function buildListCoverBundleAsync(code, siteFallback, sitePosterFallback)
   if (candidates.strategy !== "direct-dmm" && candidates.strategy !== "mgstage") {
     return buildCoverBundleFromUrls(sitePoster || fallback, fallback || sitePoster);
   }
-  // 优先高清：校验通过用 DMM/MGStage，失败再回退本站
-  var poster = await chooseFirstAvailableCandidate(candidates.posterCandidates, sitePoster || fallback);
-  var backdrop = await chooseFirstAvailableCandidate(
-    candidates.backdropCandidates,
-    fallback || sitePoster || poster
-  );
+  // 详情竖图和横图并行校验；每类最多两个候选，失败回退本站。
+  var resolved = await Promise.all([
+    chooseFirstAvailableCandidate(candidates.posterCandidates, sitePoster || fallback),
+    chooseFirstAvailableCandidate(candidates.backdropCandidates, fallback || sitePoster),
+  ]);
+  var poster = resolved[0];
+  var backdrop = resolved[1];
   return buildCoverBundleFromUrls(
     poster || sitePoster || fallback,
     backdrop || fallback || sitePoster || poster
@@ -1842,10 +1830,32 @@ function shuffleCopy(arr) {
   return a;
 }
 
-async function httpGet(url, headers) {
-  var res = await Widget.http.get(url, {
-    headers: Object.assign({}, DEFAULT_HEADERS, headers || {}),
-  });
+// 桥接层 timeout 为毫秒；有定时器时同时限制脚本等待，避免桥接忽略 timeout。
+async function requestWithTimeout(request, timeout) {
+  if (typeof setTimeout !== "function" || typeof clearTimeout !== "function") return await request();
+  var timer;
+  try {
+    return await Promise.race([
+      request(),
+      new Promise(function (resolve, reject) {
+        timer = setTimeout(function () { reject(new Error("请求超时: " + timeout + " ms")); }, timeout);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function httpGet(url, headers, timeout) {
+  timeout = timeout || HTTP_REQUEST_TIMEOUT_MS;
+  var res = await requestWithTimeout(function () {
+    return Widget.http.get(url, {
+      headers: Object.assign({}, DEFAULT_HEADERS, headers || {}),
+      timeout: timeout,
+    });
+  }, timeout);
+  var status = Number(res && (res.statusCode != null ? res.statusCode : res.status));
+  if (status >= 400) throw new Error("HTTP " + status + ": " + url);
   return res && res.data;
 }
 
@@ -1873,38 +1883,55 @@ function loadHtml(html) {
   return null;
 }
 
-async function getSearchIndex(params) {
+function readCachedSearchIndex(params) {
+  var locale = localeOf(params);
   var now = Date.now();
+  var memory = SEARCH_INDEX_MEMORY_CACHE[locale];
+  if (memory && now - memory.ts < SEARCH_INDEX_TTL_MS) return memory.data;
   try {
-    var ts = Number(Widget.storage.get(SEARCH_INDEX_TS_KEY) || 0);
-    var cached = Widget.storage.get(SEARCH_INDEX_CACHE_KEY);
-    if (cached && now - ts < SEARCH_INDEX_TTL_MS) {
-      if (typeof cached === "string") {
-        try {
-          return JSON.parse(cached);
-        } catch (e) {}
-      } else if (cached && typeof cached === "object") {
+    var ts = Number(Widget.storage.get(SEARCH_INDEX_TS_KEY + "." + locale) || 0);
+    if (ts > 0 && now - ts < SEARCH_INDEX_TTL_MS) {
+      var cached = Widget.storage.get(SEARCH_INDEX_CACHE_KEY + "." + locale);
+      if (typeof cached === "string") cached = JSON.parse(cached);
+      if (cached && Array.isArray(cached.videos)) {
+        SEARCH_INDEX_MEMORY_CACHE[locale] = { ts: ts, data: cached };
         return cached;
       }
     }
   } catch (e) {}
+  return null;
+}
 
+async function getSearchIndex(params) {
   var locale = localeOf(params);
-  var url = SITE_ORIGIN + "/" + locale + "/search-index.json";
-  var data = await httpGet(url, { Accept: "application/json" });
-  if (typeof data === "string") {
-    try {
-      data = JSON.parse(data);
-    } catch (e) {
-      throw new Error("search-index.json 解析失败");
+  var cached = readCachedSearchIndex(params);
+  if (cached) return cached;
+  if (SEARCH_INDEX_PENDING_REQUESTS[locale]) return await SEARCH_INDEX_PENDING_REQUESTS[locale];
+  var request = (async function () {
+    var url = SITE_ORIGIN + "/" + locale + "/search-index.json";
+    var data = await httpGet(url, { Accept: "application/json" }, INDEX_REQUEST_TIMEOUT_MS);
+    if (typeof data === "string") {
+      try {
+        data = JSON.parse(data);
+      } catch (e) {
+        throw new Error("search-index.json 解析失败");
+      }
     }
-  }
-  if (!data || !Array.isArray(data.videos)) throw new Error("search-index.json 无效");
+    if (!data || !Array.isArray(data.videos)) throw new Error("search-index.json 无效");
+    var fetchedAt = Date.now();
+    SEARCH_INDEX_MEMORY_CACHE[locale] = { ts: fetchedAt, data: data };
+    try {
+      Widget.storage.set(SEARCH_INDEX_CACHE_KEY + "." + locale, JSON.stringify(data));
+      Widget.storage.set(SEARCH_INDEX_TS_KEY + "." + locale, String(fetchedAt));
+    } catch (e2) {}
+    return data;
+  })();
+  SEARCH_INDEX_PENDING_REQUESTS[locale] = request;
   try {
-    Widget.storage.set(SEARCH_INDEX_CACHE_KEY, JSON.stringify(data));
-    Widget.storage.set(SEARCH_INDEX_TS_KEY, String(now));
-  } catch (e2) {}
-  return data;
+    return await request;
+  } finally {
+    delete SEARCH_INDEX_PENDING_REQUESTS[locale];
+  }
 }
 
 function isValidFilterIndex(index) {
@@ -1940,7 +1967,7 @@ async function getFilterIndex(params) {
   if (FILTER_INDEX_PENDING_REQUESTS[locale]) return await FILTER_INDEX_PENDING_REQUESTS[locale];
   var request = (async function () {
     var url = SITE_ORIGIN + "/" + locale + "/filter-index.json";
-    var data = await httpGet(url, { Accept: "application/json" });
+    var data = await httpGet(url, { Accept: "application/json" }, INDEX_REQUEST_TIMEOUT_MS);
     if (typeof data === "string") {
       try {
         data = JSON.parse(data);
@@ -2153,32 +2180,29 @@ async function applyHdCoversAsync(code, siteCover, sitePoster) {
 }
 
 async function enrichItemsWithVerifiedHdCovers(items) {
-  items = items || [];
-  if (!items.length) return items;
-  var started = Date.now();
-  var tasks = items.map(function (item) {
-    return (async function () {
-      if (!item) return item;
-      if (Date.now() - started > HD_IMAGE_BATCH_BUDGET_MS) return item;
-      var code = normalizeCode(item.id) || normalizeCode(item.title) || "";
-      if (!code) return item;
-      var site =
-        resolveSiteCoverFallback(item.posterPath) ||
-        resolveSiteCoverFallback(item.coverUrl) ||
-        resolveSiteCoverFallback(item.backdropPath) ||
-        "";
-      var covers = await applyHdCoversAsync(code, site, site);
-      if (covers.coverUrl) item.coverUrl = covers.coverUrl;
-      if (covers.posterPath) item.posterPath = covers.posterPath;
-      if (covers.detailPoster) item.detailPoster = covers.detailPoster;
-      if (covers.backdropPath) item.backdropPath = covers.backdropPath;
-      return item;
-    })();
+  // 列表不等待第三方图片请求；只复用详情已验证的高清地址。
+  (items || []).forEach(function (item) {
+    if (!item) return;
+    var candidates = buildImageCandidatesFromValue(item.id || item.title);
+    function cachedCandidate(urls) {
+      for (var i = 0; i < (urls || []).length; i++) {
+        var url = sanitizeCoverUrl(urls[i]);
+        if (url && HD_IMAGE_AVAILABLE_CACHE[url] === true) return url;
+      }
+      return "";
+    }
+    var poster = cachedCandidate(candidates.posterCandidates);
+    var backdrop = cachedCandidate(candidates.backdropCandidates);
+    if (poster) {
+      item.posterPath = poster;
+      item.detailPoster = poster;
+    }
+    if (backdrop) {
+      item.coverUrl = backdrop;
+      item.backdropPath = backdrop;
+    }
   });
-  try {
-    await Promise.all(tasks);
-  } catch (e) {}
-  return items;
+  return items || [];
 }
 
 function mapIndexVideo(v, extra) {
@@ -2361,14 +2385,10 @@ async function fetchHtmlPage(pathName, params) {
 }
 
 async function rankingRowsToItems(rows, params) {
-  var index;
-  try {
-    index = await getSearchIndex(params);
-  } catch (e) {
+  var index = readCachedSearchIndex(params) || readCachedFilterIndex(params);
+  if (!index) {
     var linkedRows = (rows || []).every(function (row) { return row && row.videoId; });
-    if (!linkedRows) throw e;
-    console.warn("[javranking] 榜单索引不可用，使用 Markdown 详情链接:", e && e.message);
-    index = { videos: [] };
+    index = linkedRows ? { videos: [] } : await getSearchIndex(params);
   }
   var codeMap = buildCodeMap(index);
   var pageRows = pageSlice(rows, params && params.page, PAGE_SIZE);
@@ -2657,146 +2677,6 @@ function buildMagnetRelatedItems(magnets, ctx) {
   return items;
 }
 
-/* ============ LTX 磁力分级分集（对齐 javdb 可视化版分集样式） ============ */
-
-var MAGNET_EPISODE_TOGGLE_KEY = "jvr.ltx_magnet_episode_enabled";
-
-/**
- * 读取 LTX 分级分集开关：params 直传 → 上次列表参数 → storage，默认开启。
- * 与 rememberParams 的三级回退保持同一模式，兼容 Forward 空对象 params。
- */
-function resolveLtxMagnetEpisodeEnabled(params) {
-  var raw = "";
-  var sources = [params, lastRequestParams];
-  for (var s = 0; s < sources.length; s++) {
-    var src = sources[s];
-    if (!src) continue;
-    raw = getText(src.ltx_magnet_episode_enabled);
-    if (!raw && src.global) raw = getText(src.global.ltx_magnet_episode_enabled);
-    if (!raw && src.globalParams) {
-      if (Array.isArray(src.globalParams)) {
-        for (var i = 0; i < src.globalParams.length; i++) {
-          var it = src.globalParams[i];
-          if (!it) continue;
-          if (getText(it.name || it.key) === "ltx_magnet_episode_enabled") {
-            raw = getText(it.value != null ? it.value : it.val);
-            if (raw) break;
-          }
-        }
-      } else {
-        raw = getText(src.globalParams.ltx_magnet_episode_enabled);
-      }
-    }
-    if (raw) break;
-  }
-  if (!raw) {
-    try {
-      raw = getText(Widget.storage.get(MAGNET_EPISODE_TOGGLE_KEY));
-    } catch (e) {}
-  }
-  if (!raw) return true;
-  return String(raw).toLowerCase() === "true";
-}
-
-/** 详情 HTML 是否为 LTX 破解专区影片（横幅/栏目文案或 ltx 类名） */
-function detectLtxFromHtml(html) {
-  var head = String(html || "").slice(0, 30000);
-  if (/AI\s*去码|去码破解|最强\s*AI\s*破解|无水印破解/.test(head)) return true;
-  return /(?:^|[^a-zA-Z])ltx(?:[^a-zA-Z]|$)/i.test(head);
-}
-
-function magnetIsLtxCrack(m) {
-  var text = ((m.tags || []).join(" ") + " " + (m.name || "")).toLowerCase();
-  return /ltx|破解|去码|uncensor/.test(text);
-}
-
-function magnetHasSubtitle(m) {
-  var text = ((m.tags || []).join(" ") + " " + (m.name || "")).toLowerCase();
-  return /中字|中文字幕|内封字幕|内嵌字幕|chinese\s*sub/.test(text);
-}
-
-/** 按名称/特征/体积推断画质档位；order 越小档位越高 */
-function magnetTierOf(m) {
-  var text = ((m.tags || []).join(" ") + " " + (m.name || "") + " " + (m.size || "")).toLowerCase();
-  if (/蓝光|原盘|blu[- ]?ray|bdmv|remux/.test(text)) return { title: "蓝光原盘", order: 1 };
-  if (/4k|2160p?|uhd/.test(text)) return { title: "4K 超清", order: 2 };
-  if (/1080p?|fhd/.test(text)) return { title: "1080P", order: 3 };
-  if (/720p?/.test(text)) return { title: "720P", order: 4 };
-  if (/(^|[^0-9])480p?([^0-9p]|$)/.test(text)) return { title: "480P", order: 5 };
-  return { title: "其他", order: 9 };
-}
-
-/**
- * 把 LTX 磁力构建为分级分集列表（javdb 可视化样式）：
- * - 每项 mediaType:"tv"，带 episode 序号
- * - link = gy:<hash>，点击 → loadDetail → handleGuangyaMagnetSave 自动转存光鸭
- * - 排序：画质档位升序 → 同档内 LTX 破解优先 → 体积大优先
- */
-function buildMagnetEpisodeItems(magnets, ctx) {
-  ctx = ctx || {};
-  var entries = (magnets || [])
-    .map(function (m) {
-      var hash = m.hash || extractMagnetHash(m.magnet);
-      if (!hash) return null;
-      return {
-        m: m,
-        hash: hash,
-        tier: magnetTierOf(m),
-        ltx: magnetIsLtxCrack(m),
-        sub: magnetHasSubtitle(m),
-        mb: parseSizeToMb(m.size),
-      };
-    })
-    .filter(function (e) {
-      return !!e;
-    });
-  entries.sort(function (a, b) {
-    if (a.tier.order !== b.tier.order) return a.tier.order - b.tier.order;
-    if (a.ltx !== b.ltx) return a.ltx ? -1 : 1;
-    return b.mb - a.mb;
-  });
-  var items = [];
-  entries.slice(0, 50).forEach(function (e, idx) {
-    var m = e.m;
-    var flags = [];
-    if (e.ltx) flags.push("LTX破解");
-    if (e.sub) flags.push("中字");
-    cacheMagnet(e.hash, {
-      magnet: m.magnet,
-      hash: e.hash,
-      name: m.name || "",
-      size: m.size || "",
-      tags: m.tags || [],
-      code: ctx.code || "",
-      title: ctx.title || "",
-      cover: ctx.cover || "",
-    });
-    var titleParts = ["🧲 第" + (idx + 1) + "集"];
-    titleParts.push((e.ltx ? "LTX破解 · " : "") + e.tier.title);
-    if (m.size) titleParts.push(m.size);
-    if (e.sub && !e.ltx) titleParts.push("中字");
-    items.push({
-      id: e.hash,
-      type: "url",
-      mediaType: "tv",
-      episode: idx + 1,
-      title: titleParts.join(" · "),
-      link: MAGNET_LINK_PREFIX + e.hash,
-      description:
-        (m.name || "磁力") +
-        (m.size ? "\n体积: " + m.size : "") +
-        ((m.tags || []).length ? "\n特征: " + m.tags.join(" · ") : "") +
-        "\n分级: " + e.tier.title + (e.ltx ? " · LTX破解" : "") + (e.sub ? " · 中字" : "") +
-        "\n点击自动转存到光鸭云盘\n" +
-        m.magnet,
-      coverUrl: ctx.cover || undefined,
-      posterPath: ctx.cover || undefined,
-      backdropPath: ctx.cover || undefined,
-    });
-  });
-  return items;
-}
-
 function peopleFromLd(ld, entityMap) {
   var peoples = [];
   function pushPerson(p, role) {
@@ -2845,6 +2725,14 @@ async function fetchVideoDetailHtml(videoId, params) {
   return html;
 }
 
+function findVideoInIndexById(index, videoId) {
+  var videos = (index && index.videos) || [];
+  for (var i = 0; i < videos.length; i++) {
+    if (videos[i] && String(videos[i].videoId) === String(videoId)) return videos[i];
+  }
+  return null;
+}
+
 async function loadVideoDetail(owned, params) {
   params = params || {};
   var videoId = owned.videoId;
@@ -2870,26 +2758,8 @@ async function loadVideoDetail(owned, params) {
     });
   }
 
-  // JSON 优先：search-index 基础详情
-  try {
-    if (!indexMeta) {
-      var index = await getSearchIndex(params);
-      var codeMap = buildCodeMap(index);
-      if (codeHint) {
-        var codeMeta = lookupVideoByCode(codeMap, codeHint);
-        if (codeMeta && String(codeMeta.videoId) === String(videoId)) indexMeta = codeMeta;
-      }
-      if (!indexMeta) {
-        (index.videos || []).some(function (v) {
-          if (String(v.videoId) === String(videoId)) {
-            indexMeta = v;
-            return true;
-          }
-          return false;
-        });
-      }
-    }
-  } catch (e0) {}
+  // 已有数字 ID 时不先下载全站索引；只复用当前缓存。
+  if (!indexMeta) indexMeta = findVideoInIndexById(readCachedSearchIndex(params), videoId);
 
   var coverCandFallback = resolveVideoCoverCandidates(videoId, indexMeta && indexMeta.coverUrl);
   var coversFallback = applyHdCovers(
@@ -2913,8 +2783,27 @@ async function loadVideoDetail(owned, params) {
         backdropPath: coversFallback.backdropPath || coverCandFallback.backdrop || undefined,
       };
 
-  // HTML 补全磁力 / 剧照 / JSON-LD（失败则返回 JSON 基础详情）
-  return await enrichDetailFromHtml(base, videoId, params, indexMeta);
+  // HTML 提供磁力 / 剧照 / JSON-LD；失败或缺信息才下载索引兜底。
+  var detail = await enrichDetailFromHtml(base, videoId, params);
+  if (!indexMeta && (detail === base || (!detail.rating && !detail.peoples && !detail.releaseDate))) {
+    try {
+      indexMeta = findVideoInIndexById(await getSearchIndex(params), videoId);
+      if (indexMeta) {
+        var fallback = buildDetailFromIndex(indexMeta, params);
+        if (detail === base) return fallback;
+        if (!detail.rating) detail.rating = fallback.rating;
+        if (!detail.releaseDate) detail.releaseDate = fallback.releaseDate;
+        if (!detail.peoples) detail.peoples = fallback.peoples;
+        if (!detail.title || detail.title === base.title) detail.title = fallback.title;
+      } else if (detail === base) {
+        throw new Error("详情页不可用且索引未找到影片: " + videoId);
+      }
+    } catch (e) {
+      if (detail === base) throw e;
+      console.warn("[javranking] 可选详情索引不可用:", e && e.message);
+    }
+  }
+  return detail;
 }
 
 async function loadWorksFromActressMarkdown(name, params) {
@@ -3471,28 +3360,6 @@ function rememberParams(params) {
     if (minMb !== "" && Widget.storage && typeof Widget.storage.set === "function") {
       Widget.storage.set("jvr.magnet_min_video_mb", minMb);
     }
-    var ltxEp = getText(params && params.ltx_magnet_episode_enabled);
-    if (!ltxEp && params && params.global) {
-      ltxEp = getText(params.global.ltx_magnet_episode_enabled);
-    }
-    if (!ltxEp && params && params.globalParams) {
-      if (Array.isArray(params.globalParams)) {
-        for (var q = 0; q < params.globalParams.length; q++) {
-          var it4 = params.globalParams[q];
-          if (!it4) continue;
-          var n4 = getText(it4.name || it4.key);
-          if (n4 === "ltx_magnet_episode_enabled") {
-            ltxEp = getText(it4.value != null ? it4.value : it4.val);
-            if (ltxEp) break;
-          }
-        }
-      } else {
-        ltxEp = getText(params.globalParams.ltx_magnet_episode_enabled);
-      }
-    }
-    if (ltxEp !== "" && Widget.storage && typeof Widget.storage.set === "function") {
-      Widget.storage.set(MAGNET_EPISODE_TOGGLE_KEY, ltxEp);
-    }
   } catch (e) {}
 }
 
@@ -3889,7 +3756,7 @@ function buildDetailFromIndex(meta, params) {
   };
 }
 
-async function enrichDetailFromHtml(base, videoId, params, indexMeta) {
+async function enrichDetailFromHtml(base, videoId, params) {
   var html = "";
   try {
     html = await fetchVideoDetailHtml(videoId, params);
@@ -3959,12 +3826,9 @@ async function enrichDetailFromHtml(base, videoId, params, indexMeta) {
   var releaseDate = getText(ld.datePublished).slice(0, 10) || base.releaseDate || "";
   var maker = (ld.productionCompany && ld.productionCompany.name) || "";
 
-  // 演员头像尽量用 JSON-LD；search-index 命中缓存时补全，失败不阻塞
-  var entityMap = {};
-  try {
-    var index = await getSearchIndex(params);
-    entityMap = buildEntityMap(index);
-  } catch (e3) {}
+  // 演员头像为可选补全：仅复用缓存，不为头像另下全站索引。
+  var cachedIndex = readCachedSearchIndex(params);
+  var entityMap = cachedIndex ? buildEntityMap(cachedIndex) : {};
   var peoples = peopleFromLd(ld, entityMap);
   if (!peoples.length && base.peoples) peoples = base.peoples;
 
@@ -3982,41 +3846,17 @@ async function enrichDetailFromHtml(base, videoId, params, indexMeta) {
     genres.unshift({ id: maker, title: maker });
   }
 
-  // LTX 破解影片：磁力按画质分级放入分集列表（对齐 javdb 可视化版），点击自动转存光鸭
-  var isLtxVideo =
-    (indexMeta && indexMeta.hasLtx === true) ||
-    detectLtxFromHtml(html) ||
-    magnets.some(function (m) {
-      return magnetIsLtxCrack(m);
-    });
-  var magnetEpisodes = [];
-  var relatedItems = [];
-  if (isLtxVideo && magnets.length && resolveLtxMagnetEpisodeEnabled(params)) {
-    magnetEpisodes = buildMagnetEpisodeItems(magnets, {
-      code: code,
-      title: title,
-      cover: coverMain,
-      isLtxVideo: true,
-    });
-  } else {
-    relatedItems = buildMagnetRelatedItems(magnets, {
-      code: code,
-      title: title,
-      cover: coverMain,
-    });
-  }
+  var relatedItems = buildMagnetRelatedItems(magnets, {
+    code: code,
+    title: title,
+    cover: coverMain,
+  });
 
   var descParts = [];
   if (maker) descParts.push("片商: " + maker);
   if (releaseDate) descParts.push(releaseDate);
   if (durationMin) descParts.push(durationMin + " 分钟");
-  if (magnets.length) {
-    descParts.push(
-      magnetEpisodes.length
-        ? "磁力×" + magnets.length + "（已按画质分级放入分集列表，点击转存光鸭）"
-        : "磁力×" + magnets.length + "（相似作品区，按体积排序，点击转存光鸭）"
-    );
-  }
+  if (magnets.length) descParts.push("磁力×" + magnets.length + "（相似作品区，按体积排序，点击转存光鸭）");
   if (ld.aggregateRating && ld.aggregateRating.ratingCount) {
     descParts.push(ld.aggregateRating.ratingCount + " 人评");
   }
@@ -4053,12 +3893,6 @@ async function enrichDetailFromHtml(base, videoId, params, indexMeta) {
     trailers: trailers.length ? trailers : undefined,
     relatedItems: relatedItems.length ? relatedItems : undefined,
   };
-  if (magnetEpisodes.length) {
-    // javdb 可视化样式：详情条目转 tv + episodeItems，App 以分集列表展示磁力
-    detail.mediaType = "tv";
-    detail.episode = magnetEpisodes.length;
-    detail.episodeItems = magnetEpisodes;
-  }
   return detail;
 }
 
