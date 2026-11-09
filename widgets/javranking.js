@@ -690,10 +690,10 @@ var EXPLORE_FILTER_PARAMS = [
 WidgetMetadata = {
   id: "javranking.cc",
   title: "JavRanking",
-  version: "1.5.1",
+  version: "1.6.0",
   requiredVersion: "0.0.1",
   description:
-    "权威榜单 / LTX 最强 AI 破解 / 片库探索题材 / 神作 / 女优战力；详情点演员可看作品；今天冲可选制式（默认有码）；封面本站优先；光鸭最小保留 MB。",
+    "权威榜单 / LTX 最强 AI 破解（磁力分级分集，点击转存光鸭）/ 片库探索题材 / 神作 / 女优战力；详情点演员可看作品；今天冲可选制式（默认有码）；封面本站优先；光鸭最小保留 MB。",
   author: "老头",
   site: "https://javranking.cc/",
   icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
@@ -729,6 +729,18 @@ WidgetMetadata = {
       type: "input",
       value: "0",
       description: "对齐 javdb：过滤广告等小文件；0=仅按相对体积判断小广告片",
+    },
+    {
+      name: "ltx_magnet_episode_enabled",
+      title: "LTX 磁力分级分集",
+      type: "enumeration",
+      value: "true",
+      enumOptions: [
+        { title: "开启", value: "true" },
+        { title: "关闭", value: "false" },
+      ],
+      description:
+        "LTX 影片详情把磁力按画质分级（蓝光原盘/4K/1080P/720P/其他）放入分集列表，点击分集自动转存光鸭云盘；关闭时磁力退回相似作品区",
     },
   ],
   modules: [
@@ -2424,38 +2436,124 @@ function extractJsonLdMovie(html) {
   return null;
 }
 
+function normalizeMagnetUri(uri) {
+  var text = decodeHtmlEntities(String(uri || "")).trim();
+  return /^magnet:\?/i.test(text) ? text : "";
+}
+
+function magnetHashFromUri(uri) {
+  var m = String(uri || "").match(/btih:([0-9a-zA-Z]{32,40})/i);
+  return m ? m[1].toLowerCase() : "";
+}
+
+/**
+ * 从详情 HTML 提取磁力。LTX 破解专区磁力块的属性顺序/容器结构与普通区不同，
+ * 因此按四级扫描，全部执行、统一按 btih 哈希去重：
+ * 1. <a href=magnet class=magnet-item__name>（普通区主结构）
+ * 2. <a class=magnet-item__name href=magnet>（属性顺序相反，LTX 区常见）
+ * 3. 任意 <a href=magnet>（普通锚点磁力，1/2 已抓的会被去重）
+ * 4. 任意位置的 magnet:?xt=urn:btih:...（data-* / 复制按钮 / JS 字符串，锚点外互补来源）
+ */
 function extractMagnetsFromHtml(html) {
   var magnets = [];
-  var seen = {};
-  var re =
-    /href=["'](magnet:\?[^"']+)["'][^>]*class=["'][^"']*magnet-item__name[^"']*["'][^>]*>([\s\S]*?)<\/a>([\s\S]*?)(?:<\/div>|<div class="magnet-item__actions")/gi;
-  var m;
-  while ((m = re.exec(html))) {
-    var href = decodeHtmlEntities(m[1]);
-    var name = decodeHtmlEntities(m[2].replace(/<[^>]+>/g, ""));
-    var tail = m[3] || "";
-    var sizeMatch = tail.match(/magnet-tag--size[^>]*>([^<]+)</i);
+  var seenHash = {};
+  var seenHref = {};
+  function pushMagnet(entry) {
+    var uri = normalizeMagnetUri(entry.magnet);
+    if (!uri) return;
+    var hash = entry.hash || magnetHashFromUri(uri) || uri;
+    if (seenHash[hash] || seenHref[uri]) return;
+    seenHash[hash] = true;
+    seenHref[uri] = true;
+    entry.hash = hash;
+    magnets.push(entry);
+  }
+  function nameFromAnchor(text) {
+    var n = decodeHtmlEntities(String(text || "").replace(/<[^>]+>/g, ""));
+    n = getText(n);
+    // 复制按钮等动作文案不是资源名，退回通用名
+    if (/^(复制|拷贝|copy|下载|download|磁力链接?)$/i.test(n)) return "";
+    return n;
+  }
+  function tagsFromContext(ctx) {
     var tags = [];
-    var tagRe = /class=["']magnet-tag(?![^"']*size)[^"']*["'][^>]*>([^<]+)</gi;
-    var tm;
-    while ((tm = tagRe.exec(tail))) tags.push(getText(tm[1]));
-    if (!href || seen[href]) continue;
-    seen[href] = true;
-    magnets.push({
-      name: name || "磁力",
-      magnet: href,
-      size: sizeMatch ? getText(sizeMatch[1]) : "",
-      tags: tags,
+    var kw = [
+      ["蓝光原盘", /蓝光|原盘|blu[- ]?ray|bdmv|remux/i],
+      ["4K", /4k|2160p?|uhd/i],
+      ["1080P", /1080p?|fhd/i],
+      ["720P", /720p?/i],
+      ["中字", /中字|中文字幕|chinese\s*sub|内封字幕|内嵌字幕/i],
+      ["LTX破解", /ltx|破解|去码|uncensor/i],
+    ];
+    kw.forEach(function (pair) {
+      if (pair[1].test(ctx) && tags.indexOf(pair[0]) < 0) tags.push(pair[0]);
+    });
+    return tags;
+  }
+  function sizeFromContext(ctx) {
+    var sm = String(ctx || "").match(/([\d.]+\s*[KMGT]?i?B)\b/i);
+    return sm ? getText(sm[1]) : "";
+  }
+  var text = String(html || "");
+  var m;
+
+  // 1) 普通区主结构：href 在前
+  var re1 =
+    /href=["'](magnet:\?[^"']+)["'][^>]*class=["'][^"']*magnet-item__name[^"']*["'][^>]*>([\s\S]*?)<\/a>([\s\S]*?)(?:<\/div>|<div class="magnet-item__actions")/gi;
+  while ((m = re1.exec(text))) {
+    pushMagnet({
+      name: nameFromAnchor(m[2]) || "磁力",
+      magnet: m[1],
+      size: sizeFromContext(m[3]),
+      tags: tagsFromContext(m[3] || ""),
     });
   }
-  if (magnets.length) return magnets;
-  var re2 = /href=["'](magnet:\?[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  while ((m = re2.exec(html))) {
-    var h2 = decodeHtmlEntities(m[1]);
-    var n2 = decodeHtmlEntities(String(m[2] || "").replace(/<[^>]+>/g, ""));
-    if (!h2 || seen[h2]) continue;
-    seen[h2] = true;
-    magnets.push({ name: n2 || "磁力", magnet: h2, size: "", tags: [] });
+
+  // 2) LTX 区常见：class 在前、href 在后
+  var re2 =
+    /class=["'][^"']*magnet-item__name[^"']*["'][^>]*href=["'](magnet:\?[^"']+)["'][^>]*>([\s\S]*?)<\/a>([\s\S]*?)(?:<\/div>|<div class="magnet-item__actions")/gi;
+  while ((m = re2.exec(text))) {
+    pushMagnet({
+      name: nameFromAnchor(m[2]) || "磁力",
+      magnet: m[1],
+      size: sizeFromContext(m[3]),
+      tags: tagsFromContext(m[3] || ""),
+    });
+  }
+
+  // 3) 任意锚点磁力链接（1/2 已抓的同哈希会被去重）
+  var re3 = /href=["'](magnet:\?[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  while ((m = re3.exec(text))) {
+    pushMagnet({
+      name: nameFromAnchor(m[2]) || "磁力",
+      magnet: m[1],
+      size: "",
+      tags: [],
+    });
+  }
+
+  // 4) data-* / 复制按钮 / JS 字符串里的裸磁力
+  //    档位/特征只认 URI 自身的 dn= 参数：周边 HTML 是相邻磁力块的标签，
+  //    跨元素扫描会把邻居的 720P/1080P 误判成本磁力档位。
+  var re4 = /magnet:\?xt=urn:btih:([0-9a-zA-Z]{32,40})[^"'\s<>\\]*/gi;
+  while ((m = re4.exec(text))) {
+    var dnMatch = m[0].match(/[?&]dn=([^&"'\s<>]+)/i);
+    var dnName = "";
+    if (dnMatch) {
+      try {
+        dnName = nameFromAnchor(decodeURIComponent(dnMatch[1]));
+      } catch (e4) {
+        dnName = nameFromAnchor(dnMatch[1]);
+      }
+    }
+    pushMagnet({
+      name: dnName || "磁力",
+      magnet: m[0],
+      hash: m[1].toLowerCase(),
+      // 体积只看磁力之后的同级节点，避免吃到前一个磁力块的尺寸
+      size: sizeFromContext(text.slice(m.index + m[0].length, m.index + m[0].length + 300)),
+      tags: tagsFromContext(m[0]),
+    });
   }
   return magnets;
 }
@@ -2550,6 +2648,146 @@ function buildMagnetRelatedItems(magnets, ctx) {
         (m.size ? "\n体积: " + m.size : "") +
         (tags ? "\n特征: " + tags : "") +
         "\n来源: JavRanking\n点击自动转存到光鸭云盘\n" +
+        m.magnet,
+      coverUrl: ctx.cover || undefined,
+      posterPath: ctx.cover || undefined,
+      backdropPath: ctx.cover || undefined,
+    });
+  });
+  return items;
+}
+
+/* ============ LTX 磁力分级分集（对齐 javdb 可视化版分集样式） ============ */
+
+var MAGNET_EPISODE_TOGGLE_KEY = "jvr.ltx_magnet_episode_enabled";
+
+/**
+ * 读取 LTX 分级分集开关：params 直传 → 上次列表参数 → storage，默认开启。
+ * 与 rememberParams 的三级回退保持同一模式，兼容 Forward 空对象 params。
+ */
+function resolveLtxMagnetEpisodeEnabled(params) {
+  var raw = "";
+  var sources = [params, lastRequestParams];
+  for (var s = 0; s < sources.length; s++) {
+    var src = sources[s];
+    if (!src) continue;
+    raw = getText(src.ltx_magnet_episode_enabled);
+    if (!raw && src.global) raw = getText(src.global.ltx_magnet_episode_enabled);
+    if (!raw && src.globalParams) {
+      if (Array.isArray(src.globalParams)) {
+        for (var i = 0; i < src.globalParams.length; i++) {
+          var it = src.globalParams[i];
+          if (!it) continue;
+          if (getText(it.name || it.key) === "ltx_magnet_episode_enabled") {
+            raw = getText(it.value != null ? it.value : it.val);
+            if (raw) break;
+          }
+        }
+      } else {
+        raw = getText(src.globalParams.ltx_magnet_episode_enabled);
+      }
+    }
+    if (raw) break;
+  }
+  if (!raw) {
+    try {
+      raw = getText(Widget.storage.get(MAGNET_EPISODE_TOGGLE_KEY));
+    } catch (e) {}
+  }
+  if (!raw) return true;
+  return String(raw).toLowerCase() === "true";
+}
+
+/** 详情 HTML 是否为 LTX 破解专区影片（横幅/栏目文案或 ltx 类名） */
+function detectLtxFromHtml(html) {
+  var head = String(html || "").slice(0, 30000);
+  if (/AI\s*去码|去码破解|最强\s*AI\s*破解|无水印破解/.test(head)) return true;
+  return /(?:^|[^a-zA-Z])ltx(?:[^a-zA-Z]|$)/i.test(head);
+}
+
+function magnetIsLtxCrack(m) {
+  var text = ((m.tags || []).join(" ") + " " + (m.name || "")).toLowerCase();
+  return /ltx|破解|去码|uncensor/.test(text);
+}
+
+function magnetHasSubtitle(m) {
+  var text = ((m.tags || []).join(" ") + " " + (m.name || "")).toLowerCase();
+  return /中字|中文字幕|内封字幕|内嵌字幕|chinese\s*sub/.test(text);
+}
+
+/** 按名称/特征/体积推断画质档位；order 越小档位越高 */
+function magnetTierOf(m) {
+  var text = ((m.tags || []).join(" ") + " " + (m.name || "") + " " + (m.size || "")).toLowerCase();
+  if (/蓝光|原盘|blu[- ]?ray|bdmv|remux/.test(text)) return { title: "蓝光原盘", order: 1 };
+  if (/4k|2160p?|uhd/.test(text)) return { title: "4K 超清", order: 2 };
+  if (/1080p?|fhd/.test(text)) return { title: "1080P", order: 3 };
+  if (/720p?/.test(text)) return { title: "720P", order: 4 };
+  if (/(^|[^0-9])480p?([^0-9p]|$)/.test(text)) return { title: "480P", order: 5 };
+  return { title: "其他", order: 9 };
+}
+
+/**
+ * 把 LTX 磁力构建为分级分集列表（javdb 可视化样式）：
+ * - 每项 mediaType:"tv"，带 episode 序号
+ * - link = gy:<hash>，点击 → loadDetail → handleGuangyaMagnetSave 自动转存光鸭
+ * - 排序：画质档位升序 → 同档内 LTX 破解优先 → 体积大优先
+ */
+function buildMagnetEpisodeItems(magnets, ctx) {
+  ctx = ctx || {};
+  var entries = (magnets || [])
+    .map(function (m) {
+      var hash = m.hash || extractMagnetHash(m.magnet);
+      if (!hash) return null;
+      return {
+        m: m,
+        hash: hash,
+        tier: magnetTierOf(m),
+        ltx: magnetIsLtxCrack(m),
+        sub: magnetHasSubtitle(m),
+        mb: parseSizeToMb(m.size),
+      };
+    })
+    .filter(function (e) {
+      return !!e;
+    });
+  entries.sort(function (a, b) {
+    if (a.tier.order !== b.tier.order) return a.tier.order - b.tier.order;
+    if (a.ltx !== b.ltx) return a.ltx ? -1 : 1;
+    return b.mb - a.mb;
+  });
+  var items = [];
+  entries.slice(0, 50).forEach(function (e, idx) {
+    var m = e.m;
+    var flags = [];
+    if (e.ltx) flags.push("LTX破解");
+    if (e.sub) flags.push("中字");
+    cacheMagnet(e.hash, {
+      magnet: m.magnet,
+      hash: e.hash,
+      name: m.name || "",
+      size: m.size || "",
+      tags: m.tags || [],
+      code: ctx.code || "",
+      title: ctx.title || "",
+      cover: ctx.cover || "",
+    });
+    var titleParts = ["🧲 第" + (idx + 1) + "集"];
+    titleParts.push((e.ltx ? "LTX破解 · " : "") + e.tier.title);
+    if (m.size) titleParts.push(m.size);
+    if (e.sub && !e.ltx) titleParts.push("中字");
+    items.push({
+      id: e.hash,
+      type: "url",
+      mediaType: "tv",
+      episode: idx + 1,
+      title: titleParts.join(" · "),
+      link: MAGNET_LINK_PREFIX + e.hash,
+      description:
+        (m.name || "磁力") +
+        (m.size ? "\n体积: " + m.size : "") +
+        ((m.tags || []).length ? "\n特征: " + m.tags.join(" · ") : "") +
+        "\n分级: " + e.tier.title + (e.ltx ? " · LTX破解" : "") + (e.sub ? " · 中字" : "") +
+        "\n点击自动转存到光鸭云盘\n" +
         m.magnet,
       coverUrl: ctx.cover || undefined,
       posterPath: ctx.cover || undefined,
@@ -2676,7 +2914,7 @@ async function loadVideoDetail(owned, params) {
       };
 
   // HTML 补全磁力 / 剧照 / JSON-LD（失败则返回 JSON 基础详情）
-  return await enrichDetailFromHtml(base, videoId, params);
+  return await enrichDetailFromHtml(base, videoId, params, indexMeta);
 }
 
 async function loadWorksFromActressMarkdown(name, params) {
@@ -3233,6 +3471,28 @@ function rememberParams(params) {
     if (minMb !== "" && Widget.storage && typeof Widget.storage.set === "function") {
       Widget.storage.set("jvr.magnet_min_video_mb", minMb);
     }
+    var ltxEp = getText(params && params.ltx_magnet_episode_enabled);
+    if (!ltxEp && params && params.global) {
+      ltxEp = getText(params.global.ltx_magnet_episode_enabled);
+    }
+    if (!ltxEp && params && params.globalParams) {
+      if (Array.isArray(params.globalParams)) {
+        for (var q = 0; q < params.globalParams.length; q++) {
+          var it4 = params.globalParams[q];
+          if (!it4) continue;
+          var n4 = getText(it4.name || it4.key);
+          if (n4 === "ltx_magnet_episode_enabled") {
+            ltxEp = getText(it4.value != null ? it4.value : it4.val);
+            if (ltxEp) break;
+          }
+        }
+      } else {
+        ltxEp = getText(params.globalParams.ltx_magnet_episode_enabled);
+      }
+    }
+    if (ltxEp !== "" && Widget.storage && typeof Widget.storage.set === "function") {
+      Widget.storage.set(MAGNET_EPISODE_TOGGLE_KEY, ltxEp);
+    }
   } catch (e) {}
 }
 
@@ -3629,7 +3889,7 @@ function buildDetailFromIndex(meta, params) {
   };
 }
 
-async function enrichDetailFromHtml(base, videoId, params) {
+async function enrichDetailFromHtml(base, videoId, params, indexMeta) {
   var html = "";
   try {
     html = await fetchVideoDetailHtml(videoId, params);
@@ -3722,17 +3982,41 @@ async function enrichDetailFromHtml(base, videoId, params) {
     genres.unshift({ id: maker, title: maker });
   }
 
-  var relatedItems = buildMagnetRelatedItems(magnets, {
-    code: code,
-    title: title,
-    cover: coverMain,
-  });
+  // LTX 破解影片：磁力按画质分级放入分集列表（对齐 javdb 可视化版），点击自动转存光鸭
+  var isLtxVideo =
+    (indexMeta && indexMeta.hasLtx === true) ||
+    detectLtxFromHtml(html) ||
+    magnets.some(function (m) {
+      return magnetIsLtxCrack(m);
+    });
+  var magnetEpisodes = [];
+  var relatedItems = [];
+  if (isLtxVideo && magnets.length && resolveLtxMagnetEpisodeEnabled(params)) {
+    magnetEpisodes = buildMagnetEpisodeItems(magnets, {
+      code: code,
+      title: title,
+      cover: coverMain,
+      isLtxVideo: true,
+    });
+  } else {
+    relatedItems = buildMagnetRelatedItems(magnets, {
+      code: code,
+      title: title,
+      cover: coverMain,
+    });
+  }
 
   var descParts = [];
   if (maker) descParts.push("片商: " + maker);
   if (releaseDate) descParts.push(releaseDate);
   if (durationMin) descParts.push(durationMin + " 分钟");
-  if (magnets.length) descParts.push("磁力×" + magnets.length + "（相似作品区，按体积排序，点击转存光鸭）");
+  if (magnets.length) {
+    descParts.push(
+      magnetEpisodes.length
+        ? "磁力×" + magnets.length + "（已按画质分级放入分集列表，点击转存光鸭）"
+        : "磁力×" + magnets.length + "（相似作品区，按体积排序，点击转存光鸭）"
+    );
+  }
   if (ld.aggregateRating && ld.aggregateRating.ratingCount) {
     descParts.push(ld.aggregateRating.ratingCount + " 人评");
   }
@@ -3745,7 +4029,7 @@ async function enrichDetailFromHtml(base, videoId, params) {
     if (preview) trailers = [{ coverUrl: coverMain || undefined, url: preview }];
   }
 
-  return {
+  var detail = {
     id: code || videoId,
     type: "url",
     mediaType: "movie",
@@ -3769,6 +4053,13 @@ async function enrichDetailFromHtml(base, videoId, params) {
     trailers: trailers.length ? trailers : undefined,
     relatedItems: relatedItems.length ? relatedItems : undefined,
   };
+  if (magnetEpisodes.length) {
+    // javdb 可视化样式：详情条目转 tv + episodeItems，App 以分集列表展示磁力
+    detail.mediaType = "tv";
+    detail.episode = magnetEpisodes.length;
+    detail.episodeItems = magnetEpisodes;
+  }
+  return detail;
 }
 
 async function loadTodayWho(params) {
