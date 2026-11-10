@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.netflav",
   title: "Netflav",
-  version: "1.6.0",
+  version: "1.6.1",
   requiredVersion: "0.0.1",
   description: "Netflav 手机直连浏览：分类独立模块与分类选择器、搜索与增强详情；18mag 番号磁力、光鸭转存及公开播放线路",
   author: "老头",
@@ -307,29 +307,33 @@ function imageUrls(value) {
   });
 }
 
-function mapListMovie(movie, params) {
+function mapListMovie(movie, params, omitImages) {
   movie = movie || {};
+  params = params || {};
   var owned = parseOwnedLink("netflav:video:" + safeText(movie.videoId));
   if (!owned) return null;
   var code = safeText(movie.code);
   var title = safeText(params.locale === "en" ? movie.title_en || movie.title : movie.title_zh || movie.title);
   title = title || code || owned.videoId;
   if (code && title.toUpperCase().indexOf(code.toUpperCase()) !== 0) title = code + " " + title;
-  var sitePreview = safeImageUrl(movie.preview) || safeImageUrl(movie.preview_hp);
-  var bundle = nfCoverBundle(code, sitePreview, nfCachedProbe(code));
-  var cover = bundle.coverUrl;
-  var poster = bundle.posterPath;
-  var backdrop = bundle.backdropPath;
-  return {
+  var result = {
     id: owned.link, type: "url", mediaType: "movie", link: owned.link,
-    title: title, coverUrl: cover || undefined, posterPath: poster || undefined,
-    backdropPath: backdrop || undefined, detailPoster: (params.image_style === "poster" ? poster : backdrop) || undefined,
+    title: title,
     releaseDate: safeText(movie.releaseDate || movie.sourceDate),
     duration: Number(movie.duration) > 0 ? Number(movie.duration) : undefined,
     durationText: safeText(movie.durationText) || undefined,
-    description: [code ? "番号: " + code : "", nfUniqueNames(movie.actors).join(" / ")].filter(Boolean).join(" | "),
-    headers: { Referer: NF_SITE + "/" }
+    description: [code ? "番号: " + code : "", nfUniqueNames(movie.actors).join(" / ")].filter(Boolean).join(" | ")
   };
+  if (!omitImages) {
+    var sitePreview = safeImageUrl(movie.preview) || safeImageUrl(movie.preview_hp);
+    var bundle = nfCoverBundle(code, sitePreview, nfCachedProbe(code));
+    result.coverUrl = bundle.coverUrl || undefined;
+    result.posterPath = bundle.posterPath || undefined;
+    result.backdropPath = bundle.backdropPath || undefined;
+    result.detailPoster = (params.image_style === "poster" ? bundle.posterPath : bundle.backdropPath) || undefined;
+    result.headers = { Referer: NF_SITE + "/" };
+  }
+  return result;
 }
 
 function mapMovies(items, params) {
@@ -435,8 +439,7 @@ async function buildMagnetItems(items, movie) {
     output.push({
       id: link, type: "url", mediaType: "movie", link: link,
       title: [movie.code, size, tags.join(" · "), "转存光鸭"].filter(Boolean).join(" | "),
-      description: ["来源: 18mag（当前番号精确匹配，按大小排序）", safeText(item.name), "点击此条目提交光鸭离线任务；不会自动转存"].filter(Boolean).join("\n"),
-      coverUrl: safeImageUrl(movie.coverUrl) || undefined, backdropPath: safeImageUrl(movie.backdropPath || movie.coverUrl) || undefined
+      description: ["来源: 18mag（当前番号精确匹配，按大小排序）", safeText(item.name), "点击此条目提交光鸭离线任务；不会自动转存"].filter(Boolean).join("\n")
     });
   }
   return output;
@@ -451,16 +454,12 @@ async function loadDetail(link, params) {
   var rawDetail = await nfGetRawDetail(owned.videoId, deadline);
   var movie = nfNormalizeMovie(rawDetail, false);
   if (!movie || movie.videoId !== owned.videoId) throw new Error("详情身份与请求不一致");
-  try {
-    if (buildImageCandidatesFromValue(movie.code).strategy === "direct-dmm") await nfFetchProbe(movie.code, params);
-  } catch (e) {}
-  var result = mapListMovie(movie, params);
+  // 详情不返回图片字段，不覆盖客户端已有的顶图或海报。
+  var result = mapListMovie(movie, params, true);
   var code = normalizeMovieCode(movie.code);
   if (code) result.id = code;
-  var stills = compactUniqueUrls([].concat(nfHdGallery(movie.code, 10), Array.isArray(movie.backdropPaths) ? movie.backdropPaths : [], movie.previewImagesUrl ? [movie.previewImagesUrl] : []));
-  if (stills.length) result.backdropPaths = stills;
   var trailer = movie.previewVideo && /\.(?:mp4|m3u8)(?:[?#]|$)/i.test(movie.previewVideo) && nfPublicUrl(movie.previewVideo) ? movie.previewVideo : "";
-  if (trailer) result.trailers = [{ coverUrl: result.coverUrl || undefined, url: trailer }];
+  if (trailer) result.trailers = [{ url: trailer }];
   result.genreItems = nfUniqueNames(movie.tags).slice(0, 12).map(function (name) {
     return { id: name, title: name };
   });
@@ -1388,6 +1387,7 @@ function nfNormalizeMovie(raw, withRelated) {
     producer: nfText(get("producer"), 120), studio: nfText(get("studio"), 120), director: nfText(get("director"), 120),
     series: nfText(get("series"), 120), label: nfText(get("label"), 120),
     views: Number(get("views")) > 0 ? Number(get("views")) : 0,
+    preview: nfImage(get("preview")), preview_hp: nfImage(get("preview_hp")),
     previewVideo: typeof get("previewVideo") === "string" ? get("previewVideo") : "",
     previewImagesUrl: typeof get("previewImagesUrl") === "string" ? get("previewImagesUrl") : "",
     relatedItems: []
