@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.netflav",
   title: "Netflav",
-  version: "1.5.0",
+  version: "1.6.0",
   requiredVersion: "0.0.1",
   description: "Netflav 手机直连浏览：分类独立模块与分类选择器、搜索与增强详情；18mag 番号磁力、光鸭转存及公开播放线路",
   author: "老头",
@@ -16,7 +16,9 @@ WidgetMetadata = {
     { name: "guangya_token", title: "光鸭 refresh_token", type: "input", value: "", description: "只在点击转存时使用；不发送给 Netflav 或 18mag" },
     { name: "guangya_parent_id", title: "光鸭保存目录 ID", type: "input", value: "", description: "留空保存到根目录" },
     { name: "magnet_min_video_mb", title: "最小保留视频 MB", type: "input", value: "0" },
-    { name: "magnet_block_patterns", title: "拦截正则", type: "input", value: "", description: "分号分隔；留空使用广告/预告过滤规则" }
+    { name: "magnet_block_patterns", title: "拦截正则", type: "input", value: "", description: "分号分隔；留空使用广告/预告过滤规则" },
+    { name: "dmm_probe_worker", title: "DMM 高清探测服务", type: "input", value: "https://dmm.laotou.ccwu.cc", description: "与 JavDB 相同的探测服务；服务不可达时竖图回退站点图" },
+    { name: "dmm_probe_api_key", title: "探测服务密钥（可选）", type: "input", value: "", description: "对应探测服务的 X-Probe-Key；没有则留空" }
   ],
   modules: [
     { id: "recommended", title: "推荐", functionName: "loadRecommended", cacheDuration: 600, params: [{ name: "page", title: "页码", type: "page", value: "1" }] },
@@ -111,29 +113,128 @@ function paramFromBlob(blob, name) {
   return undefined;
 }
 
+/* ========================= 参数解析（复用 javverse 验证过的取参链路） ========================= */
+function nfWidgetId() {
+  try { return (WidgetMetadata && WidgetMetadata.id) || "forward.netflav"; } catch (e) { return "forward.netflav"; }
+}
+
+function nfParamAliases(name) {
+  if (name === "guangya_token") return ["guangya_token", "GUANGYA_REFRESH_TOKEN", "guangya_refresh_token", "guangyaRefreshToken", "refresh_token"];
+  if (name === "guangya_parent_id") return ["guangya_parent_id", "GUANGYA_PARENT_ID", "guangyaParentId", "parentId", "parent_id"];
+  if (name === "magnet_min_video_mb") return ["magnet_min_video_mb", "min_video_mb", "magnetMinVideoMb"];
+  if (name === "magnet_block_patterns") return ["magnet_block_patterns", "block_patterns", "magnetBlockPatterns"];
+  return [name];
+}
+
+function nfPickFromObject(obj, aliases) {
+  if (!obj || typeof obj !== "object" || isPromiseLike(obj)) return "";
+  if (Array.isArray(obj)) {
+    for (var a = 0; a < aliases.length; a++) {
+      var want = String(aliases[a] || "");
+      if (!want) continue;
+      for (var i = 0; i < obj.length; i++) {
+        var item = obj[i];
+        if (!item || typeof item !== "object") continue;
+        var itemName = String(item.name || item.key || item.id || "").trim();
+        if (itemName !== want) continue;
+        var fromItem = normalizeStoreValue(item.value !== undefined ? item.value : item.val !== undefined ? item.val : item.data);
+        if (fromItem) return fromItem;
+      }
+    }
+    return "";
+  }
+  for (var j = 0; j < aliases.length; j++) {
+    if (obj[aliases[j]] === undefined || obj[aliases[j]] === null) continue;
+    var val = normalizeStoreValue(obj[aliases[j]]);
+    if (val) return val;
+  }
+  return "";
+}
+
+function nfPickFromParamsTree(params, aliases) {
+  params = params || {};
+  return (
+    nfPickFromObject(params, aliases) ||
+    nfPickFromObject(params.global, aliases) ||
+    nfPickFromObject(params.globalParams, aliases) ||
+    nfPickFromObject(params.settings, aliases) ||
+    ""
+  );
+}
+
+function nfStorageKeysFor(name) {
+  var id = nfWidgetId();
+  var keys = [id + ".globalParams." + name, id + ".global." + name, "forward." + id + ".globalParams." + name, NF_PARAM_PREFIX + name, name];
+  if (/token|refresh/i.test(name)) keys.push("netflav.guangya_token", "guangya_refresh_token");
+  if (/parent/i.test(name)) keys.push("netflav.guangya_parent_id");
+  return keys;
+}
+
+function nfReadStorageBlob(key) {
+  var raw = readStorageRaw(key);
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw); } catch (e) { return null; }
+  }
+  if (typeof raw === "object" && !isPromiseLike(raw)) return raw;
+  return null;
+}
+
+function nfPickFromStorage(aliases) {
+  var id = nfWidgetId();
+  var blobKeys = [id + ".globalParams", id + ".global", "globalParams", "forward." + id + ".globalParams"];
+  for (var i = 0; i < blobKeys.length; i++) {
+    var hit = nfPickFromObject(nfReadStorageBlob(blobKeys[i]), aliases);
+    if (hit) return hit;
+  }
+  for (var a = 0; a < aliases.length; a++) {
+    var keys = nfStorageKeysFor(aliases[a]);
+    for (var k = 0; k < keys.length; k++) {
+      var v = normalizeStoreValue(readStore(keys[k]));
+      if (v) return v;
+    }
+  }
+  return "";
+}
+
+async function nfResolveParam(params, name) {
+  var aliases = nfParamAliases(name);
+  var raw = nfPickFromParamsTree(params, aliases);
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && typeof Widget.getGlobalParams === "function") {
+        raw = nfPickFromObject(await Widget.getGlobalParams(), aliases);
+      }
+    } catch (e) {}
+  }
+  if (!raw) {
+    try {
+      if (typeof Widget !== "undefined" && Widget.globalParams) {
+        raw = nfPickFromObject(await Widget.globalParams, aliases);
+      }
+    } catch (e2) {}
+  }
+  if (!raw) raw = nfPickFromStorage(aliases);
+  if (raw === undefined || raw === null) raw = "";
+  return normalizeStoreValue(raw);
+}
+
 async function ensureGlobalParams(params) {
   params = params || {};
-  var widgetGlobals;
-  try { widgetGlobals = await Widget.globalParams; } catch (e) {}
   var result = Object.assign({}, params);
   for (var i = 0; i < NF_PARAM_KEYS.length; i++) {
     var name = NF_PARAM_KEYS[i];
-    var value = Object.prototype.hasOwnProperty.call(params, name) ? params[name] : paramFromBlob(params.globalParams, name);
-    if (value === undefined) value = paramFromBlob(widgetGlobals, name);
-    if (value === undefined) {
-      var blobs = ["forward.netflav.globalParams", "forward.netflav.global"];
-      for (var b = 0; b < blobs.length && value === undefined; b++) value = paramFromBlob(await readStorageRawAsync(blobs[b]), name);
+    var value = await nfResolveParam(params, name);
+    if (!value) {
+      var index = -1;
+      for (var m = 0; m < WidgetMetadata.globalParams.length; m++) {
+        if (WidgetMetadata.globalParams[m].name === name) { index = m; break; }
+      }
+      if (index >= 0) value = normalizeStoreValue(WidgetMetadata.globalParams[index].value);
     }
-    if (value === undefined) value = await readStorageRawAsync(NF_PARAM_PREFIX + name);
-    if (value === undefined) {
-      var candidates = ["forward.netflav.globalParams." + name, "forward.netflav." + name];
-      for (var k = 0; k < candidates.length && value === undefined; k++) value = await readStorageRawAsync(candidates[k]);
-    }
-    if (value === undefined) value = NF_PARAMS[name];
-    if (value === undefined) value = WidgetMetadata.globalParams[i].value;
-    result[name] = normalizeStoreValue(value);
-    NF_PARAMS[name] = result[name];
-    await writeStoreAsync(NF_PARAM_PREFIX + name, result[name]);
+    result[name] = value;
+    NF_PARAMS[name] = value;
+    await writeStoreAsync(NF_PARAM_PREFIX + name, value);
   }
   return result;
 }
@@ -147,6 +248,29 @@ async function persistGlobalParamAsync(name, value) {
   await writeStoreAsync(NF_PARAM_PREFIX + name, NF_PARAMS[name]);
 }
 function normalizeGuangyaToken(value) { return normalizeStoreValue(value); }
+
+function nfScanRefreshToken(text) {
+  var m = String(text || "").match(/gy\.[A-Za-z0-9_\-\.~+/=]{8,}/);
+  return m ? m[0] : "";
+}
+
+/* ========================= 名称归一与去重 ========================= */
+function nfPersonName(value) {
+  var name = safeText(value);
+  var stripped = name.replace(/^[A-Za-z]{2,3}\s*:\s*/, "");
+  return stripped || name;
+}
+
+function nfUniqueNames(values) {
+  var seen = {};
+  var out = [];
+  (Array.isArray(values) ? values : []).forEach(function (value) {
+    var name = nfPersonName(value);
+    var key = name.toLowerCase();
+    if (name && !seen[key]) { seen[key] = true; out.push(name); }
+  });
+  return out;
+}
 
 function parseApiPayload(response) {
   var value = response && (response.data !== undefined ? response.data : response.body);
@@ -192,7 +316,7 @@ function mapListMovie(movie, params) {
   title = title || code || owned.videoId;
   if (code && title.toUpperCase().indexOf(code.toUpperCase()) !== 0) title = code + " " + title;
   var sitePreview = safeImageUrl(movie.preview) || safeImageUrl(movie.preview_hp);
-  var bundle = nfCoverBundle(code, sitePreview);
+  var bundle = nfCoverBundle(code, sitePreview, nfCachedProbe(code));
   var cover = bundle.coverUrl;
   var poster = bundle.posterPath;
   var backdrop = bundle.backdropPath;
@@ -203,7 +327,7 @@ function mapListMovie(movie, params) {
     releaseDate: safeText(movie.releaseDate || movie.sourceDate),
     duration: Number(movie.duration) > 0 ? Number(movie.duration) : undefined,
     durationText: safeText(movie.durationText) || undefined,
-    description: [code ? "番号: " + code : "", Array.isArray(movie.actors) ? movie.actors.join(" / ") : ""].filter(Boolean).join(" | "),
+    description: [code ? "番号: " + code : "", nfUniqueNames(movie.actors).join(" / ")].filter(Boolean).join(" | "),
     headers: { Referer: NF_SITE + "/" }
   };
 }
@@ -226,6 +350,7 @@ function pageNumber(params) {
 async function nfAllVideos(kind, value, params) {
   var page = pageNumber(params);
   var videos = await nfGetAllPage(kind, value, page, Date.now() + 30000);
+  await nfPrefetchCoversFor(videos, params);
   return mapMovies(videos, params);
 }
 
@@ -239,7 +364,9 @@ async function loadSectionList(params, section) {
   var config = NF_SECTIONS[section];
   var page = pageNumber(params);
   var state = nfReadNext(await nfGetHtml(NF_SITE + config.path, { page: page }), config.path);
-  return mapMovies(nfListItems(state[config.state], page), params);
+  var movies = nfListItems(state[config.state], page);
+  await nfPrefetchCoversFor(movies, params);
+  return mapMovies(movies, params);
 }
 
 async function loadList(params) {
@@ -264,7 +391,9 @@ async function searchMovies(params) {
   if (keyword.length > 120) throw new Error("搜索关键词过长");
   var page = pageNumber(params);
   var state = nfReadNext(await nfGetHtml(NF_SITE + "/search", { type: "title", keyword: keyword, page: page }), "/search");
-  return mapMovies(nfListItems(state.search, page), params);
+  var movies = nfListItems(state.search, page);
+  await nfPrefetchCoversFor(movies, params);
+  return mapMovies(movies, params);
 }
 
 function validMagnetHash(magnet) {
@@ -322,6 +451,9 @@ async function loadDetail(link, params) {
   var rawDetail = await nfGetRawDetail(owned.videoId, deadline);
   var movie = nfNormalizeMovie(rawDetail, false);
   if (!movie || movie.videoId !== owned.videoId) throw new Error("详情身份与请求不一致");
+  try {
+    if (buildImageCandidatesFromValue(movie.code).strategy === "direct-dmm") await nfFetchProbe(movie.code, params);
+  } catch (e) {}
   var result = mapListMovie(movie, params);
   var code = normalizeMovieCode(movie.code);
   if (code) result.id = code;
@@ -329,14 +461,12 @@ async function loadDetail(link, params) {
   if (stills.length) result.backdropPaths = stills;
   var trailer = movie.previewVideo && /\.(?:mp4|m3u8)(?:[?#]|$)/i.test(movie.previewVideo) && nfPublicUrl(movie.previewVideo) ? movie.previewVideo : "";
   if (trailer) result.trailers = [{ coverUrl: result.coverUrl || undefined, url: trailer }];
-  result.genreItems = (Array.isArray(movie.tags) ? movie.tags : []).slice(0, 12).map(function (tag) {
-    var name = nfCategoryName(tag);
-    return name ? { id: name, title: name } : null;
-  }).filter(Boolean);
-  result.peoples = (Array.isArray(movie.actors) ? movie.actors : []).slice(0, 12).map(function (name) {
-    name = safeText(name).slice(0, 80);
-    return name ? { id: name, title: name } : null;
-  }).filter(Boolean);
+  result.genreItems = nfUniqueNames(movie.tags).slice(0, 12).map(function (name) {
+    return { id: name, title: name };
+  });
+  result.peoples = nfUniqueNames(movie.actors).slice(0, 12).map(function (name) {
+    return { id: name, title: name };
+  });
   var meta = [];
   if (safeText(movie.producer)) meta.push("出品: " + safeText(movie.producer));
   if (safeText(movie.studio)) meta.push("片商: " + safeText(movie.studio));
@@ -345,8 +475,14 @@ async function loadDetail(link, params) {
   if (safeText(movie.label)) meta.push("厂牌: " + safeText(movie.label));
   if (safeText(movie.releaseDate)) meta.push("发行: " + safeText(movie.releaseDate));
   if (Number(movie.views) > 0) meta.push("浏览: " + movie.views);
-  var hasSource = nfPlaybackResources(rawDetail, owned.videoId).length > 0;
-  result.description = [result.description, meta.filter(Boolean).join(" | "), safeText(movie.description), hasSource ? "播放线路在起播时解析；依赖线路提供方与播放器网络" : "上游未提供完整播放直链；可通过下方磁力转存到光鸭后播放"].filter(Boolean).join("\n\n");
+  var hasFull = nfPlaybackResources(rawDetail, owned.videoId).length > 0;
+  var hasPreview = nfDeriveDmmPreviewStreams(rawDetail, owned.videoId).length > 0;
+  var playHint = hasFull
+    ? "播放线路在起播时解析；依赖线路提供方与播放器网络"
+    : hasPreview
+      ? "站点同款 DMM 免费预览流可在起播时解析（非完整影片）；完整观看请用磁力转存到光鸭"
+      : "上游未提供在线播放；可通过磁力转存到光鸭后播放";
+  result.description = [result.description, meta.filter(Boolean).join(" | "), safeText(movie.description), playHint].filter(Boolean).join("\n\n");
   var magnetItems = [];
   if (params.magnet_enabled !== "0") {
     try {
@@ -369,11 +505,26 @@ async function loadResource(params) {
   if (!owned || owned.kind !== "video") return [];
   try {
     var detail = await nfGetRawDetail(owned.videoId, Date.now() + 15000, true);
-    return nfPlaybackResources(detail, owned.videoId);
+    var items = nfPlaybackResources(detail, owned.videoId);
+    // 站点同款：无完整直链时推导 DMM 免费预览 HLS（非完整影片）
+    nfDeriveDmmPreviewStreams(detail, owned.videoId).forEach(function (stream) {
+      if (!items.some(function (item) { return item.url === stream.url; })) items.push(stream);
+    });
+    return items;
   } catch (error) {
-    console.log("[netflav/loadResource] 上游未提供完整播放直链");
+    console.log("[netflav/loadResource] 上游未提供可解析的播放线路");
     return [];
   }
+}
+
+async function nfPrefetchCoversFor(movies, params) {
+  try {
+    var codes = [];
+    (Array.isArray(movies) ? movies : []).forEach(function (movie) {
+      if (movie && movie.code && buildImageCandidatesFromValue(movie.code).strategy === "direct-dmm" && codes.indexOf(movie.code) < 0) codes.push(movie.code);
+    });
+    if (codes.length) await nfPrefetchProbeCovers(codes, params);
+  } catch (e) {}
 }
 
 /* ========================= 光鸭转存入口 ========================= */
@@ -890,19 +1041,30 @@ function chooseFirstCandidate(candidates) {
   return "";
 }
 
-function nfCoverBundle(code, sitePreview) {
+function nfCoverBundle(code, sitePreview, probe) {
   var fallback = nfValidCoverUrl(sitePreview);
   var candidates = buildImageCandidatesFromValue(code);
-  if (candidates.strategy === "direct-dmm" || candidates.strategy === "mgstage") {
-    var poster = chooseFirstCandidate(candidates.posterCandidates);
-    var backdrop = chooseFirstCandidate(candidates.backdropCandidates);
-    if (poster || backdrop) {
-      return {
-        posterPath: poster || backdrop || fallback,
-        backdropPath: backdrop || poster || fallback,
-        coverUrl: backdrop || poster || fallback,
-      };
-    }
+  if (candidates.strategy === "mgstage") {
+    var mgPoster = chooseFirstCandidate(candidates.posterCandidates);
+    var mgBackdrop = chooseFirstCandidate(candidates.backdropCandidates);
+    return {
+      posterPath: mgPoster || mgBackdrop || fallback,
+      backdropPath: mgBackdrop || mgPoster || fallback,
+      coverUrl: mgBackdrop || mgPoster || fallback,
+    };
+  }
+  if (candidates.strategy === "direct-dmm") {
+    var plUrl = chooseFirstCandidate(candidates.backdropCandidates);
+    var probed = probe && typeof probe === "object" ? probe : null;
+    var probePoster = probed ? nfValidCoverUrl(probed.posterUrl) : "";
+    if (probePoster && isLowResDmmPosterUrl(probePoster)) probePoster = "";
+    var probeBackdrop = probed ? nfValidCoverUrl(probed.backdropUrl) : "";
+    // 与 javdb 原版一致：ps.jpg 属低清，绝不作为竖图；探测失败回退站点图
+    return {
+      posterPath: probePoster || fallback,
+      backdropPath: probeBackdrop || plUrl || fallback,
+      coverUrl: probeBackdrop || plUrl || fallback,
+    };
   }
   return { posterPath: fallback, backdropPath: fallback, coverUrl: fallback };
 }
@@ -925,6 +1087,166 @@ function nfHdGallery(code, count) {
     }
   }
   return compactUniqueUrls(urls.map(nfValidCoverUrl)).filter(Boolean);
+}
+
+/* ========================= DMM 高清探测（复用 javdb Probe Worker 方式） ========================= */
+/* ps.jpg 判定为低清（javdb 原版 isLowResDmmPosterUrl），海报必须用探测服务返回的高清变体 */
+var NF_PROBE_STORAGE_PREFIX = "netflav.dmmProbe.v2.";
+var NF_PROBE_DEFAULT_BASE = "https://dmm.laotou.ccwu.cc";
+var NF_PROBE_TTL_OK_MS = 60 * 24 * 3600 * 1000;
+var NF_PROBE_TTL_FAIL_MS = 14 * 24 * 3600 * 1000;
+var NF_PROBE_MEM = {};
+
+function isLowResDmmPosterUrl(url) {
+  var u = String(url || "").toLowerCase();
+  if (!u) return false;
+  if (/[?&]w=147(?:&|$|[?#])/.test(u) && /[?&]h=200(?:&|$|[?#])/.test(u)) return true;
+  if (/pics\.dmm\.co\.jp\/.*ps\.jpe?g(\?|$)/i.test(u)) return true;
+  if (/pics\.dmm\.com\/.*ps\.jpe?g(\?|$)/i.test(u)) return true;
+  return false;
+}
+
+function nfProbeBase(params) {
+  var base = params && params.dmm_probe_worker ? normalizeStoreValue(params.dmm_probe_worker) : readStore("netflav.global.dmm_probe_worker") || NF_PROBE_DEFAULT_BASE;
+  base = String(base || "").replace(/\/+$/, "");
+  return /^https:\/\/[A-Za-z0-9.-]+/.test(base) ? base : "";
+}
+
+function nfProbeHeaders(params) {
+  var headers = { Accept: "application/json" };
+  var key = params && params.dmm_probe_api_key ? normalizeStoreValue(params.dmm_probe_api_key) : readStore("netflav.global.dmm_probe_api_key");
+  if (key) headers["X-Probe-Key"] = key;
+  return headers;
+}
+
+function nfProbeStorageKey(code) {
+  return NF_PROBE_STORAGE_PREFIX + String(code || "").trim().toUpperCase();
+}
+
+function nfLoadProbe(code) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return undefined;
+  try {
+    var raw = readStorageRaw(nfProbeStorageKey(code));
+    if (raw == null || raw === "") return undefined;
+    var entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!entry || !entry.savedAt) return undefined;
+    var ttl = entry.ok ? NF_PROBE_TTL_OK_MS : NF_PROBE_TTL_FAIL_MS;
+    if (Date.now() - Number(entry.savedAt) > ttl) return undefined;
+    if (!entry.ok) return null;
+    var probe = { contentId: String(entry.contentId || ""), posterUrl: nfValidCoverUrl(entry.posterUrl || ""), backdropUrl: nfValidCoverUrl(entry.backdropUrl || "") };
+    if (probe.posterUrl && isLowResDmmPosterUrl(probe.posterUrl)) probe.posterUrl = "";
+    if (!probe.posterUrl && !probe.backdropUrl) return undefined;
+    return probe;
+  } catch (e) {
+    return undefined;
+  }
+}
+
+function nfSaveProbe(code, probe) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return;
+  var entry = { ok: !!probe, savedAt: Date.now() };
+  if (probe) {
+    entry.contentId = String(probe.contentId || "");
+    entry.posterUrl = String(probe.posterUrl || "");
+    entry.backdropUrl = String(probe.backdropUrl || "");
+  }
+  writeStore(nfProbeStorageKey(code), JSON.stringify(entry));
+}
+
+function nfCachedProbe(code) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return null;
+  if (Object.prototype.hasOwnProperty.call(NF_PROBE_MEM, code)) return NF_PROBE_MEM[code];
+  var stored = nfLoadProbe(code);
+  if (stored !== undefined) {
+    NF_PROBE_MEM[code] = stored;
+    return stored;
+  }
+  return null;
+}
+
+async function nfFetchProbe(code, params) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return null;
+  if (Object.prototype.hasOwnProperty.call(NF_PROBE_MEM, code)) return NF_PROBE_MEM[code];
+  var stored = nfLoadProbe(code);
+  if (stored !== undefined) {
+    NF_PROBE_MEM[code] = stored;
+    return stored;
+  }
+  var base = nfProbeBase(params);
+  if (!base) {
+    NF_PROBE_MEM[code] = null;
+    return null;
+  }
+  try {
+    var response = await Widget.http.get(base + "/cover?code=" + encodeURIComponent(code), { headers: nfProbeHeaders(params), timeout: 8000, allow_redirects: true });
+    var data = response && response.data !== undefined ? response.data : response && response.body;
+    if (typeof data === "string") {
+      try { data = JSON.parse(data); } catch (e) { data = null; }
+    }
+    var probe = null;
+    if (data && data.ok && data.best && typeof data.best === "object") {
+      probe = { contentId: String(data.best.contentId || ""), posterUrl: nfValidCoverUrl(data.best.posterUrl || ""), backdropUrl: nfValidCoverUrl(data.best.backdropUrl || "") };
+      if (probe.posterUrl && isLowResDmmPosterUrl(probe.posterUrl)) probe.posterUrl = "";
+      if (!probe.posterUrl && !probe.backdropUrl) probe = null;
+    }
+    if (data && (data.ok === false || (data.ok && data.best))) {
+      NF_PROBE_MEM[code] = probe;
+      nfSaveProbe(code, probe);
+    }
+    return probe;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function nfPrefetchProbeCovers(codes, params) {
+  var pending = [];
+  var seen = {};
+  (codes || []).forEach(function (code) {
+    code = String(code || "").trim().toUpperCase();
+    if (!code || seen[code]) return;
+    seen[code] = true;
+    if (Object.prototype.hasOwnProperty.call(NF_PROBE_MEM, code)) return;
+    var stored = nfLoadProbe(code);
+    if (stored !== undefined) {
+      NF_PROBE_MEM[code] = stored;
+      return;
+    }
+    pending.push(code);
+  });
+  if (!pending.length) return;
+  var base = nfProbeBase(params);
+  if (!base) return;
+  try {
+    var headers = nfProbeHeaders(params);
+    headers["Content-Type"] = "application/json";
+    var response = await Widget.http.post(base + "/probe", { codes: pending.slice(0, 20), force: false, variants: false }, { headers: headers, timeout: 20000, allow_redirects: true });
+    var data = response && response.data !== undefined ? response.data : response && response.body;
+    if (typeof data === "string") {
+      try { data = JSON.parse(data); } catch (e) { data = null; }
+    }
+    var rows = data && (data.results || data.items);
+    if (!Array.isArray(rows)) throw new Error("bad batch");
+    rows.forEach(function (row) {
+      var code = String((row && row.code) || "").trim().toUpperCase();
+      if (!code || pending.indexOf(code) < 0) return;
+      var probe = null;
+      if (row && row.ok && row.best && typeof row.best === "object") {
+        probe = { contentId: String(row.best.contentId || ""), posterUrl: nfValidCoverUrl(row.best.posterUrl || ""), backdropUrl: nfValidCoverUrl(row.best.backdropUrl || "") };
+        if (probe.posterUrl && isLowResDmmPosterUrl(probe.posterUrl)) probe.posterUrl = "";
+        if (!probe.posterUrl && !probe.backdropUrl) probe = null;
+      }
+      NF_PROBE_MEM[code] = probe;
+      nfSaveProbe(code, probe);
+    });
+  } catch (error) {
+    var tasks = pending.slice(0, 20).map(function (code) { return nfFetchProbe(code, params); });
+    try { await Promise.all(tasks); } catch (e2) {}
+  }
 }
 /* ========================= 站点直连 / 结构化数据 ========================= */
 var NF_MAG_SITE = "https://18mag.net";
@@ -1264,6 +1586,42 @@ async function nfGetAllPage(kind, value, page, deadline) {
   query.page = pageNumber({ page: page });
   var state = nfReadNext(await nfGetHtml(NF_SITE + "/all", query, deadline), "/all");
   return nfListItems(state.all, query.page);
+}
+
+/* ========================= 站点同款 DMM 免费预览流推导 ========================= */
+/* 与站点前端一致：由 pl.jpg 封面地址推导 cc3001.dmm.co.jp/hlsvideo/freepv 的三种 m3u8 变体 */
+function nfDmmPreviewFromImage(url) {
+  var t = String(url || "").match(/\/digital\/video\/(\w+)\/(\w+)pl\.jpg/);
+  if (!t) return [];
+  var cid = t[1];
+  var p = cid.match(/(\w)(\w{2})(\w{3})(\w+)/);
+  if (!p) return [];
+  var head = "https://cc3001.dmm.co.jp/hlsvideo/freepv/" + p[1] + "/" + p[1] + p[2] + "/";
+  return [
+    head + cid + "/" + cid + "_dmb_w.m3u8",
+    head + cid.replace("00", "") + "/" + cid.replace("00", "") + "_dmb_w.m3u8",
+    head + cid.replace("00", "") + "/" + cid.replace("00", "") + "mmb.m3u8",
+  ].filter(function (candidate) { return nfPublicUrl(candidate); });
+}
+
+function nfDeriveDmmPreviewStreams(raw, identity) {
+  raw = raw && typeof raw === "object" ? raw : {};
+  var seen = {};
+  var out = [];
+  ["preview_hp", "preview"].forEach(function (key) {
+    nfDmmPreviewFromImage(raw[key]).forEach(function (url) {
+      if (seen[url]) return;
+      seen[url] = true;
+      out.push({
+        name: "DMM 预览流 · 站点同款",
+        url: url,
+        description: "免费预览 HLS（非完整影片），与站点在线播放一致",
+        customHeaders: { Referer: NF_SITE + "/video?id=" + encodeURIComponent(identity) },
+        playerType: "app",
+      });
+    });
+  });
+  return out.slice(0, 3);
 }
 
 /* 精简复用 javdb/modules/09-guangya-magnet.js；不放宽过滤或保存目录 */
