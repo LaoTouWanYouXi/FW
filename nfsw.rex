@@ -40,13 +40,13 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/catemby.js"
     },
     {
-      "id": "forward.catemby",
-      "title": "catemby",
-      "description": "catemby聚合模块",
+      "id": "rex.manko",
+      "title": "manko",
+      "description": "manko聚合模块",
       "requiredVersion": "0.0.1",
       "version": "1.0.0",
       "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/catemby.js"
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/manko.js"
     },
     {
       "id": "forward.javdb",
