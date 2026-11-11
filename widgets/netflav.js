@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.netflav",
   title: "Netflav",
-  version: "1.6.1",
+  version: "1.7.0",
   requiredVersion: "0.0.1",
   description: "Netflav 手机直连浏览：分类独立模块与分类选择器、搜索与增强详情；18mag 番号磁力、光鸭转存及公开播放线路",
   author: "老头",
@@ -475,12 +475,12 @@ async function loadDetail(link, params) {
   if (safeText(movie.releaseDate)) meta.push("发行: " + safeText(movie.releaseDate));
   if (Number(movie.views) > 0) meta.push("浏览: " + movie.views);
   var hasFull = nfPlaybackResources(rawDetail, owned.videoId).length > 0;
-  var hasPreview = nfDeriveDmmPreviewStreams(rawDetail, owned.videoId).length > 0;
+  var hasEmbed = nfCollectEmbedSources(rawDetail).length > 0;
   var playHint = hasFull
     ? "播放线路在起播时解析；依赖线路提供方与播放器网络"
-    : hasPreview
-      ? "站点同款 DMM 免费预览流可在起播时解析（非完整影片）；完整观看请用磁力转存到光鸭"
-      : "上游未提供在线播放；可通过磁力转存到光鸭后播放";
+    : hasEmbed
+      ? "站点提供嵌入播放线路，起播时解析完整直链（可能受提供方限制）；也可用磁力转存到光鸭"
+      : "该影片站点同样显示播放受限（无在线完整源）；可通过磁力转存到光鸭后播放";
   result.description = [result.description, meta.filter(Boolean).join(" | "), safeText(movie.description), playHint].filter(Boolean).join("\n\n");
   var magnetItems = [];
   if (params.magnet_enabled !== "0") {
@@ -502,13 +502,22 @@ async function loadResource(params) {
   var raw = params.link != null ? params.link : params.id;
   var owned = parseOwnedLink(raw);
   if (!owned || owned.kind !== "video") return [];
+  var deadline = Date.now() + 35000;
   try {
-    var detail = await nfGetRawDetail(owned.videoId, Date.now() + 15000, true);
+    var detail = await nfGetRawDetail(owned.videoId, deadline, true);
     var items = nfPlaybackResources(detail, owned.videoId);
-    // 站点同款：无完整直链时推导 DMM 免费预览 HLS（非完整影片）
-    nfDeriveDmmPreviewStreams(detail, owned.videoId).forEach(function (stream) {
-      if (!items.some(function (item) { return item.url === stream.url; })) items.push(stream);
-    });
+    // 站点 sourceList 同规则：srcs 嵌入线路逐个解析完整直链；解析失败或无直连媒体时如实跳过
+    var embeds = nfCollectEmbedSources(detail);
+    for (var i = 0; i < embeds.length && items.length < 6; i++) {
+      try {
+        var resolved = await nfResolveEmbedSource(embeds[i], deadline);
+        resolved.forEach(function (stream) {
+          if (!items.some(function (item) { return item.url === stream.url; })) items.push(stream);
+        });
+      } catch (embedError) {
+        console.log("[netflav/loadResource] 嵌入线路 " + embeds[i].name + " 解析失败: " + (embedError && embedError.message));
+      }
+    }
     return items;
   } catch (error) {
     console.log("[netflav/loadResource] 上游未提供可解析的播放线路");
@@ -1588,40 +1597,89 @@ async function nfGetAllPage(kind, value, page, deadline) {
   return nfListItems(state.all, query.page);
 }
 
-/* ========================= 站点同款 DMM 免费预览流推导 ========================= */
-/* 与站点前端一致：由 pl.jpg 封面地址推导 cc3001.dmm.co.jp/hlsvideo/freepv 的三种 m3u8 变体 */
-function nfDmmPreviewFromImage(url) {
-  var t = String(url || "").match(/\/digital\/video\/(\w+)\/(\w+)pl\.jpg/);
-  if (!t) return [];
-  var cid = t[1];
-  var p = cid.match(/(\w)(\w{2})(\w{3})(\w+)/);
-  if (!p) return [];
-  var head = "https://cc3001.dmm.co.jp/hlsvideo/freepv/" + p[1] + "/" + p[1] + p[2] + "/";
-  return [
-    head + cid + "/" + cid + "_dmb_w.m3u8",
-    head + cid.replace("00", "") + "/" + cid.replace("00", "") + "_dmb_w.m3u8",
-    head + cid.replace("00", "") + "/" + cid.replace("00", "") + "mmb.m3u8",
-  ].filter(function (candidate) { return nfPublicUrl(candidate); });
+/* ========================= 完整播放源（与站点 sourceList 同规则） ========================= */
+/* 站点 pages/video 的 egsb 模块：srcs 为嵌入播放页地址数组，优先 netflavns1/njavplayer/mm/embedrise，
+ * 剔除 netflavns2，屏蔽 streamtape/streamsb/avple/google.com；无源条目站点显示 player_limited。 */
+var NF_EMBED_PRIORITY = ["netflavns1", "njavplayer", "mm", "embedrise"];
+var NF_EMBED_BLOCKED = ["netflavns2", "google.com", "streamsb", "antiadtape", "streamtape", "avple.video"];
+
+function nfEmbedName(url) {
+  var match = String(url || "").match(/^https?:\/\/([^\/?#]+)/i);
+  var host = match ? match[1] : "";
+  var parts = host.split(".");
+  var root = parts.length >= 2 ? parts.slice(1).join(".") : host;
+  return root.slice(0, 2).toUpperCase() || "EMBED";
 }
 
-function nfDeriveDmmPreviewStreams(raw, identity) {
-  raw = raw && typeof raw === "object" ? raw : {};
+function nfCollectEmbedSources(raw) {
+  var list = Array.isArray(raw && raw.srcs) ? raw.srcs.slice(0, 12) : [];
+  var uniq = [];
+  list.forEach(function (entry) {
+    var url = typeof entry === "string" ? entry.trim() : "";
+    if (url && nfPublicUrl(url) && uniq.indexOf(url) < 0) uniq.push(url);
+  });
+  var kept = uniq.filter(function (url) { return !NF_EMBED_BLOCKED.some(function (word) { return url.indexOf(word) >= 0; }); });
+  var prioritized = [];
+  NF_EMBED_PRIORITY.forEach(function (word) {
+    kept.forEach(function (url) { if (url.indexOf(word) >= 0 && prioritized.indexOf(url) < 0) prioritized.push(url); });
+  });
+  kept.forEach(function (url) { if (prioritized.indexOf(url) < 0) prioritized.push(url); });
+  return prioritized.slice(0, 6).map(function (url) {
+    return { src: url, name: nfEmbedName(url) };
+  });
+}
+
+function nfExtractMediaFromText(text) {
+  var normalized = String(text || "").replace(/\\u002f/gi, "/").replace(/\\\//g, "/");
   var seen = {};
   var out = [];
-  ["preview_hp", "preview"].forEach(function (key) {
-    nfDmmPreviewFromImage(raw[key]).forEach(function (url) {
-      if (seen[url]) return;
-      seen[url] = true;
-      out.push({
-        name: "DMM 预览流 · 站点同款",
-        url: url,
-        description: "免费预览 HLS（非完整影片），与站点在线播放一致",
-        customHeaders: { Referer: NF_SITE + "/video?id=" + encodeURIComponent(identity) },
-        playerType: "app",
-      });
+  var pattern = /https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?/gi;
+  var match;
+  while ((match = pattern.exec(normalized)) !== null) {
+    var url = match[0].replace(/[.,;]+$/, "");
+    if (!nfPublicUrl(url) || seen[url]) continue;
+    seen[url] = true;
+    out.push(url);
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+async function nfFetchEmbedPage(url, deadline) {
+  var remaining = (deadline || Date.now() + 20000) - Date.now();
+  if (remaining < 1000) throw new Error("嵌入线路解析超时");
+  var response;
+  try {
+    response = await Widget.http.get(url, {
+      headers: { Accept: "text/html,*/*", Referer: NF_SITE + "/" },
+      timeout: Math.min(12000, remaining),
+      allow_redirects: true,
+      validate_status: false
     });
+  } catch (error) {
+    throw new Error("嵌入页请求失败");
+  }
+  var status = Number(response && (response.status || response.statusCode || response.status_code)) || 0;
+  if (status && status >= 400) throw new Error("嵌入页返回 HTTP " + status);
+  var body = response && (response.data !== undefined ? response.data : response.body);
+  if (typeof body !== "string" || !body) throw new Error("嵌入页内容为空");
+  nfCheckHtmlSize(body);
+  return body;
+}
+
+async function nfResolveEmbedSource(embed, deadline) {
+  var html = await nfFetchEmbedPage(embed.src, deadline);
+  var media = nfExtractMediaFromText(html);
+  if (!media.length) throw new Error("嵌入页未提供直连媒体");
+  return media.map(function (url) {
+    return {
+      name: "完整线路 · " + embed.name,
+      url: url,
+      description: /m3u8/i.test(url) ? "从站点嵌入播放器解析的完整 HLS" : "从站点嵌入播放器解析的完整 MP4",
+      customHeaders: { Referer: embed.src },
+      playerType: "app"
+    };
   });
-  return out.slice(0, 3);
 }
 
 /* 精简复用 javdb/modules/09-guangya-magnet.js；不放宽过滤或保存目录 */
