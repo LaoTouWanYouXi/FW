@@ -38,15 +38,6 @@
       "version": "1.0.0",
       "author": "老头",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/guangya_movie_tv.js"
-    },
-    {
-      "id": "com.laotou.hubtest",
-      "title": "Hub 测试模块",
-      "description": "module-hub 上传链路自测,测完即删",
-      "requiredVersion": "0.0.1",
-      "version": "0.0.1",
-      "author": "LaoTou",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/__hubtest.js"
     }
   ]
 }
