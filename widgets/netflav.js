@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.netflav",
   title: "Netflav",
-  version: "1.7.1",
+  version: "1.8.0",
   requiredVersion: "0.0.1",
   description: "Netflav 手机直连浏览：分类独立模块与分类选择器、搜索与增强详情；18mag 番号磁力、光鸭转存及公开播放线路",
   author: "老头",
@@ -11,14 +11,11 @@ WidgetMetadata = {
   detailCacheDuration: 300,
   globalParams: [
     { name: "locale", title: "语言", type: "enumeration", value: "zh", enumOptions: [{ title: "中文", value: "zh" }, { title: "English", value: "en" }] },
-    { name: "image_style", title: "图片样式", type: "enumeration", value: "backdrop", enumOptions: [{ title: "横图", value: "backdrop" }, { title: "竖图", value: "poster" }] },
     { name: "magnet_enabled", title: "18mag 磁力", type: "enumeration", value: "1", enumOptions: [{ title: "显示", value: "1" }, { title: "关闭", value: "0" }] },
     { name: "guangya_token", title: "光鸭 refresh_token", type: "input", value: "", description: "只在点击转存时使用；不发送给 Netflav 或 18mag" },
     { name: "guangya_parent_id", title: "光鸭保存目录 ID", type: "input", value: "", description: "留空保存到根目录" },
     { name: "magnet_min_video_mb", title: "最小保留视频 MB", type: "input", value: "0" },
-    { name: "magnet_block_patterns", title: "拦截正则", type: "input", value: "", description: "分号分隔；留空使用广告/预告过滤规则" },
-    { name: "dmm_probe_worker", title: "DMM 高清探测服务", type: "input", value: "https://dmm.laotou.ccwu.cc", description: "与 JavDB 相同的探测服务；服务不可达时竖图回退站点图" },
-    { name: "dmm_probe_api_key", title: "探测服务密钥（可选）", type: "input", value: "", description: "对应探测服务的 X-Probe-Key；没有则留空" }
+    { name: "magnet_block_patterns", title: "拦截正则", type: "input", value: "", description: "分号分隔；留空使用广告/预告过滤规则" }
   ],
   modules: [
     { id: "recommended", title: "推荐", functionName: "loadRecommended", cacheDuration: 600, params: [{ name: "page", title: "页码", type: "page", value: "1" }] },
@@ -307,7 +304,7 @@ function imageUrls(value) {
   });
 }
 
-function mapListMovie(movie, params, omitImages) {
+function mapListMovie(movie, params) {
   movie = movie || {};
   params = params || {};
   var owned = parseOwnedLink("netflav:video:" + safeText(movie.videoId));
@@ -324,15 +321,11 @@ function mapListMovie(movie, params, omitImages) {
     durationText: safeText(movie.durationText) || undefined,
     description: [code ? "番号: " + code : "", nfUniqueNames(movie.actors).join(" / ")].filter(Boolean).join(" | ")
   };
-  if (!omitImages) {
-    var sitePreview = safeImageUrl(movie.preview) || safeImageUrl(movie.preview_hp);
-    var bundle = nfCoverBundle(code, sitePreview, nfCachedProbe(code));
-    result.coverUrl = bundle.coverUrl || undefined;
-    result.posterPath = bundle.posterPath || undefined;
-    result.backdropPath = bundle.backdropPath || undefined;
-    result.detailPoster = (params.image_style === "poster" ? bundle.posterPath : bundle.backdropPath) || undefined;
-    result.headers = { Referer: NF_SITE + "/" };
-  }
+  var sitePreview = safeImageUrl(movie.preview) || safeImageUrl(movie.preview_hp);
+  // 列表始终使用站点自己的横版预览图；不在列表阶段探测或生成 DMM 图。
+  result.coverUrl = sitePreview || undefined;
+  result.backdropPath = sitePreview || undefined;
+  result.headers = { Referer: NF_SITE + "/" };
   return result;
 }
 
@@ -354,7 +347,6 @@ function pageNumber(params) {
 async function nfAllVideos(kind, value, params) {
   var page = pageNumber(params);
   var videos = await nfGetAllPage(kind, value, page, Date.now() + 30000);
-  await nfPrefetchCoversFor(videos, params);
   return mapMovies(videos, params);
 }
 
@@ -369,7 +361,6 @@ async function loadSectionList(params, section) {
   var page = pageNumber(params);
   var state = nfReadNext(await nfGetHtml(NF_SITE + config.path, { page: page }), config.path);
   var movies = nfListItems(state[config.state], page);
-  await nfPrefetchCoversFor(movies, params);
   return mapMovies(movies, params);
 }
 
@@ -396,7 +387,6 @@ async function searchMovies(params) {
   var page = pageNumber(params);
   var state = nfReadNext(await nfGetHtml(NF_SITE + "/search", { type: "title", keyword: keyword, page: page }), "/search");
   var movies = nfListItems(state.search, page);
-  await nfPrefetchCoversFor(movies, params);
   return mapMovies(movies, params);
 }
 
@@ -454,10 +444,20 @@ async function loadDetail(link, params) {
   var rawDetail = await nfGetRawDetail(owned.videoId, deadline);
   var movie = nfNormalizeMovie(rawDetail, false);
   if (!movie || movie.videoId !== owned.videoId) throw new Error("详情身份与请求不一致");
-  // 详情不返回图片字段，不覆盖客户端已有的顶图或海报。
-  var result = mapListMovie(movie, params, true);
+  var result = mapListMovie(movie, params);
+  // 只有进入详情才获取高清竖版海报；列表横图不参与顶图赋值。
+  delete result.coverUrl;
+  delete result.backdropPath;
+  delete result.headers;
   var code = normalizeMovieCode(movie.code);
   if (code) result.id = code;
+  var portrait = await nfDetailPortrait(movie.code);
+  if (portrait) {
+    result.posterPath = portrait;
+    result.detailPoster = portrait;
+    result.backdropPath = portrait;
+    result.coverUrl = portrait;
+  }
   var trailer = movie.previewVideo && /\.(?:mp4|m3u8)(?:[?#]|$)/i.test(movie.previewVideo) && nfPublicUrl(movie.previewVideo) ? movie.previewVideo : "";
   if (trailer) result.trailers = [{ url: trailer }];
   result.genreItems = nfUniqueNames(movie.tags).slice(0, 12).map(function (name) {
@@ -523,16 +523,6 @@ async function loadResource(params) {
     console.log("[netflav/loadResource] 上游未提供可解析的播放线路");
     return [];
   }
-}
-
-async function nfPrefetchCoversFor(movies, params) {
-  try {
-    var codes = [];
-    (Array.isArray(movies) ? movies : []).forEach(function (movie) {
-      if (movie && movie.code && buildImageCandidatesFromValue(movie.code).strategy === "direct-dmm" && codes.indexOf(movie.code) < 0) codes.push(movie.code);
-    });
-    if (codes.length) await nfPrefetchProbeCovers(codes, params);
-  } catch (e) {}
 }
 
 /* ========================= 光鸭转存入口 ========================= */
@@ -1114,17 +1104,12 @@ function isLowResDmmPosterUrl(url) {
   return false;
 }
 
-function nfProbeBase(params) {
-  var base = params && params.dmm_probe_worker ? normalizeStoreValue(params.dmm_probe_worker) : readStore("netflav.global.dmm_probe_worker") || NF_PROBE_DEFAULT_BASE;
-  base = String(base || "").replace(/\/+$/, "");
-  return /^https:\/\/[A-Za-z0-9.-]+/.test(base) ? base : "";
+function nfProbeBase() {
+  return NF_PROBE_DEFAULT_BASE;
 }
 
-function nfProbeHeaders(params) {
-  var headers = { Accept: "application/json" };
-  var key = params && params.dmm_probe_api_key ? normalizeStoreValue(params.dmm_probe_api_key) : readStore("netflav.global.dmm_probe_api_key");
-  if (key) headers["X-Probe-Key"] = key;
-  return headers;
+function nfProbeHeaders() {
+  return { Accept: "application/json" };
 }
 
 function nfProbeStorageKey(code) {
@@ -1255,6 +1240,20 @@ async function nfPrefetchProbeCovers(codes, params) {
     var tasks = pending.slice(0, 20).map(function (code) { return nfFetchProbe(code, params); });
     try { await Promise.all(tasks); } catch (e2) {}
   }
+}
+/* 进入详情后才请求高清竖版海报，不用横图替代；worker 返回大尺寸 ps 时按实际分辨率放行。 */
+async function nfDetailPortrait(code) {
+  var candidates = buildImageCandidatesFromValue(code);
+  if (candidates.strategy === "mgstage") return chooseFirstCandidate(candidates.posterCandidates);
+  if (candidates.strategy !== "direct-dmm") return "";
+  var probe = await nfFetchProbe(code);
+  var url = probe && nfValidCoverUrl(probe.posterUrl);
+  if (!url) return "";
+  if (isLowResDmmPosterUrl(url)) {
+    var size = probe && Number(probe.posterSize) || 0;
+    if (size < 100000) return "";
+  }
+  return url;
 }
 /* ========================= 站点直连 / 结构化数据 ========================= */
 var NF_MAG_SITE = "https://18mag.net";
