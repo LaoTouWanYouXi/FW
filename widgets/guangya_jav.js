@@ -10,7 +10,7 @@ WidgetMetadata = {
   id: "guangya.jav",
   title: "光鸭-番号",
   description: "按番号搜索光鸭云盘，详情页自动匹配播放源",
-  iconUrl:'https://www.guangyapan.com/icon.png',
+  iconUrl:'https:\/\/raw.githubusercontent.com\/lige47\/QuanX-icon-rule\/main\/icon\/03CNSoft\/guangya.png',
   author: "老头",
   version: "1.0.2",
   requiredVersion: "0.0.1",
