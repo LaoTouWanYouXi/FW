@@ -1548,11 +1548,11 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "catemby_legacy",
   title: "Catemby遗产",
-  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭；完整片支持resolve令牌注入取直链",
+  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭；完整片弱令牌自动取直链(无需配置)",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
   iconUrl:'https://catembylegacy.fastcdn.dpdns.org/favicon.ico',
-  version: "1.10.5",
+  version: "1.10.6",
   requiredVersion: "0.0.2",
   detailCacheDuration: 3600,
   globalParams: [
@@ -1586,9 +1586,9 @@ WidgetMetadata = {
     },
     {
       name: "catemby_resolve_url",
-      title: "播放源令牌地址（可选）",
+      title: "播放源令牌地址（手动后备）",
       type: "input",
-      description: "浏览器F12→Network复制/api/v/resolve完整URL粘贴；按番号有效，过期后重抓",
+      description: "通常留空（弱令牌自动获取）；弱令牌失效时才从浏览器F12复制/api/v/resolve完整URL粘贴",
       value: "",
     },
   ],
@@ -3030,12 +3030,14 @@ const SITE_GATE_MEM = { gated: 0, netfail: 0 };
 const SITE_GATE_STORE_PREFIX = "catemby.siteGate.v1.";
 const SITE_GATE_TTL_GATED_MS = 60 * 60 * 1000; // token_required：1 小时内不再探测
 const SITE_GATE_TTL_NETFAIL_MS = 5 * 60 * 1000; // 站点挂起/超时：5 分钟内不再探测
+const SITE_GATE_TTL_WEAKFAIL_MS = 30 * 60 * 1000; // 弱令牌通道被拒：30 分钟内不再尝试，回落注入/常规
 const SITE_API_TIMEOUT_MS = 8000;
+const RESOLVE_WEAK_TIMEOUT_MS = 40000; // 弱令牌 resolve 是流式聚合（服务端 budget 30s），超时须放宽
 
-// resolve 实为按番号 Turnstile token 鉴权（浏览器隐形验证码 → POST /api/v/token 换 t）。
-// 脚本无浏览器，但完整 resolve URL（含 v/t）实测可脱离浏览器 curl 重放并返回 NDJSON 全量源。
-// 故支持把浏览器 F12 抓到的 resolve URL 粘贴到全局参数 catemby_resolve_url：番号匹配时优先重放，
-// 令牌失效（401 token_required）则回落常规探测 + gate 负缓存。
+// resolve 鉴权两层：常规通道按番号 Turnstile token（浏览器换票）；但站点自带 weak 弱令牌通道
+// （POST /api/v/token {code, weak:true}，无需 turnstile/登录，实测脚本可直接签发）。
+// 弱令牌 → GET /api/v/resolve?code=&lang=zh&stream=1&t=<v1w.*> 即回 NDJSON 全量源（v/type 可省）。
+// 手动后备：把浏览器 F12 抓到的强令牌 resolve 完整 URL 粘贴到全局参数 catemby_resolve_url。
 const RESOLVE_URL_PARAM = "catemby_resolve_url";
 const RESOLVE_URL_ALIASES = [RESOLVE_URL_PARAM, "catemby_token_url", "catemby_resolve_token"];
 const RESOLVE_URL_MAX_AGE_MS = 6 * 60 * 60 * 1000; // t 含时间戳，超过 6h 视为过期不再浪费请求
@@ -3066,7 +3068,7 @@ function siteGateSavedAt(kind) {
 }
 
 function siteGateActive(kind) {
-  const ttl = kind === "gated" ? SITE_GATE_TTL_GATED_MS : SITE_GATE_TTL_NETFAIL_MS;
+  const ttl = kind === "gated" ? SITE_GATE_TTL_GATED_MS : kind === "weakfail" ? SITE_GATE_TTL_WEAKFAIL_MS : SITE_GATE_TTL_NETFAIL_MS;
   const savedAt = siteGateSavedAt(kind);
   if (!savedAt) return false;
   if (Date.now() - savedAt > ttl) {
@@ -3176,6 +3178,45 @@ function parseResolveNdjson(text) {
   return variants.length ? { variants } : null;
 }
 
+// 站点 POST（JSON 体）：与 gyHttpPost 相同的 Widget.http.post/request 兜底约定
+async function sitePost(url, bodyObj) {
+  const httpOpts = {
+    headers: siteHeaders({ "Content-Type": "application/json", Accept: "application/json" }),
+    timeout: SITE_API_TIMEOUT_MS,
+  };
+  if (typeof Widget.http.post === "function") {
+    return Widget.http.post(url, bodyObj, httpOpts);
+  }
+  if (typeof Widget.http.request === "function") {
+    return Widget.http.request(url, Object.assign({ method: "POST", body: bodyObj }, httpOpts));
+  }
+  throw new Error("Widget.http 无 post/request 方法");
+}
+
+// 弱令牌通道：weak:true 直接签发按番号令牌（v1w.*，exp≈签发秒，仅够立即使用），随即 resolve
+async function fetchResolveViaWeakToken(code, lang) {
+  let token = "";
+  let tokenResp = null;
+  try {
+    tokenResp = await sitePost(siteUrl("/api/v/token"), { code: code, weak: true });
+    const data = parseSiteResponseData(tokenResp);
+    if (data && typeof data.token === "string" && data.token) token = data.token;
+  } catch (e) {
+    token = "";
+  }
+  if (!token) {
+    // 服务端明确拒绝（gate 类错误）→ 视为弱通道收紧；纯网络异常不标记（常规通道会自行处理）
+    const errData = tokenResp ? parseSiteResponseData(tokenResp) : null;
+    return errData && isSiteTokenGateError(errData) ? { gate: errData } : null;
+  }
+  const url = buildQueryUrl(siteUrl("/api/v/resolve"), sanitizeQuery({ code: code, lang: lang || "zh", stream: "1", t: token }));
+  const resp = await Widget.http.get(url, {
+    headers: siteHeaders({ Accept: "application/x-ndjson, application/json, text/plain, */*" }),
+    timeout: RESOLVE_WEAK_TIMEOUT_MS,
+  });
+  return parseResolveResponse(resp);
+}
+
 // resolve 响应统一解析：2xx 支持 NDJSON/JSON，4xx 提取 JSON 错误体供 gate 判定
 function parseResolveResponse(resp) {
   const status = resp && (resp.status || resp.statusCode);
@@ -3257,8 +3298,33 @@ async function resolveFullVideo(code, lang) {
   const primary = pickPrimaryResolveCode(code);
   if (!primary) return null;
 
-  // 1) 令牌注入通道：全局参数里有匹配番号的 resolve URL 就优先重放（不受 gate 限制，
-  //    gate 常因站点 401 而处于激活态，注入正是为绕开它）。成功后顺手解除 gate。
+  // 1) 弱令牌通道（自动，无需任何配置）：weakfail 负缓存期间跳过，避免每次聚合白撞
+  if (!siteGateActive("weakfail")) {
+    let weakResult = null;
+    try {
+      weakResult = await fetchResolveViaWeakToken(primary, lang);
+    } catch (e) {
+      weakResult = null;
+    }
+    if (weakResult && weakResult.data) {
+      const picked = pickResolveVariant(weakResult.data);
+      if (picked) {
+        clearSiteGate("gated");
+        clearSiteGate("netfail");
+        clearSiteGate("weakfail");
+        setCachedResolve(code, picked);
+        // 全量可用列表挂在返回值上供 loadResource 多源展示；先缓存再挂，避免撑爆 storage
+        picked.allUsable = collectResolveVariants(weakResult.data).filter((item) => !isPreviewVariant(item));
+        return picked;
+      }
+    }
+    if (weakResult && weakResult.gate) {
+      // 弱通道也被拒（站点收紧/关闭 weak）：短负缓存，回落注入/常规
+      markSiteGate("weakfail");
+    }
+  }
+
+  // 2) 令牌注入通道（手动后备）：全局参数里有匹配番号的 resolve URL 就重放（不受 gate 限制）。
   const inject = readInjectResolveUrl();
   if (inject && inject.code === primary) {
     let result = null;
@@ -3272,6 +3338,7 @@ async function resolveFullVideo(code, lang) {
       if (picked) {
         clearSiteGate("gated");
         clearSiteGate("netfail");
+        clearSiteGate("weakfail");
         setCachedResolve(code, picked);
         // 全量可用列表挂在返回值上供 loadResource 多源展示；先缓存再挂，避免撑爆 storage
         picked.allUsable = collectResolveVariants(result.data).filter((item) => !isPreviewVariant(item));
