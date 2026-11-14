@@ -4,6 +4,7 @@ var WidgetMetadata = {
     description: "Tips：需要纯净度较高ip，获取 Hanime1 动画，原作者 skywazzle，更新 @ios151",
     author: "ios151",
     site: "https://hanime1.me",
+    iconUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABUAAAAgCAYAAAD9oDOIAAAAXklEQVR4AWNwL/BBwbcVdF4D8X84VtQxRpGX15kOFkfg8+hm4DJ01NBRQ0cNhRpSiIQPkG0oPjw4DR019DwoBcAxQp7ydHpRSY+NqokfZCAI0z1HjRo6auiooaOGAgB+/QHD6doYhQAAAABJRU5ErkJggg==',
     version: "2.5.0",
     requiredVersion: "0.0.2",
     detailCacheDuration: 300,
