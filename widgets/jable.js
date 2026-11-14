@@ -5,6 +5,7 @@ WidgetMetadata = {
   description: "Jable分类浏览.全局搜索.标签.女优.预告.推荐.聚合",
   author: "nibiru｜MakkaPakka｜廿二日",
   site: "https://jable.tv",
+  iconUrl:'https://raw.githubusercontent.com/LaoTouWanYouXi/ICONS/main/Logo/Jable1.png',
   version: "2.6.1",
   requiredVersion: "0.0.2",
   detailCacheDuration: 60,
