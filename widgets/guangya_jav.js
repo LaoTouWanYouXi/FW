@@ -10,12 +10,13 @@ WidgetMetadata = {
   id: "guangya.jav",
   title: "光鸭-番号",
   description: "按番号搜索光鸭云盘，详情页自动匹配播放源",
+  iconUrl:'https://www.guangyapan.com/icon.png',
   author: "老头",
   version: "1.0.2",
   requiredVersion: "0.0.1",
   site: "https://www.guangyapan.com",
   detailCacheDuration: 300,
-  iconUrl:'https://www.guangyapan.com/icon.png',
+  
   globalParams: [
     {
       name: "refresh_token",
