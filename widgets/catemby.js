@@ -1548,11 +1548,11 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "catemby_legacy",
   title: "Catemby遗产",
-  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭",
+  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭；完整片支持resolve令牌注入取直链",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
   iconUrl:'https://catembylegacy.fastcdn.dpdns.org/favicon.ico',
-  version: "1.10.4",
+  version: "1.10.5",
   requiredVersion: "0.0.2",
   detailCacheDuration: 3600,
   globalParams: [
@@ -1582,6 +1582,13 @@ WidgetMetadata = {
       title: "拦截正则（可选）",
       type: "input",
       description: "分号分隔；留空用内置规则",
+      value: "",
+    },
+    {
+      name: "catemby_resolve_url",
+      title: "播放源令牌地址（可选）",
+      type: "input",
+      description: "浏览器F12→Network复制/api/v/resolve完整URL粘贴；按番号有效，过期后重抓",
       value: "",
     },
   ],
@@ -2532,9 +2539,15 @@ function pickResolveVariant(data) {
   if (!data || data.error) return null;
   const usable = collectResolveVariants(data).filter((item) => !isPreviewVariant(item));
   if (!usable.length) return null;
+  // 直链（http 直连 MP4/TS）比 data: 内嵌 m3u8 更可播：后者常带 AES 或被站点 loader 重写，脚本端直连多为毒饵/403
+  const isDirect = (item) => /^https?:\/\//i.test(String(item.sourceUrl || ""));
+  const origRe = /(?:^|_)(?:original|raw)(?:_|$)/i;
+  const labelRe = /原版|完整|full|original|raw/i;
   const picked =
-    usable.find((item) => /(?:^|_)(?:original|raw)(?:_|$)/i.test(String(item.variant || ""))) ||
-    usable.find((item) => /原版|完整|full|original|raw/i.test(String(item.label || "") + " " + String(item.variant || ""))) ||
+    usable.find((item) => isDirect(item) && origRe.test(String(item.variant || ""))) ||
+    usable.find((item) => isDirect(item)) ||
+    usable.find((item) => origRe.test(String(item.variant || ""))) ||
+    usable.find((item) => labelRe.test(String(item.label || "") + " " + String(item.variant || ""))) ||
     usable[0];
   return picked && picked.sourceUrl ? picked : null;
 }
@@ -3019,6 +3032,14 @@ const SITE_GATE_TTL_GATED_MS = 60 * 60 * 1000; // token_required：1 小时内�
 const SITE_GATE_TTL_NETFAIL_MS = 5 * 60 * 1000; // 站点挂起/超时：5 分钟内不再探测
 const SITE_API_TIMEOUT_MS = 8000;
 
+// resolve 实为按番号 Turnstile token 鉴权（浏览器隐形验证码 → POST /api/v/token 换 t）。
+// 脚本无浏览器，但完整 resolve URL（含 v/t）实测可脱离浏览器 curl 重放并返回 NDJSON 全量源。
+// 故支持把浏览器 F12 抓到的 resolve URL 粘贴到全局参数 catemby_resolve_url：番号匹配时优先重放，
+// 令牌失效（401 token_required）则回落常规探测 + gate 负缓存。
+const RESOLVE_URL_PARAM = "catemby_resolve_url";
+const RESOLVE_URL_ALIASES = [RESOLVE_URL_PARAM, "catemby_token_url", "catemby_resolve_token"];
+const RESOLVE_URL_MAX_AGE_MS = 6 * 60 * 60 * 1000; // t 含时间戳，超过 6h 视为过期不再浪费请求
+
 function isSiteTokenGateError(data) {
   const err = String((data && data.error) || "").toLowerCase();
   return (
@@ -3068,6 +3089,112 @@ function clearSiteGate(kind) {
   try {
     Widget.storage.set(SITE_GATE_STORE_PREFIX + kind, JSON.stringify(0));
   } catch (e) {}
+}
+
+// ---------- resolve 令牌注入（catemby_resolve_url） ----------
+
+// 从粘贴内容里提取 resolve URL：必须指向 /api/v/resolve 且带 code 与 t token
+function parseInjectResolveUrl(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  const m = text.match(/https?:\/\/[^\s"'<>]+/i);
+  if (!m) return null;
+  const url = m[0];
+  const qi = url.indexOf("?");
+  if (url.indexOf("/api/v/resolve") < 0 || qi < 0) return null;
+  const q = {};
+  url.slice(qi + 1).split("&").forEach((part) => {
+    const eq = part.indexOf("=");
+    if (eq > 0) {
+      const key = part.slice(0, eq);
+      try {
+        q[key] = decodeURIComponent(part.slice(eq + 1));
+      } catch (e) {
+        q[key] = part.slice(eq + 1);
+      }
+    }
+  });
+  const code = pickPrimaryResolveCode(q.code || "");
+  const token = String(q.t || "").trim();
+  if (!code || !token) return null;
+  // t 形如 v1.<10位时间戳>.<随机串>；取不到时间戳不拦，仅用于过期判断
+  const tsM = token.match(/^v\d+\.(\d{10})\./);
+  const ts = tsM ? Number(tsM[1]) * 1000 : 0;
+  return { url, code, token, ts };
+}
+
+function readInjectResolveUrl() {
+  let raw = "";
+  try {
+    raw = resolveGlobalParamSync(RESOLVE_URL_PARAM, {}, RESOLVE_URL_ALIASES);
+  } catch (e) {
+    return null;
+  }
+  const parsed = parseInjectResolveUrl(raw);
+  if (!parsed) return null;
+  if (parsed.ts && Date.now() - parsed.ts > RESOLVE_URL_MAX_AGE_MS) return null;
+  return parsed;
+}
+
+// resolve 响应解析：兼容旧版单 JSON 对象与新版 NDJSON 流（open/variants/done 逐行）
+function parseResolveNdjson(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return null;
+  if (trimmed.charAt(0) === "[" || trimmed.charAt(0) === "{") {
+    try {
+      const single = JSON.parse(trimmed);
+      if (Array.isArray(single)) return { variants: single };
+      if (single && typeof single === "object") {
+        if (!single.type) return single; // 旧版 {variants:[...]} / {data:{...}}
+        if (Array.isArray(single.variants)) return { variants: single.variants };
+      }
+    } catch (e) {}
+  }
+  // NDJSON：逐行聚合 variants，done 行可能重复全量列表，按 source+variant 去重
+  const variants = [];
+  const seen = {};
+  const lines = trimmed.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let o = null;
+    try {
+      o = JSON.parse(line);
+    } catch (e) {
+      continue;
+    }
+    if (!o || !Array.isArray(o.variants)) continue;
+    for (let j = 0; j < o.variants.length; j++) {
+      const v = o.variants[j];
+      if (!v || typeof v !== "object") continue;
+      const key = String(v.variant || v.label || "") + "|" + String(v.sourceUrl || "").slice(0, 80);
+      if (seen[key]) continue;
+      seen[key] = 1;
+      variants.push(Object.assign({ source: o.source }, v));
+    }
+  }
+  return variants.length ? { variants } : null;
+}
+
+// resolve 响应统一解析：2xx 支持 NDJSON/JSON，4xx 提取 JSON 错误体供 gate 判定
+function parseResolveResponse(resp) {
+  const status = resp && (resp.status || resp.statusCode);
+  if (status && Number(status) >= 400) {
+    const parsed = parseSiteResponseData(resp);
+    return { gate: parsed && isSiteTokenGateError(parsed) ? parsed : null, fail: parsed || "HTTP " + status };
+  }
+  const raw = resp && resp.data;
+  const text = typeof raw === "string" ? raw : raw != null ? JSON.stringify(raw) : "";
+  const data = parseResolveNdjson(text);
+  if (!data) return { fail: "resolve 响应解析失败" };
+  if (data.error) {
+    return { gate: isSiteTokenGateError(data) ? data : null, fail: data };
+  }
+  return { data };
+}
+
+async function fetchResolveViaInject(inject) {
+  return parseResolveResponse(await Widget.http.get(inject.url, { headers: siteHeaders(), timeout: SITE_API_TIMEOUT_MS }));
 }
 
 function resolveCacheKey(code) {
@@ -3126,33 +3253,66 @@ async function resolveFullVideo(code, lang) {
   if (!code) return null;
   const cached = getCachedResolve(code);
   if (cached !== undefined) return cached;
-  // 站点鉴权关闭/网络挂起期间直接秒回空，聚合不再长时间等待
-  if (siteGateActive("gated") || siteGateActive("netfail")) return null;
 
   const primary = pickPrimaryResolveCode(code);
   if (!primary) return null;
 
-  let data = null;
-  try {
-    data = await siteGet("/api/v/resolve", { code: primary, lang: lang || "zh" }, { allowError: true, timeoutMs: SITE_API_TIMEOUT_MS });
-  } catch (e) {
-    data = null;
+  // 1) 令牌注入通道：全局参数里有匹配番号的 resolve URL 就优先重放（不受 gate 限制，
+  //    gate 常因站点 401 而处于激活态，注入正是为绕开它）。成功后顺手解除 gate。
+  const inject = readInjectResolveUrl();
+  if (inject && inject.code === primary) {
+    let result = null;
+    try {
+      result = await fetchResolveViaInject(inject);
+    } catch (e) {
+      result = null;
+    }
+    if (result && result.data) {
+      const picked = pickResolveVariant(result.data);
+      if (picked) {
+        clearSiteGate("gated");
+        clearSiteGate("netfail");
+        setCachedResolve(code, picked);
+        // 全量可用列表挂在返回值上供 loadResource 多源展示；先缓存再挂，避免撑爆 storage
+        picked.allUsable = collectResolveVariants(result.data).filter((item) => !isPreviewVariant(item));
+        return picked;
+      }
+    }
+    if (result && result.gate) {
+      // 令牌失效/被拒：标记 gate 后走常规探测（常规路径同样 401 时直接秒回）
+      markSiteGate("gated");
+    }
   }
-  if (data && isSiteTokenGateError(data)) {
+
+  // 2) 常规通道：无 token 直打（站点撤验证时自动恢复；gate 激活期间秒回空）。
+  //    不走 siteGet：resolve 现返回 NDJSON 流，siteGet 的 JSON 解析会把它当空。
+  if (siteGateActive("gated") || siteGateActive("netfail")) return null;
+
+  const url = buildQueryUrl(siteUrl("/api/v/resolve"), sanitizeQuery({ code: primary, lang: lang || "zh" }));
+  let result = null;
+  try {
+    result = parseResolveResponse(await Widget.http.get(url, { headers: siteHeaders(), timeout: SITE_API_TIMEOUT_MS }));
+  } catch (e) {
+    result = null;
+  }
+  if (result && result.data) {
+    const picked = pickResolveVariant(result.data);
+    if (picked) {
+      clearSiteGate("netfail");
+      setCachedResolve(code, picked);
+      return picked;
+    }
+  }
+  if (result && result.gate) {
+    // token_required 等：标记 gate 秒回，1 小时内不再探测
     markSiteGate("gated");
     return null;
   }
-  const picked = pickResolveVariant(data);
-  if (picked) {
-    clearSiteGate("netfail");
-    setCachedResolve(code, picked);
-    return picked;
-  }
-  if (data && (data.error === "video_not_found" || data.error === "invalid_code")) {
+  if (result && result.data && (result.data.error === "video_not_found" || result.data.error === "invalid_code")) {
     setCachedResolve(code, null);
     return null;
   }
-  if (!data) {
+  if (!result) {
     // 站点无响应（挂起/超时）：短负缓存，避免后续每次聚合都撞超时
     markSiteGate("netfail");
   }
@@ -3327,6 +3487,7 @@ var CATEMBY_GY_GLOBAL_KEYS = [
   "guangya_parent_id",
   "magnet_min_video_mb",
   "magnet_block_patterns",
+  "catemby_resolve_url",
 ];
 
 function normalizeStoreValue(val) {
@@ -5465,15 +5626,24 @@ async function loadResource(params) {
       Origin: SITE_BASE,
     };
 
-    return [
-      {
-        name: "Catemby 完整(" + (fullVideo.label || "原版") + ")",
-        description: "番号：" + code + "\n类型：完整视频",
-        url: fullVideo.sourceUrl,
-        playerType: "system",
-        customHeaders: headers,
-      },
-    ];
+    // 令牌注入通道带全量 usable 列表 → 逐源输出供播放器逐个试播（缓存读回时退化为单一 picked）。
+    // 被选中的源（直链优先）排第一，其余按 resolve 顺序跟在后面。
+    const usableList = Array.isArray(fullVideo.allUsable) && fullVideo.allUsable.length
+      ? fullVideo.allUsable.filter((item) => item && item.sourceUrl && !isPreviewVariant(item))
+      : [];
+    const orderedList = usableList.length
+      ? [fullVideo].concat(usableList.filter((item) => item.sourceUrl !== fullVideo.sourceUrl))
+      : [fullVideo];
+    return orderedList.map((item, idx) => ({
+      name:
+        "Catemby " +
+        (orderedList.length > 1 ? idx + 1 + "." : "") +
+        (item.label || item.variant || "原版"),
+      description: "番号：" + code + "\n类型：完整视频" + (String(item.sourceUrl).indexOf("data:") === 0 ? "（内嵌HLS）" : ""),
+      url: item.sourceUrl,
+      playerType: "system",
+      customHeaders: headers,
+    }));
   } catch (e) {
     console.error("[catemby] loadResource 失败:", e && e.message ? e.message : e);
     return [];
