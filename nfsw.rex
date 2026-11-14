@@ -13,6 +13,15 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/guangya_jav.js"
     },
     {
+      "id": "user.one",
+      "title": "ONE一个",
+      "description": "ONE 一个 · 影视类内容",
+      "requiredVersion": "0.01",
+      "version": "2.3.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/one-rex.js"
+    },
+    {
       "id": "javranking.cc",
       "title": "JavRanking",
       "description": "JavRanking",
