@@ -1310,7 +1310,7 @@ function firstEnumValue(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.9.2",
+  version: "4.9.4",
   requiredVersion: "0.0.1",
   description: "JavDB：榜单/厂牌/分类浏览；详情磁力转存光鸭（不提供播放源）",
   author: "老头",
@@ -4109,6 +4109,16 @@ async function widgetHttp(method, url, options) {
     if (retry < 2 && /unacceptable|signature|expired|签名|jdsignature|ParameterInvalid/i.test(msg)) {
       return widgetHttp(method, url, Object.assign({}, options, { retry: retry + 1 }));
     }
+    // 网络类失败（超时/连接/5xx/限流）退避后重试 1 次；签名类仍按原上限
+    if (
+      retry < 1 &&
+      /timeout|timed?\s*out|超时|ECONN|network|网络|HTTP 5\d\d|HTTP 429/i.test(msg)
+    ) {
+      await new Promise(function (resolve) {
+        setTimeout(resolve, 800);
+      });
+      return widgetHttp(method, url, Object.assign({}, options, { retry: retry + 1 }));
+    }
     throw error;
   }
 }
@@ -4123,16 +4133,52 @@ function parseApiPayload(resp) {
   return resp.data;
 }
 
-async function apiGet(pathname, query, params) {
+/** JWT 失效自愈：强制重登一次（并发合并；无账密时返回空，调用方保持原报错） */
+var _jwtRefreshInFlight = null;
+async function refreshJavdbTokenForRetry(params) {
+  if (_jwtRefreshInFlight) return _jwtRefreshInFlight;
+  _jwtRefreshInFlight = (async function () {
+    try {
+      var result = await loginWithPassword(params || {});
+      if (params) params.apiToken = result.token;
+      return result.token;
+    } catch (e) {
+      return "";
+    } finally {
+      _jwtRefreshInFlight = null;
+    }
+  })();
+  return _jwtRefreshInFlight;
+}
+
+async function apiGet(pathname, query, params, jwtRetryDone) {
   var url = buildQueryUrl(API_BASE + pathname, sanitizeQuery(query));
   var resp = await widgetHttp("GET", url, {
     headerFactory: function () {
       return apiHeaders(params);
     },
   });
-  var data = parseApiPayload(resp);
+  var data;
+  try {
+    data = parseApiPayload(resp);
+  } catch (eParse) {
+    throw new Error("API 响应解析失败: " + pathname);
+  }
   if (!data || data.success !== 1) {
-    throw new Error((data && data.message) || "API 请求失败: " + pathname);
+    var failMsg = (data && data.message) || "API 请求失败: " + pathname;
+    var action = String((data && data.action) || "");
+    // 服务端判定 token 失效（列表匿名可看、详情/磁力要登录，本地 7 天 TTL 未必感知）：
+    // 强制重登换新 token 后重试一次，避免详情持续空白
+    if (
+      !jwtRetryDone &&
+      /JWTVerificationError|請登錄|请登录|請登录|未登錄|未登录/i.test(action + " " + failMsg)
+    ) {
+      var freshToken = await refreshJavdbTokenForRetry(params);
+      if (freshToken && params && String(params.apiToken) === String(freshToken)) {
+        return apiGet(pathname, query, params, true);
+      }
+    }
+    throw new Error(failMsg);
   }
   return data.data;
 }
@@ -4159,7 +4205,10 @@ async function apiPost(pathname, body, params) {
  * - 额外：凭证指纹、Token 过期、并发登录锁、失败冷却
  */
 
-var JAVDB_LOGIN_TIMEOUT_MS = 6000;
+// 对齐 catemby 实测：jdforrepam /v1/sessions POST 在弱网下偏慢，6s 会误杀
+var JAVDB_LOGIN_TIMEOUT_MS = 15000;
+// 网络/服务端类失败自动重试 1 次（业务失败如"账号不存在"不重试）
+var JAVDB_LOGIN_RETRIES = 1;
 // 本组件键 + 可视化版键（读写兼容，避免两套缓存互不认）
 var TOKEN_STORE_KEY = "javdb.global.apiToken";
 var TOKEN_STORE_KEY_ALT = "javdb_token";
@@ -4167,6 +4216,8 @@ var TOKEN_EXPIRES_KEY = "javdb.global.apiTokenExpires";
 var TOKEN_EXPIRES_KEY_ALT = "javdb_token_expires";
 var TOKEN_CREDENTIAL_KEY = "javdb.global.apiTokenCredential";
 var TOKEN_CREDENTIAL_KEY_ALT = "javdb_token_credential";
+var TOKEN_SAVEDAT_KEY = "javdb.global.apiTokenSavedAt";
+var TOKEN_SAVEDAT_KEY_ALT = "javdb_token_savedat";
 var CRED_USER_KEY = "javdb.global.credUser";
 var CRED_USER_KEY_ALT = "javdb_cred_user";
 var CRED_PASS_KEY = "javdb.global.credPass";
@@ -4175,6 +4226,8 @@ var DEVICE_UUID_KEY = "javdb.global.deviceUuid";
 var TOKEN_REFRESH_BUFFER_SECONDS = 5 * 60;
 var LOGIN_FAILURE_COOLDOWN_MS = 30 * 1000;
 var TOKEN_TTL_SECONDS = 7 * 24 * 3600;
+// 清缓存后并发请求可能同时触发登录；刚写入的新鲜 token 直接复用，避免重复 POST 触发风控
+var FRESH_TOKEN_WINDOW_MS = 60 * 1000;
 
 var _loginPromise = null;
 var _loginPromiseCredential = "";
@@ -4319,6 +4372,8 @@ async function clearStoredToken() {
     TOKEN_EXPIRES_KEY_ALT,
     TOKEN_CREDENTIAL_KEY,
     TOKEN_CREDENTIAL_KEY_ALT,
+    TOKEN_SAVEDAT_KEY,
+    TOKEN_SAVEDAT_KEY_ALT,
   ];
   for (var i = 0; i < keys.length; i++) {
     if (Widget.storage && typeof Widget.storage.remove === "function") {
@@ -4337,26 +4392,21 @@ async function clearStoredToken() {
 
 async function persistLoginToken(token, fingerprint) {
   var expiresAt = String(Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS);
+  var savedAt = String(Date.now());
   await writeStoreAsync(TOKEN_STORE_KEY, token);
   await writeStoreAsync(TOKEN_STORE_KEY_ALT, token);
   await writeStoreAsync(TOKEN_EXPIRES_KEY, expiresAt);
   await writeStoreAsync(TOKEN_EXPIRES_KEY_ALT, expiresAt);
   await writeStoreAsync(TOKEN_CREDENTIAL_KEY, fingerprint);
   await writeStoreAsync(TOKEN_CREDENTIAL_KEY_ALT, fingerprint);
+  await writeStoreAsync(TOKEN_SAVEDAT_KEY, savedAt);
+  await writeStoreAsync(TOKEN_SAVEDAT_KEY_ALT, savedAt);
   writeStore(TOKEN_STORE_KEY, token);
   writeStore(TOKEN_STORE_KEY_ALT, token);
 }
 
-/**
- * 可视化版 doLogin：POST /v1/sessions + jdSignature + Dart UA
- */
-async function doLogin(username, password) {
-  var body = Object.assign({}, LOGIN_DEVICE, {
-    device_uuid: ensureDeviceUuid(),
-    username: username,
-    password: password,
-  });
-
+/** 单次登录请求：可视化版 doLogin 主体（POST /v1/sessions + jdSignature + Dart UA） */
+async function postLoginOnce(body) {
   var signature = buildJdSignature();
   var resp;
   try {
@@ -4372,7 +4422,7 @@ async function doLogin(username, password) {
   } catch (err) {
     var msg = String((err && err.message) || err || "");
     if (msg.indexOf("400") !== -1) {
-      throw new Error("JavDB 登录 400 错误：签名或参数格式不对");
+      throw new Error("JavDB 登录被拒（HTTP 400）：账号密码有误或请求被拦截，请确认后重试");
     }
     throw new Error("JavDB 登录失败: " + (msg || "未知错误"));
   }
@@ -4402,7 +4452,45 @@ async function doLogin(username, password) {
       .trim();
   if (token) return token;
 
+  // 业务失败（HTTP 200 + success:0）：透出服务端原因，如"账号不存在"/"密码错误"
   throw new Error(payload.message || "登录失败，请检查账号密码");
+}
+
+async function doLogin(username, password) {
+  var body = Object.assign({}, LOGIN_DEVICE, {
+    device_uuid: ensureDeviceUuid(),
+    username: username,
+    password: password,
+  });
+
+  var lastErr = null;
+  for (var attempt = 0; attempt <= JAVDB_LOGIN_RETRIES; attempt++) {
+    try {
+      return await postLoginOnce(body);
+    } catch (err) {
+      lastErr = err;
+      var msg = String((err && err.message) || err || "");
+      // 仅网络/服务端类失败重试；账密错误等业务失败直接抛出
+      var retriable = /timeout|timed?\s*out|超时|ECONN|network|网络|无响应|无法解析|50\d|429/i.test(msg);
+      if (!retriable || attempt >= JAVDB_LOGIN_RETRIES) break;
+      await new Promise(function (resolve) {
+        setTimeout(resolve, 1200);
+      });
+    }
+  }
+  throw lastErr;
+}
+
+/** 清缓存风暴保护：另一路并发登录刚写入的新鲜 token（凭证指纹匹配）直接复用 */
+async function readFreshTokenForCredential(fingerprint) {
+  var token = await readFirstStoreAsync([TOKEN_STORE_KEY, TOKEN_STORE_KEY_ALT]);
+  if (!token) return "";
+  var savedAt = Number(await readFirstStoreAsync([TOKEN_SAVEDAT_KEY, TOKEN_SAVEDAT_KEY_ALT])) || 0;
+  var credKey = await readFirstStoreAsync([TOKEN_CREDENTIAL_KEY, TOKEN_CREDENTIAL_KEY_ALT]);
+  if (credKey === fingerprint && savedAt && Date.now() - savedAt < FRESH_TOKEN_WINDOW_MS) {
+    return token;
+  }
+  return "";
 }
 
 /**
@@ -4410,11 +4498,17 @@ async function doLogin(username, password) {
  */
 async function loginWithLock(credentials, forceRefresh) {
   if (_loginPromise) {
-    if (_loginPromiseCredential === credentials.fingerprint) return _loginPromise;
-    try {
-      await _loginPromise;
-    } catch (e) {}
-    return loginWithLock(credentials, forceRefresh);
+    if (_loginPromiseCredential === credentials.fingerprint) {
+      try {
+        // 等待并发同伴的结果；失败则落入下方正常流程（受冷却保护），不再原样复用 rejected promise
+        return await _loginPromise;
+      } catch (e) {}
+    } else {
+      try {
+        await _loginPromise;
+      } catch (e) {}
+      return loginWithLock(credentials, forceRefresh);
+    }
   }
 
   var now = Date.now();
@@ -4427,6 +4521,9 @@ async function loginWithLock(credentials, forceRefresh) {
 
   _loginPromiseCredential = credentials.fingerprint;
   _loginPromise = (async function () {
+    // 清缓存后多路请求并发重登：谁先成功写入，其余直接复用新鲜 token
+    var fresh = await readFreshTokenForCredential(credentials.fingerprint);
+    if (fresh) return fresh;
     if (forceRefresh) await clearStoredToken();
     try {
       var token = await doLogin(credentials.username, credentials.password);
