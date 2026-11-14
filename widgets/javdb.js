@@ -10,7 +10,8 @@
 /**
  * JavDB ForwardWidget 模块 v4
  * 管道：CategoryPath → jdforrepam API（绕过 CF）→ VideoItem
- * 登录：POST /v1/sessions（账号密码 → JWT）
+ * 登录：POST /v1/sessions（账号密码 → JWT）；仅 搜索/详情/磁力/TOP250 携带账号，
+ *       榜单/厂牌/分类/女优榜等公开接口一律匿名请求（防账号高频封号）
  * 图片：复用“解密javdb.可视化.js”的 direct-dmm / MGStage 高清候选策略
  * 详情：按番号生成高清封面/剧照；简介含剧情+短评；trailers 预告片模块
  * 磁力：relatedItems 合并 JavDB API / 短评；展示体积·特征·来源，简介含文件名与转存说明
@@ -1310,9 +1311,9 @@ function firstEnumValue(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.9.4",
+  version: "4.9.5",
   requiredVersion: "0.0.1",
-  description: "JavDB：榜单/厂牌/分类浏览；详情磁力转存光鸭（不提供播放源）",
+  description: "JavDB：榜单/厂牌/分类浏览；详情磁力转存光鸭（不提供播放源）；榜单/列表走公开匿名接口防封号",
   author: "老头",
   site: API_SITE,
   // 站点 logo：JavDB 180x180 PNG（已验证 200 可用）
@@ -4037,22 +4038,29 @@ function getHeaderCI(res, name) {
   return "";
 }
 
-function apiHeaders(params, extra) {
+/**
+ * 防封号：令牌改为按需携带（withAuth=true 才带登录态）。
+ * 列表/榜单/厂牌/分类等公开接口匿名请求，不计入账号请求数；
+ * 仅 搜索/详情/磁力/TOP250 这些真正需要登录的接口带账号。
+ */
+function apiHeaders(params, extra, withAuth) {
   params = params || {};
   var headers = {
     accept: "application/json",
     "user-agent": "Mozilla/5.0",
     jdsignature: buildJdSignature(),
   };
-  var token = String(
-    params.apiToken ||
-      readStore("javdb.global.apiToken") ||
-      readStore("javdb_token") ||
-      ""
-  ).trim();
-  if (token) {
-    if (/^bearer\s+/i.test(token)) headers.Authorization = token;
-    else headers.Authorization = "Bearer " + token;
+  if (withAuth) {
+    var token = String(
+      params.apiToken ||
+        readStore("javdb.global.apiToken") ||
+        readStore("javdb_token") ||
+        ""
+    ).trim();
+    if (token) {
+      if (/^bearer\s+/i.test(token)) headers.Authorization = token;
+      else headers.Authorization = "Bearer " + token;
+    }
   }
   return Object.assign(headers, extra || {});
 }
@@ -4151,11 +4159,43 @@ async function refreshJavdbTokenForRetry(params) {
   return _jwtRefreshInFlight;
 }
 
-async function apiGet(pathname, query, params, jwtRetryDone) {
+// 防封号端点分级：默认匿名请求（不带令牌、不触发登录），
+// 仅调用方显式传 { auth: true } 的接口（搜索/详情/磁力/TOP250）携带账号。
+var ANON_AUTH_WALL_ROUTES = {};
+
+function anonApiRouteKey(pathname) {
+  var p = String(pathname || "").split("?")[0];
+  if (/^\/v1\/movies\/[^/]+\/(reviews|magnets)$/.test(p)) {
+    return p.replace(/\/[^/]+\/(reviews|magnets)$/, "/:id/$1");
+  }
+  if (/^\/v4\/movies\/[^/]+$/.test(p)) return "/v4/movies/:id";
+  return p;
+}
+
+function cachedJdbToken(params) {
+  return String(
+    (params && params.apiToken) ||
+      readStore("javdb.global.apiToken") ||
+      readStore("javdb_token") ||
+      ""
+  ).trim();
+}
+
+async function apiGet(pathname, query, params, opts) {
+  opts = opts && typeof opts === "object" ? opts : {};
+  var needAuth = !!opts.auth;
+  var jwtRetryDone = !!opts.jwtRetryDone;
+  var routeKey = anonApiRouteKey(pathname);
+  // 该公开接口此前撞过登录墙：本次运行内直接复用已存令牌，省掉一次注定失败的匿名请求；
+  // jwtRetryDone 置真以免回退失败又触发重登（浏览行为不登录化）
+  if (!needAuth && ANON_AUTH_WALL_ROUTES[routeKey] && cachedJdbToken(params)) {
+    needAuth = true;
+    jwtRetryDone = true;
+  }
   var url = buildQueryUrl(API_BASE + pathname, sanitizeQuery(query));
   var resp = await widgetHttp("GET", url, {
     headerFactory: function () {
-      return apiHeaders(params);
+      return apiHeaders(params, null, needAuth);
     },
   });
   var data;
@@ -4167,15 +4207,20 @@ async function apiGet(pathname, query, params, jwtRetryDone) {
   if (!data || data.success !== 1) {
     var failMsg = (data && data.message) || "API 请求失败: " + pathname;
     var action = String((data && data.action) || "");
-    // 服务端判定 token 失效（列表匿名可看、详情/磁力要登录，本地 7 天 TTL 未必感知）：
+    var authWall = /JWTVerificationError|請登錄|请登录|請登录|未登錄|未登录/i.test(action + " " + failMsg);
+    // 匿名公开接口撞到登录墙：仅复用已有令牌重试一次，绝不触发新登录
+    if (!needAuth && !jwtRetryDone && authWall && cachedJdbToken(params)) {
+      ANON_AUTH_WALL_ROUTES[routeKey] = true;
+      params = params || {};
+      if (!params.apiToken) params.apiToken = cachedJdbToken(params);
+      return apiGet(pathname, query, params, { auth: true, jwtRetryDone: true });
+    }
+    // 服务端判定 token 失效（详情/磁力/搜索要登录，本地 7 天 TTL 未必感知）：
     // 强制重登换新 token 后重试一次，避免详情持续空白
-    if (
-      !jwtRetryDone &&
-      /JWTVerificationError|請登錄|请登录|請登录|未登錄|未登录/i.test(action + " " + failMsg)
-    ) {
+    if (needAuth && !jwtRetryDone && authWall) {
       var freshToken = await refreshJavdbTokenForRetry(params);
       if (freshToken && params && String(params.apiToken) === String(freshToken)) {
-        return apiGet(pathname, query, params, true);
+        return apiGet(pathname, query, params, { auth: true, jwtRetryDone: true });
       }
     }
     throw new Error(failMsg);
@@ -4888,8 +4933,11 @@ async function fetchCategoryEntities(kind, params) {
   }
 
   if (keyword) {
+    // 关键词搜索接口需登录：无令牌时先建立会话（仅关键词路径）
+    if (!params.apiToken) params = await ensureApiSession(params);
     var searchType = kind === "actors" ? "actor" : kind === "makers" ? "maker" : "series";
-    var searched = await apiGet("/v2/search", { q: keyword, type: searchType, page: page }, params);
+    // 关键词搜索接口需登录：走账号通道
+    var searched = await apiGet("/v2/search", { q: keyword, type: searchType, page: page }, params, { auth: true });
     var found = (searched && (searched.actors || searched.makers || searched.series)) || [];
     return found
       .map(function (item) {
@@ -4920,7 +4968,8 @@ async function fetchSearchMovies(keyword, params, magnetOnly) {
     movie_sort_by: SEARCH_SORT_MAP[sortKey] || "release",
   };
   if (magnetOnly) query.movie_filter_by = "magnet";
-  var data = await apiGet("/v2/search", query, params);
+  // 搜索接口 2026-11 起需登录：走账号通道
+  var data = await apiGet("/v2/search", query, params, { auth: true });
   // 列表 API 不保证包含磁力统计，不能据此丢弃已返回的分类作品。
   return extractApiMovies(data);
 }
@@ -5367,7 +5416,8 @@ async function fetchDetailMagnets(movieId, params, code) {
 
   var magnetPromise = Promise.resolve()
     .then(function () {
-      return apiGet("/v1/movies/" + movieId + "/magnets", null, params);
+      // 磁力接口需登录：走账号通道
+      return apiGet("/v1/movies/" + movieId + "/magnets", null, params, { auth: true });
     })
     .then(function (magnetData) {
       return (magnetData && magnetData.magnets) || [];
@@ -7191,7 +7241,8 @@ function normalizeTop250Type(raw) {
 
 async function loadLatest(params) {
   try {
-    params = await ensureApiSession(params || {});
+    // 最近更新为公开接口：匿名浏览，不登录、不计账号请求
+    params = await ensureGlobalParams(params || {});
     var page = Number(params.page || params.from || 1);
     var filterBy = normalizeLatestFilter(params.filter_by);
     var data = await apiGet(
@@ -7222,7 +7273,8 @@ async function loadTop250(params) {
       ignore_watched: false,
     };
     if (norm.type_value) query.type_value = norm.type_value;
-    var data = await apiGet("/v1/movies/top", query, params);
+    // TOP250 接口需登录：走账号通道
+    var data = await apiGet("/v1/movies/top", query, params, { auth: true });
     var movies = (data && data.movies) || [];
     if (!movies.length) throw new Error("TOP250 无数据（请确认已登录）");
     return enrichListMovies(movies, params);
@@ -7261,7 +7313,13 @@ async function searchGlobal(params) {
 
 async function loadCategoryList(params) {
   var target = resolveCategoryTarget(params);
-  params = await ensureApiSession(target.params);
+  // 防封号：仅关键词搜索路径需要登录；实体/标签筛选列表走公开匿名接口
+  if (target.keyword || target.kind === "search") {
+    target.params = await ensureApiSession(target.params);
+  } else {
+    target.params = await ensureGlobalParams(target.params);
+  }
+  params = target.params;
 
   if (target.keyword || target.kind === "search") {
     var kw = target.keyword || params.categoryTitle;
@@ -7278,8 +7336,9 @@ async function loadCategoryList(params) {
   var filterBy = buildCategoryFilter(target.kind, target.itemId, target.magnetOnly);
   var movies = await fetchCategoryMovies(filterBy, params);
 
-  // 片商/标签无结果时回退关键词搜索
+  // 片商/标签无结果时回退关键词搜索（搜索接口需登录：仅回退时才建立会话）
   if (!movies.length && (target.kind === "makers" || target.kind === "tags")) {
+    if (!params.apiToken) params = await ensureApiSession(params);
     var fallbackKw = safeText(params.categoryTitle) || target.itemId;
     movies = await fetchSearchMovies(fallbackKw, params, target.magnetOnly);
   }
@@ -7367,7 +7426,8 @@ async function loadDetail(link, params) {
     var movieId = path.replace(/^\/v\//, "").split(/[/?#]/)[0];
     if (!movieId) return null;
 
-    var detail = await apiGet("/v4/movies/" + movieId, null, params);
+    // 详情接口需登录：走账号通道
+    var detail = await apiGet("/v4/movies/" + movieId, null, params, { auth: true });
     var movie = (detail && detail.movie) || {};
     var code = safeText(movie.number || "");
     var title = safeText(movie.title || code || movieId);
@@ -15525,6 +15585,7 @@ async function fetchActressTagMovies(params, actressId) {
 /** 热播榜 */
 async function loadPlayback(params) {
   try {
+    // 热播榜接口 /v1/rankings/playback 实测需登录：走账号通道（cacheDuration=86400 已限频）
     params = await ensureApiSession(params || {});
     var period = rankingPeriod(params);
     var page = Number(params.page || 1) || 1;
@@ -15536,7 +15597,8 @@ async function loadPlayback(params) {
         page: page,
         limit: RANKING_PAGE_LIMIT,
       },
-      params
+      params,
+      { auth: true }
     );
     var movies = (data && data.movies) || [];
     if (!movies.length) {
@@ -15551,6 +15613,7 @@ async function loadPlayback(params) {
 
 async function loadRankingByType(params, typeCode, label) {
   try {
+    // 榜单接口 /v1/rankings 实测需登录：走账号通道（cacheDuration=86400 已限频）
     params = await ensureApiSession(params || {});
     var period = rankingPeriod(params);
     var page = Number(params.page || 1) || 1;
@@ -15562,7 +15625,8 @@ async function loadRankingByType(params, typeCode, label) {
         page: page,
         limit: RANKING_PAGE_LIMIT,
       },
-      params
+      params,
+      { auth: true }
     );
     var movies = (data && data.movies) || [];
     if (!movies.length) {
@@ -15598,7 +15662,8 @@ async function loadWestern(params) {
 /** 厂牌（可视化精选枚举） */
 async function loadMaker(params) {
   try {
-    params = await ensureApiSession(params || {});
+    // 厂牌筛选列表为公开接口：匿名浏览
+    params = await ensureGlobalParams(params || {});
     var makerId = String((params && params.maker) || "7R").trim() || "7R";
     var sortRaw = String((params && params.sort_by) || "release_desc").trim() || "release_desc";
     var filterBy = "0:m:" + makerId;
@@ -15637,6 +15702,7 @@ async function loadCategory(params) {
       return [{ id: "tip", type: "text", title: "请选择分类和标签" }];
     }
     var page = Number((params && params.page) || 1) || 1;
+    // 分类标签走搜索接口（需登录）：走账号通道
     var data = await apiGet(
       "/v2/search",
       {
@@ -15646,7 +15712,8 @@ async function loadCategory(params) {
         page: page,
         limit: RANKING_PAGE_LIMIT,
       },
-      params
+      params,
+      { auth: true }
     );
     var movies = (data && data.movies) || [];
     if (!movies.length) throw new Error("未找到相关影片");
@@ -15660,7 +15727,8 @@ async function loadCategory(params) {
 /** 热门新人榜 */
 async function loadNewActors(params) {
   try {
-    params = await ensureApiSession(params || {});
+    // 女优筛选列表为公开接口：匿名浏览
+    params = await ensureGlobalParams(params || {});
     var actressId = String((params && params.actress) || "W1Egq").trim() || "W1Egq";
     var movies = await fetchActressTagMovies(params, actressId);
     return enrichListMovies(movies, params);
@@ -15676,7 +15744,8 @@ async function loadNewActors(params) {
  */
 async function loadActorsRanking(params) {
   try {
-    params = await ensureApiSession(params || {});
+    // 女优筛选列表为公开接口：匿名浏览
+    params = await ensureGlobalParams(params || {});
     var actressId = String((params && params.actress) || "BzpA").trim() || "BzpA";
     var movies = await fetchActressTagMovies(params, actressId);
     return enrichListMovies(movies, params);
@@ -15689,7 +15758,8 @@ async function loadActorsRanking(params) {
 /** DMM女优榜单（接口同 tags 演员过滤） */
 async function loadDMMRanking(params) {
   try {
-    params = await ensureApiSession(params || {});
+    // 女优筛选列表为公开接口：匿名浏览
+    params = await ensureGlobalParams(params || {});
     var actressId = String((params && params.actress) || "zK98J").trim() || "zK98J";
     var movies = await fetchActressTagMovies(params, actressId);
     return enrichListMovies(movies, params);
