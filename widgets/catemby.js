@@ -1548,11 +1548,11 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "catemby_legacy",
   title: "Catemby遗产",
-  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭；完整片弱令牌自动取直链(无需配置)；详情/磁力可配账密自动登录",
+  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭；完整片弱令牌自动取直链(无需配置)；详情/磁力可配账密自动登录；列表/榜单走公开匿名接口防封号",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
   iconUrl:'https://catembylegacy.fastcdn.dpdns.org/favicon.ico',
-  version: "1.10.8",
+  version: "1.10.9",
   requiredVersion: "0.0.2",
   detailCacheDuration: 3600,
   globalParams: [
@@ -2163,7 +2163,8 @@ async function fetchSearchMovies(keyword, params) {
   if (movieType !== "all") {
     query.movie_type = MOVIE_TYPE_CODE[movieType] || "0";
   }
-  const data = await apiGet("/v2/search", query);
+  // 搜索接口 2026-11 起需登录：这是搜索路径仅有的账号请求
+  const data = await apiGet("/v2/search", query, { auth: true });
   return data.movies || [];
 }
 
@@ -2798,7 +2799,8 @@ async function widgetHttpGet(url, headerFactory, retry) {
   }
 }
 
-// ---------- JavDB 账号登录（2026-11 起详情/磁力/搜索要求 JWT） ----------
+// ---------- JavDB 账号登录（2026-11 起仅 搜索/详情/磁力 要求 JWT） ----------
+// 防封号：只有上述接口会取令牌/触发登录；列表/榜单/分类等公开接口一律匿名请求，不计入账号请求数。
 // 登录端点 POST /v1/sessions 实测开放且收 JSON 体；鉴权头为小写 authorization: <裸JWT>（无 Bearer）。
 
 const JDB_AUTH_STORE = "catemby.jdb.auth.v1";
@@ -2890,9 +2892,26 @@ function isJdbAuthError(error) {
   return /JWT|登錄|登录/i.test(String((error && (error.message || error.action)) || error || ""));
 }
 
-async function apiGet(pathname, query) {
+// ---------- 端点分级（2026-11 起站点仅 搜索/详情/磁力 要求登录） ----------
+// auth=true 的接口先取令牌再请求；其余一律走公开匿名通道：
+// 不取令牌、不触发登录，列表/榜单/分类浏览不再计入账号请求数（防封号）。
+const ANON_AUTH_WALL_ROUTES = {};
+
+function anonApiRouteKey(pathname) {
+  const p = String(pathname || "").split("?")[0];
+  if (/^\/v1\/movies\/[^/]+\/(reviews|magnets)$/.test(p)) return p.replace(/\/[^/]+\/(reviews|magnets)$/, "/:id/$1");
+  if (/^\/v4\/movies\/[^/]+$/.test(p)) return "/v4/movies/:id";
+  return p;
+}
+
+async function apiGet(pathname, query, opts) {
+  opts = opts && typeof opts === "object" ? opts : {};
+  let needAuth = !!opts.auth;
+  const routeKey = anonApiRouteKey(pathname);
+  // 该公开接口此前撞过登录墙：本次运行内直接复用已存令牌，省掉一次注定失败的匿名请求
+  if (!needAuth && ANON_AUTH_WALL_ROUTES[routeKey] && readStoredJdbToken()) needAuth = true;
   const url = buildQueryUrl(API_BASE + pathname, sanitizeQuery(query));
-  const token = await ensureJdbToken();
+  const token = needAuth ? await ensureJdbToken() : "";
   const resp = await widgetHttpGet(url, () => apiHeaders(token ? { authorization: token } : null));
   let data = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
   if (!data || data.success !== 1) {
@@ -2902,6 +2921,15 @@ async function apiGet(pathname, query) {
       const fresh = await ensureJdbToken(true);
       if (fresh && fresh !== token) {
         const retryResp = await widgetHttpGet(url, () => apiHeaders({ authorization: fresh }));
+        data = typeof retryResp.data === "string" ? JSON.parse(retryResp.data) : retryResp.data;
+        if (data && data.success === 1) return data.data;
+      }
+    } else if (!needAuth && !token && data && isJdbAuthError(data)) {
+      // 公开接口意外撞到登录墙：仅复用已存令牌重试一次，绝不触发新登录（浏览不登录化）
+      const stored = readStoredJdbToken();
+      if (stored) {
+        ANON_AUTH_WALL_ROUTES[routeKey] = true;
+        const retryResp = await widgetHttpGet(url, () => apiHeaders({ authorization: stored }));
         data = typeof retryResp.data === "string" ? JSON.parse(retryResp.data) : retryResp.data;
         if (data && data.success === 1) return data.data;
       }
@@ -3565,14 +3593,16 @@ async function loadRankings(params) {
     if (mode === "top") {
       const typeCode = MOVIE_TYPE_CODE[params.movie_type || "censored"] || "0";
       try {
-        data = await apiGet("/v1/rankings", { type: typeCode, period: period });
+        // 榜单接口实测需登录：走账号通道
+        data = await apiGet("/v1/rankings", { type: typeCode, period: period }, { auth: true });
       } catch (error) {
         lastError = error;
       }
     } else {
       const filterBy = String(params.filter_by || "all");
       try {
-        data = await apiGet("/v1/rankings/playback", { filter_by: filterBy, period: period });
+        // 热播榜接口实测需登录：走账号通道
+        data = await apiGet("/v1/rankings/playback", { filter_by: filterBy, period: period }, { auth: true });
       } catch (error) {
         lastError = error;
       }
@@ -3581,7 +3611,8 @@ async function loadRankings(params) {
     if (!data) {
       const typeCode = MOVIE_TYPE_CODE[params.movie_type || params.filter_by || "censored"] || "0";
       try {
-        data = await apiGet("/v1/rankings", { type: typeCode, period: period });
+        // 榜单接口实测需登录：走账号通道
+        data = await apiGet("/v1/rankings", { type: typeCode, period: period }, { auth: true });
       } catch (error) {
         throw lastError || error;
       }
@@ -4368,7 +4399,8 @@ function formatMagnetSourceHint(source) {
 async function fetchDetailMagnets(movieId, params, code) {
   // 详情只请求 JavDB 磁力 API；不再等待短评与 Sukebei。
   try {
-    var magnetData = await apiGet("/v1/movies/" + movieId + "/magnets", null, params);
+    // 磁力接口需登录：详情页仅有的账号请求之一（未配账号时自动降级匿名尝试）
+    var magnetData = await apiGet("/v1/movies/" + movieId + "/magnets", null, { auth: true });
     var apiMagnets = (magnetData && magnetData.magnets) || [];
     return {
       rawMagnets: apiMagnets,
@@ -5581,7 +5613,7 @@ async function loadDetail(link, params) {
 
   // 详情资料和 JavDB 磁力接口互不依赖，直接并发，避免两个请求串行累加。
   // JavDB 2026-11 起详情要登录：未配置账号时降级为番号+播放源可用，详情标题/简介缺失不抛错。
-  const detailPromise = apiGet("/v4/movies/" + movieId).catch((error) => {
+  const detailPromise = apiGet("/v4/movies/" + movieId, null, { auth: true }).catch((error) => {
     if (isJdbAuthError(error)) return { movie: null, authError: true };
     throw error;
   });
@@ -5800,7 +5832,8 @@ async function recoverCodeFromPlaybackParams(params) {
   const movieId = extractMovieIdFromPlaybackParams(params || {});
   if (!movieId) return "";
   try {
-    const movie = await apiGet("/v4/movies/" + encodeURIComponent(movieId));
+    // 详情接口需登录：仅在参数缺番号时才兜底调用
+    const movie = await apiGet("/v4/movies/" + encodeURIComponent(movieId), null, { auth: true });
     const code = extractSearchCode(movie && movie.number);
     return code && isValidJavCatalogCode(code) ? code : "";
   } catch (e) {
