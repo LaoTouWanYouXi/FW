@@ -1551,6 +1551,7 @@ WidgetMetadata = {
   description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
+  iconUrl:'https://catembylegacy.fastcdn.dpdns.org/favicon.ico',
   version: "1.10.4",
   requiredVersion: "0.0.2",
   detailCacheDuration: 3600,
@@ -2538,48 +2539,6 @@ function pickResolveVariant(data) {
   return picked && picked.sourceUrl ? picked : null;
 }
 
-// ---- 播放源排序（1.10.4）：站点现把部分分片伪装成图片/字体下发，系统播放器无法直接播 ----
-// 实测（SSIS-001，2026-11-06）：
-// - fcjav/getav 的 TikTok CDN 分片形如 ...~tplv-...-origin.image，文件头是 70 字节 1x1 PNG，
-//   之后才是 MPEG-TS（同步头 0x47 在偏移 70 处，188 字节包全部对齐）。系统播放器从第 0 字节
-//   解析，认不出 TS，直接失败；这是“过去能播的源现在播不了”的直接原因。
-// - worldstatic 的 AES-128 变体是标准 HLS：#EXT-X-KEY + 16 字节密钥（密钥地址实测返回 16 字节），
-//   系统播放器可直接播。
-// 因此按 m3u8 内容排序：标准 AES-128 优先，未知形态居中，.image 伪装分片垫底；同时把各变体
-// parts[] 里的独立播放列表也作为候选源放出来，播不了时可换源。
-function resolveSourceRank(item) {
-  const text = String((item && item.sourceUrl) || "");
-  if (/%23EXT-X-KEY|#EXT-X-KEY/i.test(text)) return 0;
-  if (/\.image(%3F|\?|$)/i.test(text)) return 2;
-  return 1;
-}
-
-function collectResolveSources(data) {
-  if (!data || data.error) return [];
-  const usable = collectResolveVariants(data).filter((item) => !isPreviewVariant(item));
-  const out = [];
-  const seen = {};
-  function push(sourceUrl, variant, label, fromPart, partLabel) {
-    const url = String(sourceUrl || "").trim();
-    if (!url || seen[url]) return;
-    seen[url] = true;
-    out.push({ sourceUrl: url, variant: variant || "", label: label || "", fromPart: !!fromPart, partLabel: partLabel || "" });
-  }
-  for (let i = 0; i < usable.length; i++) {
-    const item = usable[i];
-    push(item.sourceUrl, item.variant, item.label, false, "");
-    const parts = Array.isArray(item.parts) ? item.parts : [];
-    for (let j = 0; j < parts.length; j++) {
-      const part = normalizeResolveVariant(parts[j]);
-      if (!part || isPreviewVariant(part)) continue;
-      push(part.sourceUrl, item.variant, item.label, true, part.label || "");
-    }
-  }
-  // 稳定排序：先按 rank 分组，同 rank 内整片变体在前、分段在后，组内保持站点原顺序
-  out.sort((a, b) => resolveSourceRank(a) - resolveSourceRank(b) || (a.fromPart - b.fromPart));
-  return out;
-}
-
 function movieLink(id, code) {
   let link = "/movie/" + encodeURIComponent(String(id || ""));
   const number = safeText(code || "");
@@ -2842,10 +2801,12 @@ function parseSiteResponseData(resp) {
 async function siteGet(path, query, options) {
   options = options || {};
   const url = buildQueryUrl(siteUrl(path), sanitizeQuery(query));
+  // 站点（Cloudflare Pages）会间歇性挂起连接，必须设超时快速失败
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : SITE_API_TIMEOUT_MS;
   let resp = null;
   try {
     if (options.allowError) {
-      resp = await Widget.http.get(url, { headers: siteHeaders() });
+      resp = await Widget.http.get(url, { headers: siteHeaders(), timeout: timeoutMs });
       const status = resp && (resp.status || resp.statusCode);
       if (status && Number(status) >= 400) return parseSiteResponseData(resp);
     } else {
@@ -3049,6 +3010,66 @@ const RESOLVE_CACHE_TTL_OK_MS = 30 * 60 * 1000;
 const RESOLVE_CACHE_TTL_MISS_MS = 15 * 60 * 1000;
 const RESOLVE_STORAGE_PREFIX = "catemby.resolve.v1.";
 
+// 站点已启用 Cloudflare Turnstile + 按番号 token 鉴权（/api/v/resolve、/api/subtitle 均返回
+// 401 token_required；token 需浏览器隐形验证码换取，脚本环境无法获取）。用全局 gate 标记
+// 做负缓存：鉴权关闭时长缓存、网络挂起时短缓存，避免每次聚合都撞死接口导致长时间转圈。
+const SITE_GATE_MEM = { gated: 0, netfail: 0 };
+const SITE_GATE_STORE_PREFIX = "catemby.siteGate.v1.";
+const SITE_GATE_TTL_GATED_MS = 60 * 60 * 1000; // token_required：1 小时内不再探测
+const SITE_GATE_TTL_NETFAIL_MS = 5 * 60 * 1000; // 站点挂起/超时：5 分钟内不再探测
+const SITE_API_TIMEOUT_MS = 8000;
+
+function isSiteTokenGateError(data) {
+  const err = String((data && data.error) || "").toLowerCase();
+  return (
+    err === "token_required" ||
+    err === "turnstile_missing" ||
+    err === "turnstile_failed" ||
+    err === "unauthorized" ||
+    err === "forbidden"
+  );
+}
+
+function siteGateSavedAt(kind) {
+  let savedAt = Number(SITE_GATE_MEM[kind]) || 0;
+  if (!savedAt) {
+    try {
+      const raw = Widget.storage.get(SITE_GATE_STORE_PREFIX + kind);
+      savedAt = Number(typeof raw === "string" ? JSON.parse(raw) : raw) || 0;
+    } catch (e) {
+      savedAt = 0;
+    }
+    SITE_GATE_MEM[kind] = savedAt;
+  }
+  return savedAt;
+}
+
+function siteGateActive(kind) {
+  const ttl = kind === "gated" ? SITE_GATE_TTL_GATED_MS : SITE_GATE_TTL_NETFAIL_MS;
+  const savedAt = siteGateSavedAt(kind);
+  if (!savedAt) return false;
+  if (Date.now() - savedAt > ttl) {
+    SITE_GATE_MEM[kind] = 0;
+    return false;
+  }
+  return true;
+}
+
+function markSiteGate(kind) {
+  const now = Date.now();
+  SITE_GATE_MEM[kind] = now;
+  try {
+    Widget.storage.set(SITE_GATE_STORE_PREFIX + kind, JSON.stringify(now));
+  } catch (e) {}
+}
+
+function clearSiteGate(kind) {
+  SITE_GATE_MEM[kind] = 0;
+  try {
+    Widget.storage.set(SITE_GATE_STORE_PREFIX + kind, JSON.stringify(0));
+  } catch (e) {}
+}
+
 function resolveCacheKey(code) {
   return String(code || "")
     .trim()
@@ -3105,13 +3126,25 @@ async function resolveFullVideo(code, lang) {
   if (!code) return null;
   const cached = getCachedResolve(code);
   if (cached !== undefined) return cached;
+  // 站点鉴权关闭/网络挂起期间直接秒回空，聚合不再长时间等待
+  if (siteGateActive("gated") || siteGateActive("netfail")) return null;
 
   const primary = pickPrimaryResolveCode(code);
   if (!primary) return null;
 
-  const data = await siteGet("/api/v/resolve", { code: primary, lang: lang || "zh" }, { allowError: true });
+  let data = null;
+  try {
+    data = await siteGet("/api/v/resolve", { code: primary, lang: lang || "zh" }, { allowError: true, timeoutMs: SITE_API_TIMEOUT_MS });
+  } catch (e) {
+    data = null;
+  }
+  if (data && isSiteTokenGateError(data)) {
+    markSiteGate("gated");
+    return null;
+  }
   const picked = pickResolveVariant(data);
   if (picked) {
+    clearSiteGate("netfail");
     setCachedResolve(code, picked);
     return picked;
   }
@@ -3119,24 +3152,11 @@ async function resolveFullVideo(code, lang) {
     setCachedResolve(code, null);
     return null;
   }
+  if (!data) {
+    // 站点无响应（挂起/超时）：短负缓存，避免后续每次聚合都撞超时
+    markSiteGate("netfail");
+  }
   return null;
-}
-
-// 供 loadResource 使用：返回排序后的全部可用源。只做内存缓存，不写 Widget.storage，
-// 因为 data: m3u8 单条就数百 KB，整份可达 2MB，写存储会撑爆。
-const RESOLVE_LIST_CACHE = {};
-async function resolveFullVideoList(code, lang) {
-  if (!code) return [];
-  const key = resolveCacheKey(code);
-  if (!key) return [];
-  const mem = RESOLVE_LIST_CACHE[key];
-  if (mem && Date.now() - Number(mem.savedAt) <= RESOLVE_CACHE_TTL_OK_MS) return mem.value;
-  const primary = pickPrimaryResolveCode(code);
-  if (!primary) return [];
-  const data = await siteGet("/api/v/resolve", { code: primary, lang: lang || "zh" }, { allowError: true });
-  const list = collectResolveSources(data);
-  if (list.length) RESOLVE_LIST_CACHE[key] = { value: list, savedAt: Date.now() };
-  return list;
 }
 
 function extractMovieId(link) {
@@ -5436,8 +5456,8 @@ async function loadResource(params) {
     const code = await recoverCodeFromPlaybackParams(params);
     if (!code) return [];
 
-    const sources = await resolveFullVideoList(code, "zh");
-    if (!sources.length) return [];
+    const fullVideo = await resolveFullVideo(code, "zh");
+    if (!fullVideo || !fullVideo.sourceUrl || isPreviewVariant(fullVideo)) return [];
 
     const headers = {
       "User-Agent": UA,
@@ -5445,20 +5465,15 @@ async function loadResource(params) {
       Origin: SITE_BASE,
     };
 
-    return sources.map((item, index) => {
-      const label = item.label || "原版";
-      const name =
-        "Catemby 完整(" + label + (item.fromPart && item.partLabel ? " · " + item.partLabel : "") + ")" +
-        (index === 0 ? "（推荐）" : "");
-      return {
-        name: name,
-        description:
-          "番号：" + code + "\n类型：完整视频\n来源：" + label + (item.fromPart ? "（分段）" : ""),
-        url: item.sourceUrl,
+    return [
+      {
+        name: "Catemby 完整(" + (fullVideo.label || "原版") + ")",
+        description: "番号：" + code + "\n类型：完整视频",
+        url: fullVideo.sourceUrl,
         playerType: "system",
         customHeaders: headers,
-      };
-    });
+      },
+    ];
   } catch (e) {
     console.error("[catemby] loadResource 失败:", e && e.message ? e.message : e);
     return [];
@@ -5581,8 +5596,24 @@ function buildSubtitleFileUrl(originalUrl) {
 async function fetchSubtitleCandidates(code) {
   const name = String(code || "").trim();
   if (!name) return [];
-  const data = await siteGet("/api/subtitle", { name: name }, { allowError: true });
-  if (!data || Number(data.code) !== 0 || !Array.isArray(data.data) || !data.data.length) return [];
+  // 站点鉴权关闭/网络挂起期间直接跳过字幕匹配
+  if (siteGateActive("gated") || siteGateActive("netfail")) return [];
+  let data = null;
+  try {
+    data = await siteGet("/api/subtitle", { name: name }, { allowError: true, timeoutMs: SITE_API_TIMEOUT_MS });
+  } catch (e) {
+    data = null;
+  }
+  if (data && isSiteTokenGateError(data)) {
+    markSiteGate("gated");
+    return [];
+  }
+  if (!data) {
+    markSiteGate("netfail");
+    return [];
+  }
+  if (Number(data.code) !== 0 || !Array.isArray(data.data) || !data.data.length) return [];
+  clearSiteGate("netfail");
   return sortSubtitleItems(dedupeSubtitleItems(data.data, name), name);
 }
 
