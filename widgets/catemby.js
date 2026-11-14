@@ -1552,7 +1552,7 @@ WidgetMetadata = {
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
   iconUrl:'https://catembylegacy.fastcdn.dpdns.org/favicon.ico',
-  version: "1.10.7",
+  version: "1.10.8",
   requiredVersion: "0.0.2",
   detailCacheDuration: 3600,
   globalParams: [
@@ -5808,6 +5808,29 @@ async function recoverCodeFromPlaybackParams(params) {
   }
 }
 
+// 按源定制播放请求头（实测 2026-11-14）：
+// - getav 源（4K/1080p，分片与 AES key 在 worldstatic，data: 列表里看不到 host，需按 variant 判定）
+//   封杀站内 Referer：带 Referer/Origin → 403，仅 UA → 200
+// - tojav（vid-snap）相反，必须带站内 Referer（不带 → 410）
+// - tiful（R2 签名直链）SignedHeaders=host，带不带均可
+function playbackHeadersFor(item) {
+  const text = String((item && item.source) || "") + " " + String((item && item.variant) || "") + " " +
+    String((item && item.label) || "") + " " + String((item && item.sourceUrl) || "");
+  if (/worldstatic\.com|getav/i.test(text)) {
+    return { "User-Agent": UA };
+  }
+  return { "User-Agent": UA, Referer: SITE_BASE + "/", Origin: SITE_BASE };
+}
+
+// 非选中源展示顺序：4K → 原版 → 去码 → 其他
+function sourcePreference(item) {
+  const text = String((item && item.label) || "") + " " + String((item && item.variant) || "");
+  if (/4k|2160/i.test(text)) return 0;
+  if (/原版|original|raw|完整/i.test(text)) return 1;
+  if (/去码|mosaic|censored/i.test(text)) return 2;
+  return 3;
+}
+
 async function loadResource(params) {
   try {
     params = params || {};
@@ -5817,19 +5840,17 @@ async function loadResource(params) {
     const fullVideo = await resolveFullVideo(code, "zh");
     if (!fullVideo || !fullVideo.sourceUrl || isPreviewVariant(fullVideo)) return [];
 
-    const headers = {
-      "User-Agent": UA,
-      Referer: SITE_BASE + "/",
-      Origin: SITE_BASE,
-    };
-
     // 令牌注入通道带全量 usable 列表 → 逐源输出供播放器逐个试播（缓存读回时退化为单一 picked）。
-    // 被选中的源（直链优先）排第一，其余按 resolve 顺序跟在后面。
+    // 被选中的源（直链优先）排第一，其余按清晰度偏好排序。
     const usableList = Array.isArray(fullVideo.allUsable) && fullVideo.allUsable.length
       ? fullVideo.allUsable.filter((item) => item && item.sourceUrl && !isPreviewVariant(item))
       : [];
     const orderedList = usableList.length
-      ? [fullVideo].concat(usableList.filter((item) => item.sourceUrl !== fullVideo.sourceUrl))
+      ? [fullVideo].concat(
+          usableList
+            .filter((item) => item.sourceUrl !== fullVideo.sourceUrl)
+            .sort((a, b) => sourcePreference(a) - sourcePreference(b))
+        )
       : [fullVideo];
     return orderedList.map((item, idx) => ({
       name:
@@ -5839,7 +5860,7 @@ async function loadResource(params) {
       description: "番号：" + code + "\n类型：完整视频" + (String(item.sourceUrl).indexOf("data:") === 0 ? "（内嵌HLS）" : ""),
       url: item.sourceUrl,
       playerType: "system",
-      customHeaders: headers,
+      customHeaders: playbackHeadersFor(item),
     }));
   } catch (e) {
     console.error("[catemby] loadResource 失败:", e && e.message ? e.message : e);
