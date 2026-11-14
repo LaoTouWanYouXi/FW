@@ -7252,7 +7252,7 @@ async function loadDetail(link, params) {
         return {
           id: target.itemId || target.keyword || path,
           type: "detail",
-          mediaType: "movie",
+          // 不设 mediaType:movie，避免详情页出现播放源占位框
           title: catTitle,
           description: "共收录 " + list.length + " 部影片（当前页），见下方列表",
           link: path,
@@ -7334,7 +7334,7 @@ async function loadDetail(link, params) {
     var item = {
       id: code || movie.id || movieId,
       type: "detail",
-      mediaType: "movie",
+      // 不设 mediaType:movie，避免详情页出现播放源占位框（预告走 trailers）
       title: title,
       link: movieLink(movie.id || movieId),
       backdropPaths: backdropPaths,
