@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.netflav",
   title: "Netflav",
-  version: "1.8.2",
+  version: "1.8.3",
   requiredVersion: "0.0.1",
   description: "Netflav 手机直连浏览：分类独立模块与分类选择器、搜索与增强详情；18mag 番号磁力与光鸭转存",
   author: "老头",
@@ -448,17 +448,25 @@ async function loadDetail(link, params) {
   var result = mapListMovie(movie, params);
   var code = normalizeMovieCode(movie.code);
   if (code) result.id = code;
-  // 进入详情才获取高清竖版海报；无竖图时保留站点默认顶图（详情进入时的展示图）。
-  var portrait = await nfDetailPortrait(movie.code);
-  if (portrait) {
-    result.posterPath = portrait;
-    result.detailPoster = portrait;
-    result.backdropPath = portrait;
-    result.coverUrl = portrait;
-  }
+  // 顶图：进入详情才获取高清竖版海报；无竖图时使用站点默认顶图（详情进入时的展示图）。
+  // 播放源已彻底放弃，不设占位框；以下各环节相互隔离，任一失败不影响其余内容。
+  try {
+    var portrait = await nfDetailPortrait(movie.code);
+    if (portrait) {
+      result.posterPath = portrait;
+      result.detailPoster = portrait;
+      result.backdropPath = portrait;
+      result.coverUrl = portrait;
+    }
+  } catch (portraitError) {}
   var topImage = portrait || safeImageUrl(movie.preview) || safeImageUrl(movie.preview_hp);
   var trailer = movie.previewVideo && /\.(?:mp4|m3u8)(?:[?#]|$)/i.test(movie.previewVideo) && nfPublicUrl(movie.previewVideo) ? movie.previewVideo : "";
   if (trailer) result.trailers = [{ url: trailer }];
+  // 剧照：站点自身数据（previewImages + previewImagesUrl），失败不影响其他内容。
+  try {
+    var stills = imageUrls([].concat(Array.isArray(movie.backdropPaths) ? movie.backdropPaths : [], movie.previewImagesUrl ? [movie.previewImagesUrl] : []));
+    if (stills.length) result.backdropPaths = stills;
+  } catch (stillsError) {}
   result.genreItems = nfUniqueNames(movie.tags).slice(0, 12).map(function (name) {
     return { id: name, title: name };
   });
