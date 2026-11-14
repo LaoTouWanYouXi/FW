@@ -1,9 +1,9 @@
 WidgetMetadata = {
   id: "forward.netflav",
   title: "Netflav",
-  version: "1.8.0",
+  version: "1.8.2",
   requiredVersion: "0.0.1",
-  description: "Netflav 手机直连浏览：分类独立模块与分类选择器、搜索与增强详情；18mag 番号磁力、光鸭转存及公开播放线路",
+  description: "Netflav 手机直连浏览：分类独立模块与分类选择器、搜索与增强详情；18mag 番号磁力与光鸭转存",
   author: "老头",
   site: "https://netflav.com",
   icon: "https://netflav.com/static/assets/favico/apple-touch-icon.png",
@@ -27,8 +27,7 @@ WidgetMetadata = {
       { name: "page", title: "页码", type: "page", value: "1" },
       { name: "category_kind", title: "分类类型", type: "constant", value: "genres" }
     ] },
-    { id: "search", title: "搜索", functionName: "searchMovies", cacheDuration: 300, params: [{ name: "keyword", title: "关键词 / 番号", type: "input", value: "" }, { name: "page", title: "页码", type: "page", value: "1" }] },
-    { id: "loadResource", title: "公开播放线路", functionName: "loadResource", type: "stream", cacheDuration: 0, params: [] }
+    { id: "search", title: "搜索", functionName: "searchMovies", cacheDuration: 300, params: [{ name: "keyword", title: "关键词 / 番号", type: "input", value: "" }, { name: "page", title: "页码", type: "page", value: "1" }] }
   ],
   search: { title: "Netflav 搜索", functionName: "searchMovies", params: [{ name: "keyword", title: "关键词 / 番号", type: "input" }, { name: "page", title: "页码", type: "page", value: "1" }] }
 };
@@ -359,7 +358,8 @@ async function loadSectionList(params, section) {
   if (!Object.prototype.hasOwnProperty.call(NF_SECTIONS, section)) throw new Error("不支持的分类");
   var config = NF_SECTIONS[section];
   var page = pageNumber(params);
-  var state = nfReadNext(await nfGetHtml(NF_SITE + config.path, { page: page }), config.path);
+  // 站点当前带 page 参数的列表路由返回 500；第 1 页与无参数结果一致，省略以恢复可用。
+  var state = nfReadNext(await nfGetHtml(NF_SITE + config.path, page > 1 ? { page: page } : {}), config.path);
   var movies = nfListItems(state[config.state], page);
   return mapMovies(movies, params);
 }
@@ -405,7 +405,7 @@ function normalizeMovieCode(value) {
   return match ? match[1] + "-" + match[2] : "";
 }
 
-async function buildMagnetItems(items, movie) {
+async function buildMagnetItems(items, movie, portrait) {
   var movieCode = normalizeMovieCode(movie.code);
   var collected = [];
   var seen = {};
@@ -428,8 +428,9 @@ async function buildMagnetItems(items, movie) {
     await writeStoreAsync("netflav.magnet.v1." + collected[j].hash, JSON.stringify(Object.assign({}, item, { videoId: movie.videoId, savedAt: Date.now() })));
     output.push({
       id: link, type: "url", mediaType: "movie", link: link,
-      title: [movie.code, size, tags.join(" · "), "转存光鸭"].filter(Boolean).join(" | "),
-      description: ["来源: 18mag（当前番号精确匹配，按大小排序）", safeText(item.name), "点击此条目提交光鸭离线任务；不会自动转存"].filter(Boolean).join("\n")
+      title: [size, tags.join(" · "), "转存光鸭"].filter(Boolean).join(" | "),
+      description: ["来源: 18mag（当前番号精确匹配，按大小排序）", safeText(item.name), "点击此条目提交光鸭离线任务；不会自动转存"].filter(Boolean).join("\n"),
+      coverUrl: portrait || undefined, backdropPath: portrait || undefined
     });
   }
   return output;
@@ -445,12 +446,9 @@ async function loadDetail(link, params) {
   var movie = nfNormalizeMovie(rawDetail, false);
   if (!movie || movie.videoId !== owned.videoId) throw new Error("详情身份与请求不一致");
   var result = mapListMovie(movie, params);
-  // 只有进入详情才获取高清竖版海报；列表横图不参与顶图赋值。
-  delete result.coverUrl;
-  delete result.backdropPath;
-  delete result.headers;
   var code = normalizeMovieCode(movie.code);
   if (code) result.id = code;
+  // 进入详情才获取高清竖版海报；无竖图时保留站点默认顶图（详情进入时的展示图）。
   var portrait = await nfDetailPortrait(movie.code);
   if (portrait) {
     result.posterPath = portrait;
@@ -458,6 +456,7 @@ async function loadDetail(link, params) {
     result.backdropPath = portrait;
     result.coverUrl = portrait;
   }
+  var topImage = portrait || safeImageUrl(movie.preview) || safeImageUrl(movie.preview_hp);
   var trailer = movie.previewVideo && /\.(?:mp4|m3u8)(?:[?#]|$)/i.test(movie.previewVideo) && nfPublicUrl(movie.previewVideo) ? movie.previewVideo : "";
   if (trailer) result.trailers = [{ url: trailer }];
   result.genreItems = nfUniqueNames(movie.tags).slice(0, 12).map(function (name) {
@@ -474,19 +473,12 @@ async function loadDetail(link, params) {
   if (safeText(movie.label)) meta.push("厂牌: " + safeText(movie.label));
   if (safeText(movie.releaseDate)) meta.push("发行: " + safeText(movie.releaseDate));
   if (Number(movie.views) > 0) meta.push("浏览: " + movie.views);
-  var hasFull = nfPlaybackResources(rawDetail, owned.videoId).length > 0;
-  var hasEmbed = nfCollectEmbedSources(rawDetail).length > 0;
-  var playHint = hasFull
-    ? "播放线路在起播时解析；依赖线路提供方与播放器网络"
-    : hasEmbed
-      ? "站点提供嵌入播放线路，起播时解析完整直链（可能受提供方限制）；也可用磁力转存到光鸭"
-      : "该影片站点同样显示播放受限（无在线完整源）；可通过磁力转存到光鸭后播放";
-  result.description = [result.description, meta.filter(Boolean).join(" | "), safeText(movie.description), playHint].filter(Boolean).join("\n\n");
+  result.description = [result.description, meta.filter(Boolean).join(" | "), safeText(movie.description)].filter(Boolean).join("\n\n");
   var magnetItems = [];
   if (params.magnet_enabled !== "0") {
     try {
       var magnets = await nfFindMagnets(movie, deadline);
-      magnetItems = await buildMagnetItems(magnets && magnets.items, movie);
+      magnetItems = await buildMagnetItems(magnets && magnets.items, movie, topImage);
       if (magnets && magnets.warning) result.description += "\n\n磁力: " + safeText(magnets.warning);
     } catch (error) {
       result.description += "\n\n18mag 磁力暂不可用，不影响影片详情";
@@ -495,34 +487,6 @@ async function loadDetail(link, params) {
   // 相似作品影片不再进入详情；关联区只保留当前番号的磁力
   result.relatedItems = magnetItems;
   return result;
-}
-
-async function loadResource(params) {
-  params = params || {};
-  var raw = params.link != null ? params.link : params.id;
-  var owned = parseOwnedLink(raw);
-  if (!owned || owned.kind !== "video") return [];
-  var deadline = Date.now() + 35000;
-  try {
-    var detail = await nfGetRawDetail(owned.videoId, deadline, true);
-    var items = nfPlaybackResources(detail, owned.videoId);
-    // 站点 sourceList 同规则：srcs 嵌入线路逐个解析完整直链；解析失败或无直连媒体时如实跳过
-    var embeds = nfCollectEmbedSources(detail);
-    for (var i = 0; i < embeds.length && items.length < 6; i++) {
-      try {
-        var resolved = await nfResolveEmbedSource(embeds[i], deadline);
-        resolved.forEach(function (stream) {
-          if (!items.some(function (item) { return item.url === stream.url; })) items.push(stream);
-        });
-      } catch (embedError) {
-        console.log("[netflav/loadResource] 嵌入线路 " + embeds[i].name + " 解析失败: " + (embedError && embedError.message));
-      }
-    }
-    return items;
-  } catch (error) {
-    console.log("[netflav/loadResource] 上游未提供可解析的播放线路");
-    return [];
-  }
 }
 
 /* ========================= 光鸭转存入口 ========================= */
@@ -1334,7 +1298,7 @@ async function nfGetHtml(url, query, deadline) {
     throw new Error(label + " 请求失败，请确认手机代理覆盖 Rex 的网络请求");
   }
   var status = Number(response && (response.status || response.statusCode || response.status_code)) || 0;
-  if (status && status !== 200) throw new Error(label + " 返回 HTTP " + status + (status === 403 ? "，站点要求验证或拒绝访问" : ""));
+  if (status && status !== 200) throw new Error(label + " 返回 HTTP " + status + (status === 403 ? "，站点要求验证或拒绝访问" : status === 500 ? "（站点接口当前故障，稍后重试）" : ""));
   var html = response && (response.data !== undefined ? response.data : response.body);
   if (typeof html !== "string" || !html.trim()) throw new Error(label + " 返回空页面或非文本内容");
   nfCheckHtmlSize(html);
@@ -1553,29 +1517,6 @@ async function nfFindMagnets(movie, deadline) {
   return result;
 }
 
-function nfPlaybackResources(raw, identity) {
-  var previewPaths = [raw.previewVideo, raw.preview_hp].filter(function (value) { return typeof value === "string"; }).map(function (value) { return value.split(/[?#]/)[0]; });
-  var candidates = [];
-  ["src", "srcs", "otherSrcs", "uSrc"].forEach(function (key) {
-    var list = Array.isArray(raw[key]) ? raw[key] : [raw[key]];
-    list.slice(0, 8).forEach(function (entry) {
-      if (typeof entry === "string") candidates.push(entry);
-      else if (nfPlainObject(entry) && !entry.isPreview && !/preview|trailer/i.test(String(entry.type || ""))) {
-        ["url", "src", "file"].forEach(function (field) { if (typeof entry[field] === "string") candidates.push(entry[field]); });
-      }
-    });
-  });
-  var seen = {};
-  return candidates.slice(0, 16).filter(function (value) {
-    if (!nfPublicUrl(value) || !/\.(?:m3u8|mp4)(?:[?#]|$)/i.test(value) || previewPaths.indexOf(value.split(/[?#]/)[0]) >= 0 || seen[value]) return false;
-    seen[value] = true;
-    return true;
-  }).map(function (url) {
-    return { name: "Netflav " + (/\.m3u8(?:[?#]|$)/i.test(url) ? "HLS" : "MP4"), url: url,
-      description: "公开完整线路；播放器也需能访问线路网络", customHeaders: { Referer: NF_SITE + "/video?id=" + encodeURIComponent(identity) }, playerType: "app" };
-  });
-}
-
 /* ========================= 分类 / 全部列表 ========================= */
 /* 影片分类采用 catemby.js 式静态枚举选择器：列表由 gen-genres.js 生成到 genre-options.js */
 var NF_ALL_KINDS = { genre: "genre", actress: "actress" };
@@ -1589,96 +1530,13 @@ async function nfGetAllPage(kind, value, page, deadline) {
   if (!NF_ALL_KINDS[kind]) throw new Error("不支持的分类类型");
   value = nfCategoryName(value);
   if (!value) throw new Error("缺少分类或女优名称");
+  var requested = pageNumber({ page: page });
+  // 站点当前带 page 参数的筛选路由返回 500；第 1 页与无参数结果一致，省略以恢复可用。
   var query = {};
   query[kind] = value;
-  query.page = pageNumber({ page: page });
+  if (requested > 1) query.page = requested;
   var state = nfReadNext(await nfGetHtml(NF_SITE + "/all", query, deadline), "/all");
-  return nfListItems(state.all, query.page);
-}
-
-/* ========================= 完整播放源（与站点 sourceList 同规则） ========================= */
-/* 站点 pages/video 的 egsb 模块：srcs 为嵌入播放页地址数组，优先 netflavns1/njavplayer/mm/embedrise，
- * 剔除 netflavns2，屏蔽 streamtape/streamsb/avple/google.com；无源条目站点显示 player_limited。 */
-var NF_EMBED_PRIORITY = ["netflavns1", "njavplayer", "mm", "embedrise"];
-var NF_EMBED_BLOCKED = ["netflavns2", "google.com", "streamsb", "antiadtape", "streamtape", "avple.video"];
-
-function nfEmbedName(url) {
-  var match = String(url || "").match(/^https?:\/\/([^\/?#]+)/i);
-  var host = match ? match[1] : "";
-  var parts = host.split(".");
-  var root = parts.length >= 2 ? parts.slice(1).join(".") : host;
-  return root.slice(0, 2).toUpperCase() || "EMBED";
-}
-
-function nfCollectEmbedSources(raw) {
-  var list = Array.isArray(raw && raw.srcs) ? raw.srcs.slice(0, 12) : [];
-  var uniq = [];
-  list.forEach(function (entry) {
-    var url = typeof entry === "string" ? entry.trim() : "";
-    if (url && nfPublicUrl(url) && uniq.indexOf(url) < 0) uniq.push(url);
-  });
-  var kept = uniq.filter(function (url) { return !NF_EMBED_BLOCKED.some(function (word) { return url.indexOf(word) >= 0; }); });
-  var prioritized = [];
-  NF_EMBED_PRIORITY.forEach(function (word) {
-    kept.forEach(function (url) { if (url.indexOf(word) >= 0 && prioritized.indexOf(url) < 0) prioritized.push(url); });
-  });
-  kept.forEach(function (url) { if (prioritized.indexOf(url) < 0) prioritized.push(url); });
-  return prioritized.slice(0, 6).map(function (url) {
-    return { src: url, name: nfEmbedName(url) };
-  });
-}
-
-function nfExtractMediaFromText(text) {
-  var normalized = String(text || "").replace(/\\u002f/gi, "/").replace(/\\\//g, "/");
-  var seen = {};
-  var out = [];
-  var pattern = /https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?/gi;
-  var match;
-  while ((match = pattern.exec(normalized)) !== null) {
-    var url = match[0].replace(/[.,;]+$/, "");
-    if (!nfPublicUrl(url) || seen[url]) continue;
-    seen[url] = true;
-    out.push(url);
-    if (out.length >= 4) break;
-  }
-  return out;
-}
-
-async function nfFetchEmbedPage(url, deadline) {
-  var remaining = (deadline || Date.now() + 20000) - Date.now();
-  if (remaining < 1000) throw new Error("嵌入线路解析超时");
-  var response;
-  try {
-    response = await Widget.http.get(url, {
-      headers: { Accept: "text/html,*/*", Referer: NF_SITE + "/" },
-      timeout: Math.min(12000, remaining),
-      allow_redirects: true,
-      validate_status: false
-    });
-  } catch (error) {
-    throw new Error("嵌入页请求失败");
-  }
-  var status = Number(response && (response.status || response.statusCode || response.status_code)) || 0;
-  if (status && status >= 400) throw new Error("嵌入页返回 HTTP " + status);
-  var body = response && (response.data !== undefined ? response.data : response.body);
-  if (typeof body !== "string" || !body) throw new Error("嵌入页内容为空");
-  nfCheckHtmlSize(body);
-  return body;
-}
-
-async function nfResolveEmbedSource(embed, deadline) {
-  var html = await nfFetchEmbedPage(embed.src, deadline);
-  var media = nfExtractMediaFromText(html);
-  if (!media.length) throw new Error("嵌入页未提供直连媒体");
-  return media.map(function (url) {
-    return {
-      name: "完整线路 · " + embed.name,
-      url: url,
-      description: /m3u8/i.test(url) ? "从站点嵌入播放器解析的完整 HLS" : "从站点嵌入播放器解析的完整 MP4",
-      customHeaders: { Referer: embed.src },
-      playerType: "app"
-    };
-  });
+  return nfListItems(state.all, requested);
 }
 
 /* 精简复用 javdb/modules/09-guangya-magnet.js；不放宽过滤或保存目录 */
