@@ -4653,7 +4653,6 @@ function mapListMovie(movie) {
     detailPoster: sanitizeCoverUrl(covers.detailPoster) || poster || undefined,
     coverUrl: sanitizeCoverUrl(covers.coverUrl) || backdrop || undefined,
     image: sanitizeCoverUrl(covers.image) || backdrop || undefined,
-    videoId: movie.id,
   };
 }
 
@@ -7254,7 +7253,7 @@ async function loadDetail(link, params) {
         return {
           id: target.itemId || target.keyword || path,
           type: "detail",
-          // 不设 mediaType:movie，避免详情页出现播放源占位框
+          mediaType: "movie",
           title: catTitle,
           description: "共收录 " + list.length + " 部影片（当前页），见下方列表",
           link: path,
@@ -7336,7 +7335,7 @@ async function loadDetail(link, params) {
     var item = {
       id: code || movie.id || movieId,
       type: "detail",
-      // 不设 mediaType:movie，避免详情页出现播放源占位框（预告走 trailers）
+      mediaType: "movie",
       title: title,
       link: movieLink(movie.id || movieId),
       backdropPaths: backdropPaths,
@@ -7348,7 +7347,8 @@ async function loadDetail(link, params) {
       description: descParts.join("\n\n"),
       // 预告走 trailers；本脚本不提供正片播放源
       trailers: trailers,
-      videoId: movie.id || movieId,
+      // 对齐 netflav：条目不带 videoId（App 资源上下文字段），
+      // 有 videoId 而无 loadResource 时详情页会渲染空的播放资源占位框
       number: code || "",
     };
     if (relatedItems.length) item.relatedItems = relatedItems;
@@ -15629,7 +15629,6 @@ function mapStaticRankingEntry(entry, extraDesc) {
     detailPoster: sanitizeCoverUrl(covers.detailPoster) || poster || undefined,
     coverUrl: sanitizeCoverUrl(covers.coverUrl) || backdrop || undefined,
     image: sanitizeCoverUrl(covers.image) || backdrop || undefined,
-    videoId: javdbId || code,
   };
 }
 
