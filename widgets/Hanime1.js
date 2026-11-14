@@ -4,7 +4,7 @@ var WidgetMetadata = {
     description: "Tips：需要纯净度较高ip，获取 Hanime1 动画，原作者 skywazzle，更新 @ios151",
     author: "ios151",
     site: "https://hanime1.me",
-    iconUrl:'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRVzRbuv0k98tLxV8de1Lg2tZ6sbSSTfZ9EUjNzxnXEgBpH3L2YCKfMfmae&s=10',
+    iconUrl:'https://hirdone.com/icons/icon-512.png',
     version: "2.5.0",
     requiredVersion: "0.0.2",
     detailCacheDuration: 300,
