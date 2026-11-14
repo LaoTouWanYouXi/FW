@@ -1315,6 +1315,8 @@ WidgetMetadata = {
   description: "JavDB：榜单/厂牌/分类浏览；详情磁力转存光鸭（不提供播放源）",
   author: "老头",
   site: API_SITE,
+  // 站点 logo：JavDB 180x180 PNG（已验证 200 可用）
+  iconUrl: API_SITE + "/apple-touch-icon.png",
   detailCacheDuration: 3600,
   globalParams: [
     {
