@@ -1548,11 +1548,11 @@ function categoryModuleParams(options) {
 WidgetMetadata = {
   id: "catemby_legacy",
   title: "Catemby遗产",
-  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭；完整片弱令牌自动取直链(无需配置)",
+  description: "catemby遗产站点.搜索.分类.预告.完整片.外挂字幕.聚合；详情磁力(JavDB API)一键转存光鸭；完整片弱令牌自动取直链(无需配置)；详情/磁力可配账密自动登录",
   author: "老头",
   site: "https://catembylegacy.fastcdn.dpdns.org",
   iconUrl:'https://catembylegacy.fastcdn.dpdns.org/favicon.ico',
-  version: "1.10.6",
+  version: "1.10.7",
   requiredVersion: "0.0.2",
   detailCacheDuration: 3600,
   globalParams: [
@@ -1589,6 +1589,20 @@ WidgetMetadata = {
       title: "播放源令牌地址（手动后备）",
       type: "input",
       description: "通常留空（弱令牌自动获取）；弱令牌失效时才从浏览器F12复制/api/v/resolve完整URL粘贴",
+      value: "",
+    },
+    {
+      name: "catemby_username",
+      title: "JavDB 账号（可选）",
+      type: "input",
+      description: "JavDB 2026-11 起详情/磁力/搜索需登录；配置后模块自动登录恢复这些功能",
+      value: "",
+    },
+    {
+      name: "catemby_password",
+      title: "JavDB 密码（可选）",
+      type: "input",
+      description: "与账号配套；仅存本机用于登录接口，不配置则详情降级（番号+播放源仍可用）",
       value: "",
     },
   ],
@@ -2784,11 +2798,114 @@ async function widgetHttpGet(url, headerFactory, retry) {
   }
 }
 
+// ---------- JavDB 账号登录（2026-11 起详情/磁力/搜索要求 JWT） ----------
+// 登录端点 POST /v1/sessions 实测开放且收 JSON 体；鉴权头为小写 authorization: <裸JWT>（无 Bearer）。
+
+const JDB_AUTH_STORE = "catemby.jdb.auth.v1";
+const JDB_LOGIN_BACKOFF_MS = 10 * 60 * 1000; // 登录失败（如密码错）后的退避，避免每次请求都撞登录
+const _jdbAuth = { token: "", read: false, failedAt: 0 };
+
+function readStoredJdbToken() {
+  try {
+    const raw = Widget.storage.get(JDB_AUTH_STORE);
+    if (!raw) return "";
+    const entry = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return entry && typeof entry.token === "string" ? entry.token : "";
+  } catch (e) {
+    return "";
+  }
+}
+
+function storeJdbToken(token) {
+  try {
+    Widget.storage.set(JDB_AUTH_STORE, JSON.stringify({ token: token, savedAt: Date.now() }));
+  } catch (e) {}
+}
+
+function clearJdbToken() {
+  _jdbAuth.token = "";
+  _jdbAuth.read = true;
+  try {
+    Widget.storage.set(JDB_AUTH_STORE, JSON.stringify({ token: "", savedAt: 0 }));
+  } catch (e) {}
+}
+
+async function jdbLogin(username, password) {
+  const resp = await Widget.http.post(
+    API_BASE + "/v1/sessions",
+    {
+      username: username,
+      password: password,
+      device_uuid: "web",
+      device_name: "Web",
+      device_model: "Browser",
+      platform: "android",
+      system_version: UA,
+      app_channel: "official",
+      app_version: "web",
+      app_version_number: "1.0.0",
+    },
+    { headers: apiHeaders({ "Content-Type": "application/json" }), timeout: 15000 }
+  );
+  let payload = null;
+  try {
+    payload = parseApiPayload(resp);
+  } catch (e) {
+    payload = null;
+  }
+  if (payload && payload.success === 1 && payload.data && typeof payload.data.token === "string" && payload.data.token) {
+    return payload.data.token;
+  }
+  throw new Error((payload && payload.message) || "JavDB 登录失败");
+}
+
+async function ensureJdbToken(force) {
+  if (!force && _jdbAuth.read) return _jdbAuth.token;
+  if (!force) {
+    const stored = readStoredJdbToken();
+    if (stored) {
+      _jdbAuth.token = stored;
+      _jdbAuth.read = true;
+      return stored;
+    }
+  }
+  _jdbAuth.read = true;
+  if (_jdbAuth.failedAt && Date.now() - _jdbAuth.failedAt < JDB_LOGIN_BACKOFF_MS) return "";
+  const username = safeText(resolveGlobalParamSync("catemby_username", {}, ["catemby_username", "jdb_username", "javdb_username"]));
+  const password = safeText(resolveGlobalParamSync("catemby_password", {}, ["catemby_password", "jdb_password", "javdb_password"]));
+  if (!username || !password) return "";
+  try {
+    const token = await jdbLogin(username, password);
+    _jdbAuth.token = token;
+    storeJdbToken(token);
+    _jdbAuth.failedAt = 0;
+    return token;
+  } catch (e) {
+    _jdbAuth.failedAt = Date.now();
+    return "";
+  }
+}
+
+function isJdbAuthError(error) {
+  return /JWT|登錄|登录/i.test(String((error && (error.message || error.action)) || error || ""));
+}
+
 async function apiGet(pathname, query) {
   const url = buildQueryUrl(API_BASE + pathname, sanitizeQuery(query));
-  const resp = await widgetHttpGet(url, apiHeaders);
-  const data = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
+  const token = await ensureJdbToken();
+  const resp = await widgetHttpGet(url, () => apiHeaders(token ? { authorization: token } : null));
+  let data = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
   if (!data || data.success !== 1) {
+    if (token && data && isJdbAuthError(data)) {
+      // 登录态失效：强制重登一次后重试
+      clearJdbToken();
+      const fresh = await ensureJdbToken(true);
+      if (fresh && fresh !== token) {
+        const retryResp = await widgetHttpGet(url, () => apiHeaders({ authorization: fresh }));
+        data = typeof retryResp.data === "string" ? JSON.parse(retryResp.data) : retryResp.data;
+        if (data && data.success === 1) return data.data;
+      }
+    }
     throw new Error((data && data.message) || "API 请求失败: " + pathname);
   }
   return data.data;
@@ -3205,9 +3322,12 @@ async function fetchResolveViaWeakToken(code, lang) {
     token = "";
   }
   if (!token) {
-    // 服务端明确拒绝（gate 类错误）→ 视为弱通道收紧；纯网络异常不标记（常规通道会自行处理）
+    // 服务端明确拒绝（gate 类错误或 token_rate_limited 限流）→ 短负缓存；纯网络异常不标记
     const errData = tokenResp ? parseSiteResponseData(tokenResp) : null;
-    return errData && isSiteTokenGateError(errData) ? { gate: errData } : null;
+    if (errData && (isSiteTokenGateError(errData) || /rate|too_many/i.test(String(errData.error || "")))) {
+      return { gate: errData };
+    }
+    return null;
   }
   const url = buildQueryUrl(siteUrl("/api/v/resolve"), sanitizeQuery({ code: code, lang: lang || "zh", stream: "1", t: token }));
   const resp = await Widget.http.get(url, {
@@ -3555,6 +3675,8 @@ var CATEMBY_GY_GLOBAL_KEYS = [
   "magnet_min_video_mb",
   "magnet_block_patterns",
   "catemby_resolve_url",
+  "catemby_username",
+  "catemby_password",
 ];
 
 function normalizeStoreValue(val) {
@@ -5458,7 +5580,11 @@ async function loadDetail(link, params) {
   const movieId = extractMovieId(link);
 
   // 详情资料和 JavDB 磁力接口互不依赖，直接并发，避免两个请求串行累加。
-  const detailPromise = apiGet("/v4/movies/" + movieId);
+  // JavDB 2026-11 起详情要登录：未配置账号时降级为番号+播放源可用，详情标题/简介缺失不抛错。
+  const detailPromise = apiGet("/v4/movies/" + movieId).catch((error) => {
+    if (isJdbAuthError(error)) return { movie: null, authError: true };
+    throw error;
+  });
   const magnetPromise = fetchDetailMagnets(movieId, params, "");
   const detailResults = await Promise.all([detailPromise, magnetPromise]);
   const detail = detailResults[0] || {};
@@ -5496,6 +5622,7 @@ async function loadDetail(link, params) {
     []
   );
   const magnetSource = magnetBundle.source || "";
+  const detailAuthError = !!(detail && detail.authError);
   const magnetItems = buildMagnetRelatedItems(normalizedMagnets, {
     movieId: movieId,
     code: code || rawCode,
@@ -5521,6 +5648,9 @@ async function loadDetail(link, params) {
   if (movie.reviews_count) stats.push("评价 " + movie.reviews_count);
   if (magnetItems.length) stats.push("磁力 " + magnetItems.length);
   if (stats.length) descParts.push(stats.join("  "));
+  if (detailAuthError) {
+    descParts.push("⚠ 完整详情与磁力需 JavDB 登录：在模块设置填写账号密码后重试（播放源不受影响）");
+  }
   if (magnetItems.length) {
     descParts.push(formatMagnetSourceHint(magnetSource));
   } else if ((movie.magnets_count || 0) > 0) {
