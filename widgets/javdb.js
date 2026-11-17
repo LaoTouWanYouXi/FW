@@ -1310,7 +1310,7 @@ function firstEnumValue(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.9.6",
+  version: "4.9.7",
   requiredVersion: "0.0.1",
   description: "JavDB：榜单/厂牌/分类浏览；18mag 番号磁力转存光鸭（不提供播放源）；沿用账号/匿名接口分级",
   author: "老头",
@@ -5346,32 +5346,6 @@ async function fetchMovieReviews(movieId, params, options) {
   return all;
 }
 
-function settleWithTimeout(promise, ms, fallback) {
-  ms = Math.max(500, Number(ms) || 0);
-  return new Promise(function (resolve) {
-    var done = false;
-    var timer = setTimeout(function () {
-      if (done) return;
-      done = true;
-      resolve(fallback);
-    }, ms);
-    Promise.resolve(promise).then(
-      function (value) {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        resolve(value);
-      },
-      function () {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        resolve(fallback);
-      }
-    );
-  });
-}
-
 function collectMagnetSourceKeys(magnets) {
   var seen = {};
   (magnets || []).forEach(function (m) {
@@ -5411,7 +5385,8 @@ function formatMagnetSourceTip(source) {
 
 async function fetchDetailMagnets(movieId, params, code) {
   var startedAt = Date.now();
-  var deadlineAt = startedAt + 15000;
+  var deadlineAt = startedAt + 40000;
+  // 与 Netflav 一样直接等待 Widget.http 的超时/截止时间，不依赖全局计时器。
   // 18mag 与短评独立取数；短评只用于简介，不再作为磁力来源。
   var magnetPromise = Promise.resolve()
     .then(function () { return jdMagFind(code, deadlineAt); })
@@ -5420,11 +5395,8 @@ async function fetchDetailMagnets(movieId, params, code) {
     });
   var reviewPromise = Promise.resolve().then(function () {
     return fetchMovieReviews(movieId, params, { page: 1, limit: 15, maxPages: 2, deadlineAt: startedAt + 8000 });
-  });
-  var settled = await Promise.all([
-    settleWithTimeout(magnetPromise, Math.max(1000, deadlineAt - Date.now()), { items: [], warning: "18mag 取数超时，请稍后重试" }),
-    settleWithTimeout(reviewPromise, Math.max(1000, startedAt + 8000 - Date.now()), []),
-  ]);
+  })["catch"](function () { return []; });
+  var settled = await Promise.all([magnetPromise, reviewPromise]);
   var result = settled[0] || { items: [] };
   var magnets = jdMagNormalizeItems(result.items, code);
   console.log(
@@ -7645,7 +7617,7 @@ async function loadDetail(link, params) {
         backdropPath: coverUrl || posterUrl || (backdropPaths[0] || ""),
       });
     } catch (eMag) {
-      magnetWarning = "18mag 磁力暂不可用，不影响影片详情";
+      magnetWarning = safeText(eMag && eMag.message) || "18mag 磁力暂不可用，不影响影片详情";
     }
 
     var descParts = [];
