@@ -10,11 +10,10 @@
 /**
  * JavDB ForwardWidget 模块 v4
  * 管道：CategoryPath → jdforrepam API（绕过 CF）→ VideoItem
- * 登录：POST /v1/sessions（账号密码 → JWT）；仅 搜索/详情/磁力/TOP250 携带账号，
- *       榜单/厂牌/分类/女优榜等公开接口一律匿名请求（防账号高频封号）
+ * 登录：POST /v1/sessions（账号密码 → JWT）；沿用按接口分级的账号/匿名请求
  * 图片：复用“解密javdb.可视化.js”的 direct-dmm / MGStage 高清候选策略
  * 详情：按番号生成高清封面/剧照；简介含剧情+短评；trailers 预告片模块
- * 磁力：relatedItems 合并 JavDB API / 短评；展示体积·特征·来源，简介含文件名与转存说明
+ * 磁力：按番号查询 18mag（复用 Netflav）；展示体积·特征·来源，点击转存光鸭
  * 光鸭：仅磁力转存（无顶层搜索、无 loadResource 播放源）
  * 浏览：可视化厂牌/分类 + 榜单（热播/有码/无码/FC2/欧美/女优等）；已移除全量演员/系列/标签/片商枚举
  */
@@ -1311,9 +1310,9 @@ function firstEnumValue(options) {
 WidgetMetadata = {
   id: "forward.javdb",
   title: "JavDB",
-  version: "4.9.5",
+  version: "4.9.6",
   requiredVersion: "0.0.1",
-  description: "JavDB：榜单/厂牌/分类浏览；详情磁力转存光鸭（不提供播放源）；榜单/列表走公开匿名接口防封号",
+  description: "JavDB：榜单/厂牌/分类浏览；18mag 番号磁力转存光鸭（不提供播放源）；沿用账号/匿名接口分级",
   author: "老头",
   site: API_SITE,
   // 站点 logo：JavDB 180x180 PNG（已验证 200 可用）
@@ -5158,19 +5157,19 @@ function magnetStoreKey(hash) {
   return MAGNET_STORE_PREFIX + String(hash || "").trim().toLowerCase();
 }
 
-function cacheMagnetEntry(hash, data) {
+async function cacheMagnetEntry(hash, data) {
   hash = String(hash || "").trim().toLowerCase();
   if (!hash) return;
   try {
-    writeStore(magnetStoreKey(hash), JSON.stringify(Object.assign({ savedAt: Date.now() }, data || {})));
+    await writeStoreAsync(magnetStoreKey(hash), JSON.stringify(Object.assign({ savedAt: Date.now() }, data || {})));
   } catch (e) {}
 }
 
-function loadMagnetEntry(hash) {
+async function loadMagnetEntry(hash) {
   hash = String(hash || "").trim().toLowerCase();
   if (!hash) return null;
   try {
-    var raw = readStore(magnetStoreKey(hash));
+    var raw = await readStorageRawAsync(magnetStoreKey(hash));
     if (!raw) return null;
     return typeof raw === "string" ? JSON.parse(raw) : raw;
   } catch (e) {
@@ -5381,6 +5380,7 @@ function collectMagnetSourceKeys(magnets) {
       var key = String(list[i] || "").toLowerCase();
       if (key === "api" || key === "javdb") seen.api = true;
       else if (key === "review") seen.review = true;
+      else if (key === "18mag") seen["18mag"] = true;
     }
   });
   return seen;
@@ -5391,15 +5391,18 @@ function summarizeMagnetSourceLabel(magnets, fallback) {
   var labels = [];
   if (seen.api) labels.push("JavDB官方");
   if (seen.review) labels.push("短评");
+  if (seen["18mag"]) labels.push("18mag");
   if (labels.length > 1) return "mixed";
   if (labels.length === 1) {
     if (seen.api) return "api";
     if (seen.review) return "review";
+    if (seen["18mag"]) return "18mag";
   }
   return fallback || "";
 }
 
 function formatMagnetSourceTip(source) {
+  if (source === "18mag") return "磁力: 见下方相似作品栏（18mag 当前番号精确匹配，按体积排序），点击即可转存光鸭云盘";
   if (source === "review") return "磁力: 见下方相似作品栏（来自短评分享），点击即可转存光鸭云盘";
   if (source === "mixed") return "磁力: 见下方相似作品栏（多源已合并去重），点击即可转存光鸭云盘";
   if (source === "api") return "磁力: 见下方相似作品栏（JavDB官方），点击即可转存光鸭云盘";
@@ -5407,74 +5410,35 @@ function formatMagnetSourceTip(source) {
 }
 
 async function fetchDetailMagnets(movieId, params, code) {
-  var apiMagnets = [];
-  var reviewMagnets = [];
-  var reviews = [];
   var startedAt = Date.now();
-  // 详情页整体软超时：超过后用已拿到的结果，避免短评翻页卡住
-  var deadlineAt = startedAt + 8000;
-
+  var deadlineAt = startedAt + 15000;
+  // 18mag 与短评独立取数；短评只用于简介，不再作为磁力来源。
   var magnetPromise = Promise.resolve()
-    .then(function () {
-      // 磁力接口需登录：走账号通道
-      return apiGet("/v1/movies/" + movieId + "/magnets", null, params, { auth: true });
-    })
-    .then(function (magnetData) {
-      return (magnetData && magnetData.magnets) || [];
-    })
-    ["catch"](function () {
-      return [];
+    .then(function () { return jdMagFind(code, deadlineAt); })
+    ["catch"](function (error) {
+      return { items: [], warning: safeText(error && error.message) || "18mag 磁力暂不可用，不影响影片详情" };
     });
-
-  var reviewPromise = Promise.resolve()
-    .then(function () {
-      return fetchMovieReviews(movieId, params, {
-        page: 1,
-        limit: 15,
-        maxPages: 2,
-        deadlineAt: deadlineAt,
-      });
-    })
-    .then(function (list) {
-      reviews = list || [];
-      return magnetsFromReviews(reviews, code);
-    })
-    ["catch"](function () {
-      return [];
-    });
-
-  var remainMs = Math.max(1000, deadlineAt - Date.now());
+  var reviewPromise = Promise.resolve().then(function () {
+    return fetchMovieReviews(movieId, params, { page: 1, limit: 15, maxPages: 2, deadlineAt: startedAt + 8000 });
+  });
   var settled = await Promise.all([
-    settleWithTimeout(magnetPromise, remainMs, []),
-    settleWithTimeout(reviewPromise, remainMs, []),
+    settleWithTimeout(magnetPromise, Math.max(1000, deadlineAt - Date.now()), { items: [], warning: "18mag 取数超时，请稍后重试" }),
+    settleWithTimeout(reviewPromise, Math.max(1000, startedAt + 8000 - Date.now()), []),
   ]);
-  apiMagnets = settled[0] || [];
-  reviewMagnets = settled[1] || [];
-
-  var merged = mergeAndDedupeMagnets(apiMagnets, reviewMagnets, code);
-  var source = summarizeMagnetSourceLabel(merged, "");
-  if (!source) {
-    if (apiMagnets.length && reviewMagnets.length) source = "mixed";
-    else if (apiMagnets.length) source = "api";
-    else if (reviewMagnets.length) source = "review";
-  }
+  var result = settled[0] || { items: [] };
+  var magnets = jdMagNormalizeItems(result.items, code);
   console.log(
     "[javdb/detail-magnets]",
     code || movieId,
-    "api=" + apiMagnets.length,
-    "review=" + reviewMagnets.length,
-    "merged=" + merged.length,
+    "18mag=" + magnets.length,
     "elapsed=" + (Date.now() - startedAt) + "ms"
   );
   return {
-    magnets: merged,
-    source: source,
-    reviews: reviews || [],
-    counts: {
-      api: apiMagnets.length,
-      review: reviewMagnets.length,
-      merged: merged.length,
-    },
+    magnets: magnets,
+    source: "18mag",
+    reviews: settled[1] || [],
+    warning: result.warning || "",
+    counts: { "18mag": magnets.length, merged: magnets.length },
   };
 }
 
@@ -5500,7 +5464,7 @@ function formatDetailReviewsForDescription(reviews) {
 function normalizeMagnetSourceKey(source) {
   var key = String(source || "api").toLowerCase();
   if (key === "javdb") return "api";
-  if (key === "api" || key === "review" || key === "mixed") return key;
+  if (key === "api" || key === "review" || key === "mixed" || key === "18mag") return key;
   return "api";
 }
 
@@ -5515,6 +5479,7 @@ function magnetSourceLabel(m) {
   if (!keys.length) keys.push("api");
   var labels = keys.map(function (key) {
     if (key === "review") return "短评";
+    if (key === "18mag") return "18mag";
     return "JavDB官方";
   });
   return labels.join("＋");
@@ -5715,7 +5680,7 @@ function buildMagnetItemDescription(m, code) {
   return lines.join("\n");
 }
 
-function buildMagnetRelatedItems(magnets, ctx) {
+async function buildMagnetRelatedItems(magnets, ctx) {
   ctx = ctx || {};
   var items = [];
   var list = magnets || [];
@@ -5723,7 +5688,7 @@ function buildMagnetRelatedItems(magnets, ctx) {
     var m = list[i];
     var hash = String(m.hash || "").trim().toLowerCase();
     if (!hash) continue;
-    cacheMagnetEntry(hash, {
+    await cacheMagnetEntry(hash, {
       magnet: m.magnet || buildMagnetUrl(hash),
       hash: hash,
       name: safeText(m.name || hash),
@@ -6617,7 +6582,7 @@ async function saveMagnetToGuangya(magnet, cfg) {
 
 async function handleGuangyaMagnetSave(hash, params) {
   hash = String(hash || "").trim().toLowerCase();
-  var entry = loadMagnetEntry(hash);
+  var entry = await loadMagnetEntry(hash);
   var link = MAGNET_LINK_PREFIX + hash;
   if (!entry || !entry.magnet) {
     return {
@@ -6678,6 +6643,216 @@ async function handleGuangyaMagnetSave(hash, params) {
       backdropPath: entry.backdropPath || undefined,
     };
   }
+}
+
+/* ===== module: 09-18mag.js ===== */
+
+/* ========================= 18mag 番号磁力（复用 Netflav 直连策略） ========================= */
+var JD_MAG_SITE = "https://18mag.net";
+var JD_MAG_MAX_HTML_BYTES = 2000000;
+var JD_MAG_CACHE = {};
+
+function jdMagNormalizeCode(value) {
+  var text = safeText(value).toUpperCase();
+  var match = text.match(/^FC2[\s_-]*(?:PPV[\s_-]*)?(\d{5,9})$/);
+  if (match) return "FC2-PPV-" + match[1];
+  match = text.match(/^([A-Z]{2,12})[\s_-]*(\d{2,8})$/);
+  return match ? match[1] + "-" + match[2] : "";
+}
+
+function jdMagValidHash(magnet) {
+  var text = String(magnet || "");
+  if (!/^magnet:\?/i.test(text) || /[\s\x00-\x1f\x7f]/.test(text) || text.length > 8192) return "";
+  var match = text.match(/[?&]xt=urn:btih:([0-9a-fA-F]{40})(?:&|$)/i);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function jdMagCodeMatches(value, code) {
+  code = jdMagNormalizeCode(code);
+  if (!code) return false;
+  var pattern = /(?:^|[^A-Za-z0-9])((?:FC2[\s_-]*(?:PPV[\s_-]*)?\d{5,9}|[A-Za-z]{2,12}[\s_-]*\d{2,8}))(?=$|[^A-Za-z0-9])/gi;
+  var match;
+  while ((match = pattern.exec(String(value || ""))) !== null) {
+    if (jdMagNormalizeCode(match[1]) === code) return true;
+  }
+  return false;
+}
+
+function jdMagContainsOtherCode(value, code) {
+  code = jdMagNormalizeCode(code);
+  if (!code) return false;
+  var pattern = /(?:^|[^A-Za-z0-9])((?:FC2[\s_-]*(?:PPV[\s_-]*)?\d{5,9}|[A-Za-z]{2,12}[\s_-]*\d{2,8}))(?=$|[^A-Za-z0-9])/gi;
+  var match;
+  while ((match = pattern.exec(String(value || ""))) !== null) {
+    var normalized = jdMagNormalizeCode(match[1]);
+    if (normalized && normalized !== code) return true;
+  }
+  return false;
+}
+
+function jdMagDetailUrl(href) {
+  if (typeof href !== "string") return "";
+  var match = href.match(/^(?:https:\/\/18mag\.net)?(\/![A-Za-z0-9_-]{1,64})$/);
+  return match ? JD_MAG_SITE + match[1] : "";
+}
+
+function jdMagQueryValue(uri, name) {
+  var query = String(uri || "").split("?").slice(1).join("?").split("&");
+  for (var i = 0; i < query.length; i++) {
+    var equals = query[i].indexOf("=");
+    if (equals >= 0 && query[i].slice(0, equals) === name) return decodeMagnetSegment(query[i].slice(equals + 1));
+  }
+  return "";
+}
+
+function jdMagCheckHtmlSize(html) {
+  if (html.length > JD_MAG_MAX_HTML_BYTES) throw new Error("18mag 页面超过大小限制");
+  var bytes = 0;
+  for (var i = 0; i < html.length; i++) {
+    var code = html.charCodeAt(i);
+    if (code < 0x80) bytes++;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && i + 1 < html.length && html.charCodeAt(i + 1) >= 0xdc00 && html.charCodeAt(i + 1) <= 0xdfff) { bytes += 4; i++; }
+    else bytes += 3;
+    if (bytes > JD_MAG_MAX_HTML_BYTES) throw new Error("18mag 页面超过大小限制");
+  }
+}
+
+async function jdMagGetHtml(url, query, deadline) {
+  if (!/^https:\/\/18mag\.net\/(?:search|![A-Za-z0-9_-]{1,64})$/.test(url)) throw new Error("拒绝访问不支持的磁力站点地址");
+  var remaining = (deadline || Date.now() + 15000) - Date.now();
+  if (remaining < 1000) throw new Error("18mag 取数超时，请稍后重试");
+  var response;
+  try {
+    response = await Widget.http.get(url, {
+      params: query || {},
+      headers: { Accept: "text/html,application/xhtml+xml", Referer: JD_MAG_SITE + "/" },
+      timeout: Math.min(15000, remaining),
+      allow_redirects: false,
+      validate_status: false,
+    });
+  } catch (error) {
+    throw new Error("18mag 请求失败，请确认手机代理覆盖客户端的网络请求");
+  }
+  var status = Number(response && (response.status || response.statusCode || response.status_code)) || 0;
+  if (status && status !== 200) throw new Error("18mag 返回 HTTP " + status + (status === 403 ? "，站点要求验证或拒绝访问" : status === 500 ? "（站点当前故障，稍后重试）" : ""));
+  var html = response && (response.data !== undefined ? response.data : response.body);
+  if (typeof html !== "string" || !html.trim()) throw new Error("18mag 返回空页面或非文本内容");
+  jdMagCheckHtmlSize(html);
+  if (/cf-chl-|challenge-platform|<title[^>]*>\s*Just a moment/i.test(html.slice(0, 200000))) throw new Error("18mag 要求浏览器验证，当前未取得数据");
+  return html;
+}
+
+function jdMagDocument(html) {
+  if (typeof Widget === "undefined" || !Widget.html || typeof Widget.html.load !== "function") throw new Error("当前客户端缺少 HTML 解析能力，请更新客户端");
+  return Widget.html.load(html);
+}
+
+function jdMagExtract(html, code) {
+  code = jdMagNormalizeCode(code);
+  if (!code) return [];
+  var $ = jdMagDocument(html);
+  var title = "";
+  $("h1, h2.magnet-title").each(function (_, node) {
+    if (title) return;
+    var text = safeText($(node).text());
+    // 标题必须属于当前番号；合集和相似作品不进入磁力结果。
+    if (jdMagCodeMatches(text, code) && !jdMagContainsOtherCode(text, code)) title = text.slice(0, 200);
+  });
+  if (!title) return [];
+  var sizeText = "";
+  $("dt").each(function (_, node) {
+    if (!sizeText && /大小|size/i.test($(node).text())) sizeText = safeText($(node).next("dd").text()).slice(0, 40);
+  });
+  var candidates = [];
+  $("a[href], [data-clipboard-text], input#input-magnet").each(function (_, node) {
+    var element = $(node);
+    [element.attr("href"), element.attr("data-clipboard-text"), element.attr("value")].forEach(function (value) {
+      if (typeof value === "string" && /^magnet:\?/i.test(value)) candidates.push(value);
+    });
+  });
+  var seen = {};
+  var output = [];
+  candidates.forEach(function (magnet) {
+    var hash = jdMagValidHash(magnet);
+    if (!hash || seen[hash] || output.length >= 30) return;
+    var dn = jdMagQueryValue(magnet, "dn").slice(0, 200);
+    if (dn && (!jdMagCodeMatches(dn, code) || jdMagContainsOtherCode(dn, code))) return;
+    seen[hash] = true;
+    var byteText = jdMagQueryValue(magnet, "xl");
+    var bytes = /^\d{1,15}$/.test(byteText) ? Number(byteText) : 0;
+    if (!bytes) {
+      var size = sizeText.match(/(\d+(?:\.\d+)?)\s*(GiB|GB|MiB|MB|KiB|KB)\b/i);
+      if (size) bytes = Math.floor(Number(size[1]) * Math.pow(1024, { g: 3, m: 2, k: 1 }[size[2].charAt(0).toLowerCase()]));
+    }
+    var tags = [];
+    var label = title + " " + dn;
+    [[/\b(?:4K|2160P|UHD)\b/i, "4K"], [/\b1080P\b/i, "1080P"], [/\b720P\b/i, "720P"], [/无码|無碼|无修正|無修正|破解|uncensored|uncen|leak/i, "无码"], [/中字|中文|字幕/, "中字"]].forEach(function (rule) {
+      if (rule[0].test(label)) tags.push(rule[1]);
+    });
+    output.push({ hash: hash, magnet: magnet, name: dn || title || code, code: code,
+      size: sizeText || (bytes ? (bytes / 1073741824).toFixed(2) + " GB" : ""), size_bytes: bytes, tags: tags, source: "18mag" });
+  });
+  return output;
+}
+
+async function jdMagFind(code, deadline) {
+  code = jdMagNormalizeCode(code);
+  if (!code) return { items: [], warning: "无可确认的番号，未查询 18mag" };
+  var cached = JD_MAG_CACHE[code];
+  if (cached && cached.expires > Date.now()) return cached.value;
+  delete JD_MAG_CACHE[code];
+  var $ = jdMagDocument(await jdMagGetHtml(JD_MAG_SITE + "/search", { q: code }, deadline));
+  var candidates = [];
+  $("a[href]").each(function (_, node) {
+    var element = $(node);
+    var url = jdMagDetailUrl(element.attr("href"));
+    var text = safeText(element.text());
+    if (url && jdMagCodeMatches(text, code) && !jdMagContainsOtherCode(text, code) && candidates.indexOf(url) < 0 && candidates.length < 3) candidates.push(url);
+  });
+  var items = [];
+  var seen = {};
+  var failed = false;
+  for (var i = 0; i < candidates.length; i++) {
+    if (deadline && Date.now() >= deadline) { failed = true; break; }
+    try {
+      var html = await jdMagGetHtml(candidates[i], {}, deadline);
+      jdMagExtract(html, code).forEach(function (entry) {
+        if (!seen[entry.hash]) { seen[entry.hash] = true; items.push(entry); }
+      });
+    } catch (error) { failed = true; }
+  }
+  var result = { items: items.slice(0, 30), warning: failed ? "部分 18mag 详情无法读取，可稍后重试" : items.length ? "" : "18mag 未找到精确匹配的磁力" };
+  if (!failed) {
+    var keys = Object.keys(JD_MAG_CACHE);
+    if (keys.length >= 16 && !JD_MAG_CACHE[code]) delete JD_MAG_CACHE[keys[0]];
+    JD_MAG_CACHE[code] = { expires: Date.now() + 300000, value: result };
+  }
+  return result;
+}
+
+function jdMagNormalizeItems(items, code) {
+  code = jdMagNormalizeCode(code);
+  if (!code) return [];
+  var seen = {};
+  var output = [];
+  (items || []).forEach(function (entry) {
+    var hash = jdMagValidHash(entry && entry.magnet);
+    if (!hash || hash !== String(entry.hash || "").toLowerCase() || seen[hash] || jdMagNormalizeCode(entry.code) !== code) return;
+    seen[hash] = true;
+    var tags = Array.isArray(entry.tags) ? entry.tags : [];
+    var item = normalizeMagnetEntry({
+      hash: hash, magnet: entry.magnet, name: entry.name,
+      size: Number(entry.size_bytes) > 0 ? Number(entry.size_bytes) / 1048576 : 0,
+      sizeText: entry.size, source: "18mag",
+      cnsub: tags.indexOf("中字") >= 0,
+      hd: tags.indexOf("1080P") >= 0 || tags.indexOf("720P") >= 0 || tags.indexOf("4K") >= 0,
+      uhd: tags.indexOf("4K") >= 0,
+      uncensored: tags.indexOf("无码") >= 0,
+    }, code, "18mag");
+    if (item) output.push(item);
+  });
+  return output.sort(function (a, b) { return Number(b.size || 0) - Number(a.size || 0); });
 }
 
 /* ===== module: 10-visual-hd-images.js ===== */
@@ -7456,18 +7631,22 @@ async function loadDetail(link, params) {
     var meta = parseDetailMeta(movie);
     var relatedItems = [];
     var magnetSource = "";
+    var magnetWarning = "";
     var detailReviews = [];
     try {
       var magnetBundle = await fetchDetailMagnets(movieId, params, code);
       magnetSource = magnetBundle.source || "";
+      magnetWarning = magnetBundle.warning || "";
       detailReviews = magnetBundle.reviews || [];
-      relatedItems = buildMagnetRelatedItems(magnetBundle.magnets, {
+      relatedItems = await buildMagnetRelatedItems(magnetBundle.magnets, {
         movieId: movieId,
         code: code,
         title: title,
         backdropPath: coverUrl || posterUrl || (backdropPaths[0] || ""),
       });
-    } catch (eMag) {}
+    } catch (eMag) {
+      magnetWarning = "18mag 磁力暂不可用，不影响影片详情";
+    }
 
     var descParts = [];
     if (code) descParts.push("番号: " + code);
@@ -7486,9 +7665,10 @@ async function loadDetail(link, params) {
     if (shortReviewBlock) descParts.push(shortReviewBlock);
     if (relatedItems.length) {
       descParts.push(formatMagnetSourceTip(magnetSource));
-    } else if (resolveGuangyaTokenSync()) {
-      descParts.push("磁力: 暂无可用磁链");
+    } else if (!magnetWarning) {
+      descParts.push("磁力: 18mag 暂无可用磁链");
     }
+    if (magnetWarning) descParts.push("磁力: " + safeText(magnetWarning));
     var item = {
       id: code || movie.id || movieId,
       type: "detail",
