@@ -74,15 +74,6 @@
       "version": "1.9.6",
       "author": "廿二日",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/hanime1.js"
-    },
-    {
-      "id": "jable_int",
-      "title": "Jable",
-      "description": "修复声音&恢复大量分类",
-      "requiredVersion": "0.0.2",
-      "version": "1.3.0",
-      "author": "nibiru｜MakkaPakka｜蝴蝶",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/jable.js"
     }
   ]
 }
