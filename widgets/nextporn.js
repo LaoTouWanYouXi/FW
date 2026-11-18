@@ -724,9 +724,8 @@ async function loadDetail(link) {
   const uuid = parseOwnedLink(link);
   if (!uuid) return null;
   try {
-    const html = await fetchHtml(SITE + "/en/watch/" + uuid + "/");
-    const ld = extractVideoObject(html);
-    if (!ld) throw new Error("详情 JSON-LD 缺失");
+    const data = await fetchWatchData(uuid); // TTL 内复用缓存,与 loadResource 共享同一次抓取
+    const ld = data.ld;
 
     const item = {
       id: link,
@@ -745,7 +744,7 @@ async function loadDetail(link) {
     if (ld.thumbnailUrl) item.backdropPaths = [ld.thumbnailUrl];
 
     // genre 为分类 slug 数组（均为站点已知分类，可点开跳回分类列表）
-    const genres = Array.isArray(ld.genre) ? ld.genre : ld.genre ? [ld.genre] : [];
+    const genres = Array.isArray(ld.genre) ? ld.genre : [];
     if (genres.length) {
       item.genreItems = genres.map((g) => ({ id: String(g), title: String(g) }));
       item.genreTitle = genres.map((g) => String(g)).join(", ");
@@ -758,9 +757,8 @@ async function loadDetail(link) {
       item.peoples = [people];
     }
 
-    // 相关推荐（SSR 卡片，排除自身）
-    const related = parseCards(html, uuid).slice(0, 12).map(toVideoItem);
-    if (related.length) item.relatedItems = related;
+    // 相关推荐（抓取时随页解析,已排除自身）
+    if (data.related && data.related.length) item.relatedItems = data.related;
 
     return item;
   } catch (error) {
@@ -778,28 +776,24 @@ async function loadResource(params) {
     const uuid = parseOwnedLink(raw);
     if (!uuid) return [];
 
-    const html = await fetchHtml(SITE + "/en/watch/" + uuid + "/");
-    // 页面内嵌 JSON（JSON-LD 与 RSC flight）里同时含 mp4 与 hls：
-    // 兼容 \" 转义与普通引号两种形态
-    const mp4 =
-      (html.match(/mp4Url\\?":\\?"(https:[^"\\]+?\.mp4)/) || html.match(/contentUrl\\?":\\?"(https:[^"\\]+?\.mp4)/) || [])[1];
-    const hls = (html.match(/hls_manifest_key\\?":\\?"(https:[^"\\]+?\.m3u8)/) || [])[1];
-    if (!mp4 && !hls) throw new Error("未找到播放地址");
+    // 与 loadDetail 共享同一份缓存:点播放时通常不再发请求
+    const data = await fetchWatchData(uuid);
+    if (!data.mp4 && !data.hls) throw new Error("未找到播放地址");
 
     const lines = [];
-    if (hls) {
+    if (data.hls) {
       lines.push({
         name: "HLS 自适应",
         description: "m3u8 · 自适应清晰度",
-        url: hls,
+        url: data.hls,
         headers: { "User-Agent": UA },
       });
     }
-    if (mp4) {
+    if (data.mp4) {
       lines.push({
         name: "MP4 720p",
         description: "mp4 · 720p",
-        url: mp4,
+        url: data.mp4,
         headers: { "User-Agent": UA },
       });
     }
