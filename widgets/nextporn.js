@@ -1,13 +1,16 @@
 WidgetMetadata = {
   id: "rex.nextporn",
   title: "NextPorn",
-  version: "1.0.0",
+  version: "1.1.0",
   requiredVersion: "0.0.1",
   description: "nextporn.com · AI 生成的成人短视频与完整场景（110 分类 / 71 标签 / 69 演员，SSR 直读，含搜索与详情推荐）",
   author: "YG",
   site: "https://nextporn.com/",
+  // 站点 PNG 版 logo（512×512 应用图标，webmanifest 官方资源）；页头 logo.svg 是矢量字标，
+  // rex 对 SVG 图标渲染不稳，iconUrl 与 icon 一并指向 PNG（one-rex.js 同款别名惯例）
   icon: "https://nextporn.com/web-app-manifest-512x512.png",
-  detailCacheDuration: 60,
+  iconUrl: "https://nextporn.com/web-app-manifest-512x512.png",
+  detailCacheDuration: 300,
   modules: [
     {
       id: "nextporn-all",
@@ -334,9 +337,9 @@ WidgetMetadata = {
     {
       id: "loadResource",
       title: "播放资源",
-      description: "按需解析播放地址（仅本模块条目，需 npw: 前缀链接）",
+      description: "按需解析播放地址（仅本模块条目，需 npw: 前缀链接；与详情共享缓存，不重复抓站）",
       requiresWebView: false,
-      cacheDuration: 0,
+      cacheDuration: 60,
       functionName: "loadResource",
       type: "stream",
       params: [],
@@ -401,11 +404,19 @@ function parseOwnedLink(raw) {
   return UUID_RE.test(uuid) ? uuid : null;
 }
 
+// 4xx 响应转可读错误:429/403 明确提示可能是站点风控,便于在 App 日志里区分
+function statusError(status, url) {
+  const s = Number(status);
+  const hint = s === 429 || s === 403 ? " (可能触发站点风控/限流)" : "";
+  return new Error("HTTP " + s + hint + ": " + url);
+}
+
 async function fetchHtml(url, options) {
   const res = await Widget.http.get(url, Object.assign({ headers: { "User-Agent": UA } }, options || {}));
   if (!res || typeof res.data !== "string" || !res.data) {
     throw new Error("空响应: " + url);
   }
+  if (res.status && Number(res.status) >= 400) throw statusError(res.status, url);
   return res.data;
 }
 
@@ -510,6 +521,7 @@ const ARCHIVE_PAGE_SIZE = 24;
 
 async function fetchJson(url) {
   const res = await Widget.http.get(url, { headers: { "User-Agent": UA } });
+  if (res && res.status && Number(res.status) >= 400) throw statusError(res.status, url);
   const body = res && res.data;
   const json = typeof body === "string" ? JSON.parse(body) : body; // http 层可能已自动 parse
   if (!json || !json.success || !Array.isArray(json.data)) throw new Error("API 响应异常: " + url);
@@ -552,6 +564,92 @@ async function fetchArchive(keyword, page) {
   const items = json.data.map(apiVideoToItem);
   if (!items.length) throw new Error("API 无结果" + (keyword ? ": " + keyword : ""));
   return items;
+}
+
+// ---------- watch 页共享缓存(防重复请求/降低请求频次) ----------
+// loadDetail 与 loadResource 在 rex 播放流程里都会取同一个 watch 页(进详情 → 点播放),
+// 不合并的话同一视频至少抓站 2 次,重播/切线还会更多。这里统一走一次抓取,
+// 解析结果写入模块存储,TTL 内复用(站点 mp4/hls 是静态 uuid 直链、无签名,复用安全)。
+// 列表/搜索每页本就只有一次请求,加上 App 侧 cacheDuration(列表 300s / 详情 300s / 资源 60s),
+// 常规浏览对站点的请求量 = 每个列表页 1 次 + 每个打开的视频 1 次。
+
+const WATCH_CACHE_PREFIX = "watch:";
+const WATCH_CACHE_TTL = 30 * 60 * 1000; // 30 分钟
+
+// Widget.storage 兼容:同步返回或 Promise 均支持;读写失败静默降级(只影响缓存命中)
+async function storageGet(key) {
+  try {
+    const raw = Widget.storage.get(key);
+    const v = raw && typeof raw.then === "function" ? await raw : raw;
+    return v == null ? null : String(v);
+  } catch (e) {
+    return null;
+  }
+}
+
+function storageSet(key, value) {
+  try {
+    Widget.storage.set(key, value);
+  } catch (e) {
+    // 写入失败只损失缓存,不影响返回
+  }
+}
+
+function validWatchData(d) {
+  return (
+    d &&
+    typeof d === "object" &&
+    typeof d.t === "number" &&
+    d.ld &&
+    typeof d.ld === "object" &&
+    (typeof d.mp4 === "string" || typeof d.hls === "string")
+  );
+}
+
+async function fetchWatchData(uuid) {
+  const key = WATCH_CACHE_PREFIX + uuid;
+  const cachedRaw = await storageGet(key);
+  if (cachedRaw) {
+    try {
+      const cached = JSON.parse(cachedRaw);
+      if (validWatchData(cached) && Date.now() - cached.t < WATCH_CACHE_TTL) {
+        return cached; // 缓存命中:0 网络请求
+      }
+    } catch (e) {
+      // 缓存损坏 → 重新拉取
+    }
+  }
+
+  const html = await fetchHtml(SITE + "/en/watch/" + uuid + "/");
+  const ld = extractVideoObject(html);
+  if (!ld) throw new Error("详情 JSON-LD 缺失");
+
+  // mp4/hls 兼容 \" 转义(flight)与普通引号(JSON-LD)两种形态
+  const data = {
+    t: Date.now(),
+    ld: {
+      name: ld.name || "",
+      description: ld.description || "",
+      thumbnailUrl: ld.thumbnailUrl || "",
+      uploadDate: ld.uploadDate || "",
+      duration: ld.duration || "",
+      contentUrl: ld.contentUrl || "",
+      genre: Array.isArray(ld.genre) ? ld.genre : ld.genre ? [ld.genre] : [],
+      creator:
+        ld.creator && ld.creator.name
+          ? { name: String(ld.creator.name), url: String(ld.creator.url || "") }
+          : null,
+    },
+    mp4:
+      (html.match(/mp4Url\\?":\\?"(https:[^"\\]+?\.mp4)/) || html.match(/contentUrl\\?":\\?"(https:[^"\\]+?\.mp4)/) || [])[1] || "",
+    hls: (html.match(/hls_manifest_key\\?":\\?"(https:[^"\\]+?\.m3u8)/) || [])[1] || "",
+    related: parseCards(html, uuid).slice(0, 12).map(toVideoItem),
+  };
+  if (data.mp4 || data.hls) {
+    // 至少拿到一条可播地址才缓存,避免把坏页结果缓存 30 分钟
+    storageSet(key, JSON.stringify(data));
+  }
+  return data;
 }
 
 // ---------- 处理函数 ----------
