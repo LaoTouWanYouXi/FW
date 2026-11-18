@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "a91porn.rex",
   title: "91视频(a91porn)",
-  version: "1.2.0",
+  version: "1.3.0",
   requiredVersion: "0.0.1",
   description: "a91porn.com 91系国产视频站：频道即模块（最新/最热/加精等 13 个），每个模块内带标签分类 + 搜索 + 详情页播放",
   author: "rex module",
@@ -10,7 +10,8 @@ WidgetMetadata = {
   iconUrl: "https://a91porn.com/brand/icon-aa712067-180.png",
   // rex 实际读取的字段名是 icon（官方 demo.js 同款），与 iconUrl 同值一并带上
   icon: "https://a91porn.com/brand/icon-aa712067-180.png",
-  detailCacheDuration: 60,
+  // 详情数据基本静态（标题/照片/相关），300s 缓存降低重复进详情的请求频次（防风控）
+  detailCacheDuration: 300,
   // 每个频道一个模块，共用 loadList，用 constant 参数区分（one-rex.js 同款惯例）
   // category 的 enumOptions 用占位空数组，文件底部统一回填 TAG_CATEGORY_OPTIONS
   modules: [
@@ -280,12 +281,62 @@ function parseOwnLink(raw) {
   return null;
 }
 
+/* ===================== 播放源缓存（防风控降频） ===================== */
+
+// 起播解析不重拉详情页整页 HTML（约百 KB）：优先复用缓存、其次直调轻量 /api/play JSON（约百字节），
+// 只有接口异常才回退整页抓内联直链。同一影片"详情→起播→重播"从最多 3~4 次请求降到常驻 0~1 次。
+const PLAY_MEMO = {}; // 会话内缓存 id -> { url, at, ttlMs }
+function playCacheKey(id) { return "play:" + id; }
+
+function cacheGetPlay(id) {
+  const now = Date.now();
+  const mem = PLAY_MEMO[id];
+  if (mem && mem.url && now - mem.at < mem.ttlMs) return mem.url;
+  try {
+    if (Widget.storage && typeof Widget.storage.get === "function") {
+      const raw = Widget.storage.get(playCacheKey(id));
+      if (raw) {
+        const obj = JSON.parse(raw);
+        if (obj && obj.url && now - obj.at < obj.ttlMs) { PLAY_MEMO[id] = obj; return obj.url; }
+      }
+    }
+  } catch (e) { /* 存储损坏按未命中处理 */ }
+  return null;
+}
+
+function cacheSetPlay(id, url, ttlMs) {
+  const obj = { url: url, at: Date.now(), ttlMs: ttlMs };
+  PLAY_MEMO[id] = obj;
+  try {
+    if (Widget.storage && typeof Widget.storage.set === "function") {
+      Widget.storage.set(playCacheKey(id), JSON.stringify(obj));
+    }
+  } catch (e) { /* 存储失败只丢缓存，不影响播放 */ }
+}
+
+// 未签名直链相对稳定 → 缓存 30 分钟；签名地址按接口 ttl 收敛（≤300s，留出播放余量）
+function playTtlMs(data) {
+  if (data && data.signed) return Math.max(60, Math.min(Number(data.ttl) || 600, 300)) * 1000;
+  return 30 * 60 * 1000;
+}
+
 async function resolvePlayUrl(id) {
+  const cached = cacheGetPlay(id);
+  if (cached) return cached; // 缓存命中：0 请求
+  const data = await httpGetJson(BASE + "/api/play/" + id + "/0");
+  if (data && data.src) {
+    const url = String(data.src);
+    cacheSetPlay(id, url, playTtlMs(data));
+    return url;
+  }
+  // 兜底（仅失败路径才整页请求）：详情页内联直链
   const page = await httpGetText(BASE + "/" + id);
   const boxM = /<div class="p91-player[^"]*" data-play="\d+" data-index="\d+" data-src="([^"]+)"/.exec(page);
-  if (boxM) return decodeEntities(boxM[1]);
-  const data = await httpGetJson(BASE + "/api/play/" + id + "/0");
-  if (data && data.src) return String(data.src);
+  if (boxM) {
+    const url = decodeEntities(boxM[1]);
+    cacheSetPlay(id, url, 30 * 60 * 1000);
+    return url;
+  }
   return null;
 }
 
@@ -352,14 +403,14 @@ async function loadDetail(link) {
       if (!seen[u]) { seen[u] = true; backdropPaths.push(u); }
     }
 
-    // 内联播放地址，缺失时走 /api/play（会员/签名视频）
+    // 内联播放地址直接缓存（起播时 loadResource 零请求）；缺失时走 resolvePlayUrl（api/play→页兜底）
     let videoUrl = null;
     const srcM = /<div class="p91-player[^"]*" data-play="\d+" data-index="\d+" data-src="([^"]+)"/.exec(html);
     if (srcM) {
       videoUrl = decodeEntities(srcM[1]);
+      cacheSetPlay(id, videoUrl, 30 * 60 * 1000);
     } else {
-      const data = await httpGetJson(BASE + "/api/play/" + id + "/0");
-      if (data && data.src) videoUrl = String(data.src);
+      videoUrl = await resolvePlayUrl(id);
     }
 
     // 相关推荐：页面里其余卡片（接下来看/同分类/更多视频），排除自身
