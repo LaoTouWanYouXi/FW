@@ -16,6 +16,10 @@ WidgetMetadata = {
   description: '模块“番剧”分类做了tv伪装，其他分类默认movie，更新频道https://t.me/ner_workshop',
   author: '廿二日',
   site: 'https://hanime1.me',
+  // rex 实际读取的字段名是 icon(iconUrl 只是兼容别名),两个字段同值都带上
+  // hanime1.me/favicon.ico 返回空 body 不可用;真图标在 hembed CDN,必须带 ?secure= 签名参数(实测跨请求稳定)
+  icon: 'https://vdownload.hembed.com/image/icon/tab_logo.png?secure=EJYLwnrDlidVi_wFp3DaGw==,4867726124',
+  iconUrl: 'https://vdownload.hembed.com/image/icon/tab_logo.png?secure=EJYLwnrDlidVi_wFp3DaGw==,4867726124',
   version: '2.3.2',
   requiredVersion: '0.0.2',
   detailCacheDuration: 300,
