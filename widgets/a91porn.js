@@ -1,124 +1,45 @@
 WidgetMetadata = {
   id: "a91porn.rex",
   title: "91视频(a91porn)",
-  version: "1.0.0",
+  version: "1.2.0",
   requiredVersion: "0.0.1",
-  description: "a91porn.com 91系国产视频站：最新/最热/加精等频道 + 标签分类 + 搜索 + 详情页播放",
+  description: "a91porn.com 91系国产视频站：频道即模块（最新/最热/加精等 13 个），每个模块内带标签分类 + 搜索 + 详情页播放",
   author: "rex module",
   site: "https://a91porn.com",
+  // 站标：站点 <link rel="apple-touch-icon">（180×180 PNG，实测 200）
+  iconUrl: "https://a91porn.com/brand/icon-aa712067-180.png",
+  // rex 实际读取的字段名是 icon（官方 demo.js 同款），与 iconUrl 同值一并带上
+  icon: "https://a91porn.com/brand/icon-aa712067-180.png",
   detailCacheDuration: 60,
+  // 每个频道一个模块，共用 loadList，用 constant 参数区分（one-rex.js 同款惯例）
+  // category 的 enumOptions 用占位空数组，文件底部统一回填 TAG_CATEGORY_OPTIONS
   modules: [
-    {
-      id: "loadList",
-      title: "视频列表",
-      functionName: "loadList",
-      cacheDuration: 1800,
-      requiresWebView: false,
-      sectionMode: false,
-      params: [
-        {
-          name: "channel",
-          title: "频道",
-          type: "enumeration",
-          enumOptions: [
-            { title: "最新", value: "latest" },
-            { title: "当前最热", value: "remen" },
-            { title: "本月最热", value: "benyue" },
-            { title: "每月最热", value: "meiyue" },
-            { title: "91原创", value: "yuanchuang" },
-            { title: "最近加精", value: "jiajing" },
-            { title: "本月收藏", value: "benyue-shoucang" },
-            { title: "收藏最多", value: "jingdian" },
-            { title: "高清", value: "gaoqing" },
-            { title: "10分钟以上", value: "changpian" },
-            { title: "20分钟以上", value: "chaochang" },
-            { title: "本月讨论", value: "taolun" },
-            { title: "吃瓜", value: "chigua" },
-          ],
-        },
-        {
-          name: "category",
-          title: "标签分类",
-          type: "enumeration",
-          enumOptions: [
-            { title: "不限", value: "" },
-            { title: "自拍", value: "zipai" },
-            { title: "约炮", value: "yuepao" },
-            { title: "人妻", value: "renqi" },
-            { title: "少妇", value: "shaofu" },
-            { title: "巨乳", value: "juru" },
-            { title: "大奶子", value: "danaizi" },
-            { title: "黑丝", value: "heisi" },
-            { title: "白丝", value: "baisi" },
-            { title: "红丝", value: "hongsi" },
-            { title: "丝袜", value: "siwa" },
-            { title: "反差", value: "fancha" },
-            { title: "极品美女", value: "jipinmeinv" },
-            { title: "高颜值", value: "gaoyanzhi" },
-            { title: "纯欲", value: "chunyu" },
-            { title: "粉嫩", value: "fennen" },
-            { title: "处女", value: "chunv" },
-            { title: "女大学生", value: "xuesheng" },
-            { title: "零零后", value: "linglinghou" },
-            { title: "老婆", value: "laopo" },
-            { title: "女友", value: "nvyou" },
-            { title: "娇妻", value: "jiaoqi" },
-            { title: "调教", value: "tiaojiao" },
-            { title: "后入", value: "houru" },
-            { title: "口交", value: "koujiao" },
-            { title: "内射", value: "neishe" },
-            { title: "无套", value: "wutao" },
-            { title: "肛交", value: "gangjiao" },
-            { title: "潮吹", value: "chaochui" },
-            { title: "潮喷", value: "chaopen" },
-            { title: "自慰", value: "ziwei" },
-            { title: "出轨", value: "chugui" },
-            { title: "换妻", value: "huanqi" },
-            { title: "单男", value: "dannan" },
-            { title: "3P", value: "3p" },
-            { title: "4P", value: "4p" },
-            { title: "闺蜜", value: "guimi" },
-            { title: "姐妹", value: "jiemei" },
-            { title: "护士", value: "hushi" },
-            { title: "服务员", value: "fuwuyuan" },
-            { title: "乘务员", value: "chengwuyuan" },
-            { title: "公务员", value: "gongwuyuan" },
-            { title: "白领", value: "bailing" },
-            { title: "宝妈", value: "baoma" },
-            { title: "阿姨", value: "ayi" },
-            { title: "姐姐", value: "jiejie" },
-            { title: "cosplay", value: "cosplay" },
-            { title: "健身", value: "jianshen" },
-            { title: "户外", value: "huwai" },
-            { title: "车震", value: "chezhen" },
-            { title: "办公室", value: "bangongshi" },
-            { title: "酒店", value: "jiudian" },
-            { title: "厨房", value: "chufang" },
-            { title: "厕所", value: "cesuo" },
-            { title: "公厕", value: "gongce" },
-            { title: "露脸", value: "loulian" },
-            { title: "母狗", value: "mugou" },
-            { title: "骚货", value: "saohuo" },
-            { title: "吃瓜", value: "chigua" },
-            { title: "多机位", value: "duojiwei" },
-            { title: "第一视角", value: "diyishijiao" },
-            { title: "合集", value: "heji" },
-            { title: "BBW", value: "bbw" },
-            { title: "黑人", value: "heiren" },
-            { title: "韩国", value: "hanguo" },
-            { title: "日系", value: "rixi" },
-            { title: "AV", value: "av" },
-            { title: "白虎", value: "baihu" },
-            { title: "嫩鲍", value: "nenbao" },
-            { title: "腿交", value: "tuijiao" },
-            { title: "毒龙", value: "dulong" },
-            { title: "按摩", value: "anmo" },
-            { title: "爆操", value: "baocao" },
-          ],
-        },
-        { name: "page", title: "页码", type: "page" },
-      ],
-    },
+    { id: "list-latest", title: "最新", description: "全站最新上传", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "latest" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-remen", title: "当前最热", description: "实时热门榜", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "remen" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-benyue", title: "本月最热", description: "当月最热视频", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "benyue" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-meiyue", title: "每月最热", description: "往月最热视频", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "meiyue" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-yuanchuang", title: "91原创", description: "官方原创专区（多为竖屏）", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "yuanchuang" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-jiajing", title: "最近加精", description: "最新加精视频", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "jiajing" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-benyue-shoucang", title: "本月收藏", description: "当月收藏最多", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "benyue-shoucang" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-jingdian", title: "收藏最多", description: "全站收藏榜", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "jingdian" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-gaoqing", title: "高清", description: "高清专区", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "gaoqing" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-changpian", title: "10分钟以上", description: "长视频", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "changpian" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-chaochang", title: "20分钟以上", description: "超长视频", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "chaochang" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-taolun", title: "本月讨论", description: "当月评论最多", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "taolun" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
+    { id: "list-chigua", title: "吃瓜", description: "吃瓜爆料区", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+      params: [ { name: "channel", title: "频道", type: "constant", value: "chigua" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
     {
       id: "loadResource",
       title: "加载播放资源",
@@ -137,6 +58,87 @@ WidgetMetadata = {
     ],
   },
 };
+
+/* 13 个频道模块共用的标签分类枚举（与站点 /tag 热门标签核对），统一回填到上面的占位 */
+const TAG_CATEGORY_OPTIONS = [
+  { title: "不限", value: "" },
+  { title: "自拍", value: "zipai" },
+  { title: "约炮", value: "yuepao" },
+  { title: "人妻", value: "renqi" },
+  { title: "少妇", value: "shaofu" },
+  { title: "巨乳", value: "juru" },
+  { title: "大奶子", value: "danaizi" },
+  { title: "黑丝", value: "heisi" },
+  { title: "白丝", value: "baisi" },
+  { title: "红丝", value: "hongsi" },
+  { title: "丝袜", value: "siwa" },
+  { title: "反差", value: "fancha" },
+  { title: "极品美女", value: "jipinmeinv" },
+  { title: "高颜值", value: "gaoyanzhi" },
+  { title: "纯欲", value: "chunyu" },
+  { title: "粉嫩", value: "fennen" },
+  { title: "处女", value: "chunv" },
+  { title: "女大学生", value: "xuesheng" },
+  { title: "零零后", value: "linglinghou" },
+  { title: "老婆", value: "laopo" },
+  { title: "女友", value: "nvyou" },
+  { title: "娇妻", value: "jiaoqi" },
+  { title: "调教", value: "tiaojiao" },
+  { title: "后入", value: "houru" },
+  { title: "口交", value: "koujiao" },
+  { title: "内射", value: "neishe" },
+  { title: "无套", value: "wutao" },
+  { title: "肛交", value: "gangjiao" },
+  { title: "潮吹", value: "chaochui" },
+  { title: "潮喷", value: "chaopen" },
+  { title: "自慰", value: "ziwei" },
+  { title: "出轨", value: "chugui" },
+  { title: "换妻", value: "huanqi" },
+  { title: "单男", value: "dannan" },
+  { title: "3P", value: "3p" },
+  { title: "4P", value: "4p" },
+  { title: "闺蜜", value: "guimi" },
+  { title: "姐妹", value: "jiemei" },
+  { title: "护士", value: "hushi" },
+  { title: "服务员", value: "fuwuyuan" },
+  { title: "乘务员", value: "chengwuyuan" },
+  { title: "公务员", value: "gongwuyuan" },
+  { title: "白领", value: "bailing" },
+  { title: "宝妈", value: "baoma" },
+  { title: "阿姨", value: "ayi" },
+  { title: "姐姐", value: "jiejie" },
+  { title: "cosplay", value: "cosplay" },
+  { title: "健身", value: "jianshen" },
+  { title: "户外", value: "huwai" },
+  { title: "车震", value: "chezhen" },
+  { title: "办公室", value: "bangongshi" },
+  { title: "酒店", value: "jiudian" },
+  { title: "厨房", value: "chufang" },
+  { title: "厕所", value: "cesuo" },
+  { title: "公厕", value: "gongce" },
+  { title: "露脸", value: "loulian" },
+  { title: "母狗", value: "mugou" },
+  { title: "骚货", value: "saohuo" },
+  { title: "吃瓜", value: "chigua" },
+  { title: "多机位", value: "duojiwei" },
+  { title: "第一视角", value: "diyishijiao" },
+  { title: "合集", value: "heji" },
+  { title: "BBW", value: "bbw" },
+  { title: "黑人", value: "heiren" },
+  { title: "韩国", value: "hanguo" },
+  { title: "日系", value: "rixi" },
+  { title: "AV", value: "av" },
+  { title: "白虎", value: "baihu" },
+  { title: "嫩鲍", value: "nenbao" },
+  { title: "腿交", value: "tuijiao" },
+  { title: "毒龙", value: "dulong" },
+  { title: "按摩", value: "anmo" },
+  { title: "爆操", value: "baocao" },
+];
+for (const _m of WidgetMetadata.modules) {
+  const _cat = _m.params && _m.params.find((p) => p.name === "category");
+  if (_cat) _cat.enumOptions = TAG_CATEGORY_OPTIONS;
+}
 
 /* ===================== 常量与工具 ===================== */
 
@@ -161,6 +163,23 @@ function durationToSeconds(text) {
   if (!m) return 0;
   if (m[3] !== undefined) return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
   return Number(m[1]) * 60 + Number(m[2]);
+}
+
+// 站点没有图片头像（详情页/作者页都是首字母文字头像 p91-avatar），
+// 这里按站点同款风格生成首字母 SVG data URI；背景色由 slug 哈希固定，同一作者永远同色。
+function authorAvatar(name, slug) {
+  const display = String(name || "?").trim();
+  const ch = (display.charAt(0) || "?").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const PALETTE = ["#c14b5a", "#4b74c1", "#4bc18f", "#a14bc1", "#c17c4b", "#3aa0a8", "#c14b9e"];
+  let h = 0;
+  const key = String(slug || display);
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  const bg = PALETTE[h % PALETTE.length];
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120">'
+    + '<rect width="120" height="120" fill="' + bg + '"/>'
+    + '<text x="60" y="63" font-family="system-ui,-apple-system,sans-serif" font-size="54" font-weight="600" fill="#ffffff" text-anchor="middle" dominant-baseline="central">' + ch + '</text>'
+    + '</svg>';
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
 }
 
 async function httpGetText(url, headers) {
@@ -209,7 +228,8 @@ function parseTileChunk(id, chunk) {
   if (!titleM) return null;
   const title = decodeEntities(titleM[1].replace(/<[^>]+>/g, ""));
   if (!title) return null;
-  const coverM = /<img class="p91-u-fill" src="([^"]+)"/.exec(chunk);
+  // 竖屏卡片 class 是 "p91-u-fill p91-contain"，不能用精确匹配（漏掉约四成竖屏封面）
+  const coverM = /<img class="p91-u-fill[^"]*" src="([^"]+)"/.exec(chunk);
   const durM = /class="p91-tlen">([^<]+)</.exec(chunk);
   const previewM = /data-preview="([^"]+)"/.exec(chunk);
   const byM = /class="p91-tby"><a href="https:\/\/a91porn\.com\/u\/([^"]+)">([^<]+)<\/a>/.exec(chunk);
@@ -369,7 +389,9 @@ async function loadDetail(link) {
     }
     if (genreItems.length) detail.genreItems = genreItems;
     if (byM) {
-      detail.peoples = [{ id: byM[1], title: decodeEntities(byM[2]) }];
+      // id = 作者 slug：详情页点头像/作者时 App 以 params.peopleId 重开列表模块，
+      // loadList 里 peopleId 优先于频道 constant → /u/<slug>/page/N 作者影片列表
+      detail.peoples = [{ id: byM[1], title: decodeEntities(byM[2]), avatar: authorAvatar(byM[2], byM[1]) }];
     }
     if (backdropPaths.length) detail.backdropPaths = backdropPaths;
     if (related.length) detail.relatedItems = related;
