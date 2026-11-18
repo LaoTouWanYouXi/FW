@@ -74,6 +74,15 @@
       "version": "1.9.6",
       "author": "廿二日",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/refs/heads/main/widgets/hanime1.js"
+    },
+    {
+      "id": "rex.nextporn",
+      "title": "NextPorn",
+      "description": "nextporn.com · AI 生成的成人短视频与完整场景（110 分类 / 71 标签 / 69 演员，SSR 直读，含搜索与详情推荐）",
+      "requiredVersion": "",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/nextporn.js"
     }
   ]
 }
