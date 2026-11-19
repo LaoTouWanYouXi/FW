@@ -94,9 +94,9 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/nextporn.js"
     },
     {
-      "id": "javhd",
+      "id": "javhd.rex",
       "title": "JAVHD",
-      "description": "",
+      "description": "JAVHD",
       "requiredVersion": "0.01",
       "version": "1.0.0",
       "author": "老头",
