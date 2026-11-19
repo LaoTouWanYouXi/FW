@@ -1,45 +1,43 @@
 WidgetMetadata = {
   id: "a91porn.rex",
   title: "91视频(a91porn)",
-  version: "1.6.0",
+  version: "1.7.0",
   requiredVersion: "0.0.1",
   description: "a91porn.com 91系国产视频站：频道即模块（最新/最热/加精等 13 个），每个模块内带标签分类 + 搜索 + 详情页播放",
   author: "rex module",
   site: "https://a91porn.com",
-  // 站标：站点 <link rel="apple-touch-icon">（180×180 PNG，实测 200）
+  // 站标：官方 manifest 只认 iconUrl / iconurl / iconURL（icon 是死字段会被忽略）
   iconUrl: "https://a91porn.com/brand/icon-aa712067-180.png",
-  // rex 实际读取的字段名是 icon（官方 demo.js 同款），与 iconUrl 同值一并带上
-  icon: "https://a91porn.com/brand/icon-aa712067-180.png",
   // 详情数据基本静态（标题/照片/相关），300s 缓存降低重复进详情的请求频次（防风控）
   detailCacheDuration: 300,
   // 每个频道一个模块，共用 loadList，用 constant 参数区分（one-rex.js 同款惯例）
   // category 的 enumOptions 用占位空数组，文件底部统一回填 TAG_CATEGORY_OPTIONS
   modules: [
-    { id: "list-latest", title: "最新", description: "全站最新上传", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-latest", title: "最新", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "latest" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-remen", title: "当前最热", description: "实时热门榜", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-remen", title: "当前最热", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "remen" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-benyue", title: "本月最热", description: "当月最热视频", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-benyue", title: "本月最热", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "benyue" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-meiyue", title: "每月最热", description: "往月最热视频", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-meiyue", title: "每月最热", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "meiyue" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-yuanchuang", title: "91原创", description: "官方原创专区（多为竖屏）", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-yuanchuang", title: "91原创", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "yuanchuang" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-jiajing", title: "最近加精", description: "最新加精视频", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-jiajing", title: "最近加精", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "jiajing" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-benyue-shoucang", title: "本月收藏", description: "当月收藏最多", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-benyue-shoucang", title: "本月收藏", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "benyue-shoucang" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-jingdian", title: "收藏最多", description: "全站收藏榜", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-jingdian", title: "收藏最多", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "jingdian" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-gaoqing", title: "高清", description: "高清专区", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-gaoqing", title: "高清", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "gaoqing" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-changpian", title: "10分钟以上", description: "长视频", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-changpian", title: "10分钟以上", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "changpian" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-chaochang", title: "20分钟以上", description: "超长视频", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-chaochang", title: "20分钟以上", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "chaochang" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-taolun", title: "本月讨论", description: "当月评论最多", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-taolun", title: "本月讨论", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "taolun" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
-    { id: "list-chigua", title: "吃瓜", description: "吃瓜爆料区", functionName: "loadList", cacheDuration: 1800, requiresWebView: false, sectionMode: false,
+    { id: "list-chigua", title: "吃瓜", functionName: "loadList", cacheDuration: 1800,
       params: [ { name: "channel", title: "频道", type: "constant", value: "chigua" }, { name: "category", title: "标签分类", type: "enumeration", enumOptions: [] }, { name: "page", title: "页码", type: "page" } ] },
     {
       id: "loadResource",
@@ -51,6 +49,7 @@ WidgetMetadata = {
     },
   ],
   search: {
+    id: "search",
     title: "搜索",
     functionName: "search",
     params: [
@@ -252,8 +251,10 @@ function parseTileChunk(id, chunk) {
   }
   if (!coverUrl && previewM) coverUrl = decodeEntities(previewM[1]); // 极端兜底：动图预览当封面
   const secs = durationToSeconds(durM && durM[1]);
+  // 媒体身份必须与 loadDetail 完全一致（官方示例：自有条目 id 用稳定命名空间）：
+  // 列表裸数字、详情 "a91:xxx" 会让播放器 seek/重建会话时认不出同一个媒体
   const item = {
-    id: String(id),
+    id: "a91:" + id,
     type: "url",
     mediaType: "movie",
     title: title,
@@ -415,14 +416,11 @@ async function loadDetail(link) {
       if (!seen[u]) { seen[u] = true; backdropPaths.push(u); }
     }
 
-    // 内联播放地址直接缓存（起播时 loadResource 零请求）；缺失时走 resolvePlayUrl（api/play→页兜底）
-    let videoUrl = null;
+    // 播放地址只预热缓存，不写进 detail.videoUrl：
+    // 单一播放入口（loadResource）避免 seek 时在 videoUrl 与资源模块之间来回切换造成媒体重识别
     const srcM = /<div class="p91-player[^"]*" data-play="\d+" data-index="\d+" data-src="([^"]+)"/.exec(html);
     if (srcM) {
-      videoUrl = decodeEntities(srcM[1]);
-      cacheSetPlay(id, videoUrl, 30 * 60 * 1000);
-    } else {
-      videoUrl = await resolvePlayUrl(id);
+      cacheSetPlay(id, decodeEntities(srcM[1]), 30 * 60 * 1000);
     }
 
     // 相关推荐：页面里其余卡片（接下来看/同分类/更多视频），排除自身
@@ -456,7 +454,6 @@ async function loadDetail(link) {
     }
     if (backdropPaths.length) detail.backdropPaths = backdropPaths;
     if (related.length) detail.relatedItems = related;
-    if (videoUrl) detail.videoUrl = videoUrl;
     return detail;
   } catch (error) {
     console.error("[a91porn] loadDetail 失败:", error.message || error);
@@ -476,13 +473,14 @@ async function loadResource(params = {}) {
     if (!id) return [];
     const url = await resolvePlayUrl(id);
     if (!url) return [];
-    // 对齐官方 demo.js：普通 m3u8 线路不设 playerType（可选项，交给 App 默认内核），
-    // 强制 system/app 都会偏离 App 自身的播放器调度
+    // 本站是 AES-128 加密 HLS。整个界面被切成音乐卡片 = 客户端按音频会话播放了这条流，
+    // 必须用 app（软件解码/内置内核）播放，不能留空让系统播放器自动选择。
     return [
       {
         name: "默认线路",
         description: "HLS | AES-128 | 91porn",
         url: url,
+        playerType: "app",
       },
     ];
   } catch (error) {
