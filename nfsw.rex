@@ -94,9 +94,9 @@
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/nextporn.js"
     },
     {
-      "id": "javhd.rex",
+      "id": "javhd",
       "title": "JAVHD",
-      "description": "javhd.com 日本 AV 站：最新/热门/顶级/原生日语字幕四路片单 + 分类筛选 + 搜索 + 详情播放",
+      "description": "",
       "requiredVersion": "0.01",
       "version": "1.0.0",
       "author": "老头",
