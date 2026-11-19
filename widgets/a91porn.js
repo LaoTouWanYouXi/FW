@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "a91porn.rex",
   title: "91视频(a91porn)",
-  version: "1.4.0",
+  version: "1.5.0",
   requiredVersion: "0.0.1",
   description: "a91porn.com 91系国产视频站：频道即模块（最新/最热/加精等 13 个），每个模块内带标签分类 + 搜索 + 详情页播放",
   author: "rex module",
@@ -475,12 +475,21 @@ async function loadResource(params = {}) {
     if (!id) return [];
     const url = await resolvePlayUrl(id);
     if (!url) return [];
+    // 本站是 AES-128 加密 HLS：系统播放器（AVPlayer）seek 后音频轨先就绪、视频解码在追帧，
+    // 会出现"快进时只出声（音乐播放模式）、加载完恢复画面"的固有表现；网页端 hls.js（MSE）无此问题。
+    // 两条线路同一地址、不同播放内核，快进异常时切"内置播放器"。
     return [
       {
-        name: "默认线路",
-        description: "HLS | 91porn",
+        name: "系统播放器",
+        description: "HLS | AES-128 | 快进只出声时切下一条",
         url: url,
         playerType: "system",
+      },
+      {
+        name: "内置播放器",
+        description: "HLS | AES-128 | 快进更稳（MSE 内核）",
+        url: url,
+        playerType: "app",
       },
     ];
   } catch (error) {
