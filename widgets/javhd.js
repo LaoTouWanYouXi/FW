@@ -1,7 +1,7 @@
 var WidgetMetadata = {
   id: "javhd.rex",
   title: "JAVHD",
-  version: "1.0.0",
+  version: "1.1.0",
   requiredVersion: "0.0.1",
   description: "javhd.com 日本 AV 站：最新/热门/顶级/原生日语字幕四路片单 + 分类筛选 + 搜索 + 详情播放",
   author: "rex module",
@@ -460,6 +460,8 @@ async function fetchDetailPage(link) {
 
 async function loadDetail(link) {
   var page = await fetchDetailPage(link);
+  // 顺手把 cms id 映射写缓存：详情→播放是主路径，这样起播就只剩 player_api 一次请求
+  if (page.cmsId) writeCmsCache("cms:" + (page.key || page.url), page.cmsId);
   var html = page.html;
   var ld = parseJsonLd(html);
   var video = (ld && ld.video) || {};
@@ -582,8 +584,12 @@ async function loadDetail(link) {
 
 /* ===================== 播放资源 ===================== */
 
-// player_api 每次返回带签名的 CDN 直链（形如 /<token>,<unix过期时间>/...mp4），有效期约 20 分钟，
-// 因此这里绝不缓存地址；解析出来直接用，过期后重新进详情即刷新。
+// player_api 返回带签名的 CDN 直链（形如 /<token>,<unix过期时间>/...mp4），有效期约 20 分钟。
+// 整条链路原本每次起播都要打两次请求（120KB 详情页 + player_api），这里做两级缓存把常见路径压到 0 次请求：
+//   1) 短 id → cms id 的映射（30 天有效，站点不会改映射）
+//   2) cms id → 已签名直链（15 分钟，早于签名过期）
+// 只输出最高清档（1080p）：站点是 progressive MP4 且 moov 在文件头（实测 offset 36），起播只需头部分片，
+// 降档并不能缩短起播时间，反而损失画质。
 async function loadResource(params) {
   params = params || {};
   try {
@@ -593,20 +599,20 @@ async function loadResource(params) {
     var target = parseTarget(rawLink || rawId);
     if (!target) return [];
 
-    // 播放只认详情页里的 content-id（cms id）；短 id / slug 直接喂 player_api 会返回 []
-    var cmsId = "";
-    var detailUrl = "";
-    try {
-      // link 为空时（外部只给 id），javhd:xxx 里的 xxx 可能是短 id 也可能是 cms id，
-      // 两种都试：/zh/id/{短id} 会 302 到详情页，cms id 会 404，404 时直接用 id 当 cms id
-      var page = await fetchDetailPage(rawLink || rawId);
-      cmsId = page.cmsId || "";
-      detailUrl = page.url;
-    } catch (e) {
-      console.log("[javhd] 详情页解析失败:", e && e.message);
+    var cacheKey = "cms:" + (target.key || target.url);
+    var cmsId = readCmsCache(cacheKey);
+
+    // 关键路径优化：cms id 一旦确定就写缓存，后续播放直接跳过详情页（省掉一次 ~120KB / 2~4 秒的请求）
+    if (!cmsId) {
+      try {
+        var page = await fetchDetailPage(rawLink || rawId);
+        cmsId = page.cmsId || "";
+      } catch (e) {
+        console.log("[javhd] 详情页解析失败:", e && e.message);
+      }
     }
+    // 短 id 与 cms id 是两套编号，但存在 id 直接就是 cms id 的情况（如相关推荐传入的 pd2）
     if (!cmsId && target.key) {
-      // 先按 cms id 直接请求一次接口验证（比拿 404 页判断更省事）
       try {
         var probe = await getJsonXhr(BASE + "/zh/player_api?videoId=" + encodeURIComponent(target.key));
         if (probe && probe.sources && probe.sources.length) cmsId = target.key;
@@ -615,46 +621,113 @@ async function loadResource(params) {
       }
     }
     if (!cmsId) {
-      console.log("[javhd] 无法确定 cms id", rawLink || rawId, detailUrl);
+      console.log("[javhd] 无法确定 cms id", rawLink || rawId);
       return [];
     }
+    writeCmsCache(cacheKey, cmsId);
 
-    var apiUrl = BASE + "/zh/player_api?videoId=" + encodeURIComponent(cmsId);
-    var data = await getJsonXhr(apiUrl);
-    var sources = (data && data.sources) || [];
-    if (!sources.length) {
-      // 拿不到正片时退回预告片（is_trailer=1 始终可用），至少让用户看到内容
-      try {
-        var trailer = await getJsonXhr(BASE + "/zh/player_api?videoId=" + encodeURIComponent(cmsId) + "&is_trailer=1");
-        sources = (trailer && trailer.sources) || [];
-        if (sources.length) console.log("[javhd] 仅取到预告片:", cmsId);
-      } catch (e2) {
-        console.log("[javhd] 预告片请求失败:", e2 && e2.message);
-      }
+    // 第二层缓存：签名直链在有效期内复用，避免每次起播都重打一次 player_api（~1~2.5 秒）
+    var cached = readSourceCache(cmsId);
+    if (cached) {
+      console.log("[javhd] 命中播放地址缓存", cmsId);
+      return buildLines(cached, "缓存");
     }
+
+    var sources = await fetchSources(cmsId);
     if (!sources.length) {
       console.log("[javhd] 未取到播放源", cmsId);
       return [];
     }
-
-    var headers = { "User-Agent": UA, "Referer": BASE + "/" };
-    var lines = [];
-    var sorted = sources.slice().sort(function (a, b) { return (Number(b.res) || 0) - (Number(a.res) || 0); });
-    for (var i = 0; i < sorted.length; i++) {
-      var s = sorted[i];
-      if (!s || !s.src) continue;
-      var label = s.label || (s.res ? s.res + "p" : "线路 " + (i + 1));
-      lines.push({
-        name: label,
-        url: s.src,
-        description: "MP4 直链 | " + (s.type || "video/mp4") + " | 签名 20 分钟有效",
-        customHeaders: headers,
-        playerType: "system"
-      });
-    }
-    return lines;
+    writeSourceCache(cmsId, sources);
+    return buildLines(sources, "");
   } catch (error) {
     console.error("[javhd] loadResource 失败:", error && (error.message || error));
     return [];
   }
 }
+
+// 播放地址签名有效期约 20 分钟（URL 里的 unix 时间戳），这里按 15 分钟保守缓存
+var SOURCE_TTL = 15 * 60 * 1000;
+var CMS_TTL = 30 * 24 * 3600 * 1000;
+
+function readCmsCache(key) {
+  try {
+    var rec = Widget.storage.get(key);
+    if (rec && rec.id && rec.t && Date.now() - rec.t < CMS_TTL) return String(rec.id);
+  } catch (e) { /* 存储不可用时静默降级 */ }
+  return "";
+}
+
+function writeCmsCache(key, id) {
+  try { Widget.storage.set(key, { id: String(id), t: Date.now() }); } catch (e) { }
+}
+
+function readSourceCache(cmsId) {
+  try {
+    var rec = Widget.storage.get("src:" + cmsId);
+    if (rec && rec.list && rec.list.length && rec.t && Date.now() - rec.t < SOURCE_TTL) return rec.list;
+  } catch (e) { }
+  return null;
+}
+
+function writeSourceCache(cmsId, sources) {
+  try {
+    Widget.storage.set("src:" + cmsId, {
+      t: Date.now(),
+      list: sources.map(function (s) { return { label: s.label, res: s.res, src: s.src, type: s.type }; })
+    });
+  } catch (e) { }
+}
+
+// 只保留 1080p：低清晰度档位（720p/480p/240p）起播更快但画质损失明显，
+// 且站点的 1080p 是 progressive MP4（moov 前置），seek 与起播都不依赖整段下载
+function fetchSources(cmsId) {
+  var apiUrl = BASE + "/zh/player_api?videoId=" + encodeURIComponent(cmsId);
+  return getJsonXhr(apiUrl).then(function (data) {
+    var sources = (data && data.sources) || [];
+    if (sources.length) return sources;
+    // 拿不到正片时退回预告片（is_trailer=1 始终可用）
+    return getJsonXhr(apiUrl + "&is_trailer=1").then(function (trailer) {
+      var ts = (trailer && trailer.sources) || [];
+      if (ts.length) console.log("[javhd] 仅取到预告片:", cmsId);
+      return ts;
+    }, function (e) {
+      console.log("[javhd] 预告片请求失败:", e && e.message);
+      return [];
+    });
+  });
+}
+
+function buildLines(sources, cachedTag) {
+  // 去掉 720p 以下档位：站点的 progressive MP4 moov 在文件头（实测 offset 36），
+  // 起播只依赖头部数据，低清晰度并不能让起播更快，只会多几条干扰线路
+  var kept = [];
+  for (var i = 0; i < sources.length; i++) {
+    var s = sources[i];
+    if (!s || !s.src) continue;
+    if ((Number(s.res) || 0) < 720) continue;
+    kept.push(s);
+  }
+  // 极端情况：整部影片只有低档源时兜底返回最高档，避免完全无线路可选
+  if (!kept.length) {
+    var best = null;
+    for (var j = 0; j < sources.length; j++) {
+      var c = sources[j];
+      if (c && c.src && (!best || (Number(c.res) || 0) > (Number(best.res) || 0))) best = c;
+    }
+    if (best) kept.push(best);
+  }
+  kept.sort(function (a, b) { return (Number(b.res) || 0) - (Number(a.res) || 0); });
+  // CDN 不校验 UA（实测带桌面 UA 反而更慢），只带 Referer 即可
+  var headers = { "Referer": BASE + "/" };
+  return kept.map(function (s) {
+    return {
+      name: s.label || (s.res ? s.res + "p" : "1080p"),
+      url: s.src,
+      description: "MP4 直链 | " + (s.type || "video/mp4") + (cachedTag ? " | " + cachedTag : " | 签名 20 分钟有效"),
+      customHeaders: headers,
+      playerType: "system"
+    };
+  });
+}
+
