@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "a91porn.rex",
   title: "91视频(a91porn)",
-  version: "1.3.0",
+  version: "1.4.0",
   requiredVersion: "0.0.1",
   description: "a91porn.com 91系国产视频站：频道即模块（最新/最热/加精等 13 个），每个模块内带标签分类 + 搜索 + 详情页播放",
   author: "rex module",
@@ -234,12 +234,23 @@ function parseTileChunk(id, chunk) {
   const durM = /class="p91-tlen">([^<]+)</.exec(chunk);
   const previewM = /data-preview="([^"]+)"/.exec(chunk);
   const byM = /class="p91-tby"><a href="https:\/\/a91porn\.com\/u\/([^"]+)">([^<]+)<\/a>/.exec(chunk);
+  // 封面变体只信站点自己声明的 srcset（实测竖屏封面只有 w480 一档，盲改 og.jpg → w1280 会 404 裂图）：
+  // 第一个 srcset（移动端 source）取最小图当列表封面；最后一个 srcset（桌面 source）取最大图当详情头图。
+  // 拿不到 srcset 时保持 og.jpg 原图（原图必定存在），绝不产出站点没声明的 URL。
   let coverUrl = coverM ? decodeEntities(coverM[1]) : "";
-  let backdropPath = "";
-  if (coverUrl && /\/og\.jpg$/.test(coverUrl)) {
-    backdropPath = coverUrl.replace(/\/og\.jpg$/, "/w1280.webp"); // 详情页头图用更高清的横图
-    coverUrl = coverUrl.replace(/\/og\.jpg$/, "/w480.webp");      // 列表缩略图用轻量 webp
+  let backdropPath = coverUrl;
+  const setMatches = [];
+  let sm;
+  const setRe = /srcset="([^"]+)"/g;
+  while ((sm = setRe.exec(chunk))) setMatches.push(sm[1]);
+  const parseSet = (s) => s.split(",").map((x) => x.trim().split(/\s+/)[0]).filter((u) => /^https?:\/\//.test(u));
+  if (coverUrl && setMatches.length) {
+    const first = parseSet(setMatches[0]);
+    const last = parseSet(setMatches[setMatches.length - 1]);
+    if (first.length) coverUrl = first[0];
+    if (last.length) backdropPath = last[last.length - 1];
   }
+  if (!coverUrl && previewM) coverUrl = decodeEntities(previewM[1]); // 极端兜底：动图预览当封面
   const secs = durationToSeconds(durM && durM[1]);
   const item = {
     id: String(id),
@@ -425,11 +436,9 @@ async function loadDetail(link) {
     };
     const listCover = /<meta property="og:image" content="([^"]+)"/.exec(html);
     if (listCover) {
+      // og:image 原图必定存在；不盲派生 w1280/w768 变体（竖屏封面没有这些尺寸，派生 URL 会 404）
       detail.coverUrl = decodeEntities(listCover[1]);
-      if (/\/og\.jpg$/.test(detail.coverUrl)) {
-        detail.backdropPath = detail.coverUrl.replace(/\/og\.jpg$/, "/w1280.webp");
-        detail.detailPoster = detail.coverUrl.replace(/\/og\.jpg$/, "/w768.webp");
-      }
+      detail.backdropPath = detail.coverUrl;
     }
     if (descM) detail.description = decodeEntities(descM[1]);
     if (dateM) detail.releaseDate = dateM[1];
