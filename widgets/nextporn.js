@@ -1,22 +1,21 @@
 WidgetMetadata = {
   id: "rex.nextporn",
   title: "NextPorn",
-  version: "1.1.0",
+  version: "1.2.0",
   requiredVersion: "0.0.1",
-  description: "nextporn.com · AI 生成的成人短视频与完整场景（110 分类 / 71 标签 / 69 演员，SSR 直读，含搜索与详情推荐）",
+  description: "nextporn.com · AI 生成的成人短视频与完整场景（110 分类 / 71 标签 / 69 演员，SSR 直读，含搜索与详情推荐，支持连播）",
   author: "YG",
   site: "https://nextporn.com/",
-  // 站点 PNG 版 logo（512×512 应用图标，webmanifest 官方资源）；页头 logo.svg 是矢量字标，
-  // rex 对 SVG 图标渲染不稳，iconUrl 与 icon 一并指向 PNG（one-rex.js 同款别名惯例）
-  icon: "https://nextporn.com/web-app-manifest-512x512.png",
+  // 官方规范只读 iconUrl（icon / requiresWebView 等未列字段会被 App 忽略）；
+  // 512×512 PNG 是站点 webmanifest 里的官方 logo 位图（页头 logo.svg 是矢量字标，rex 渲染 SVG 图标不稳）
   iconUrl: "https://nextporn.com/web-app-manifest-512x512.png",
+  // 连播模式：播完当前视频后自动接续播放详情页的相关推荐（默认偏好，可在 App 内修改）
+  continuousPlay: true,
   detailCacheDuration: 300,
   modules: [
     {
       id: "nextporn-all",
       title: "全部视频",
-      description: "全站视频归档（约 1.2 万条，按页浏览）",
-      requiresWebView: false,
       cacheDuration: 300,
       functionName: "loadList",
       params: [
@@ -27,8 +26,6 @@ WidgetMetadata = {
     {
       id: "nextporn-category",
       title: "分类浏览",
-      description: "按分类浏览（分类名后为视频数量）",
-      requiresWebView: false,
       cacheDuration: 300,
       functionName: "loadList",
       params: [
@@ -157,8 +154,6 @@ WidgetMetadata = {
     {
       id: "nextporn-tag",
       title: "标签浏览",
-      description: "按标签浏览",
-      requiresWebView: false,
       cacheDuration: 300,
       functionName: "loadList",
       params: [
@@ -248,8 +243,6 @@ WidgetMetadata = {
     {
       id: "nextporn-star",
       title: "演员作品",
-      description: "按 AI 演员浏览其全部作品",
-      requiresWebView: false,
       cacheDuration: 300,
       functionName: "loadList",
       params: [
@@ -337,8 +330,6 @@ WidgetMetadata = {
     {
       id: "loadResource",
       title: "播放资源",
-      description: "按需解析播放地址（仅本模块条目，需 npw: 前缀链接；与详情共享缓存，不重复抓站）",
-      requiresWebView: false,
       cacheDuration: 60,
       functionName: "loadResource",
       type: "stream",
@@ -346,6 +337,7 @@ WidgetMetadata = {
     },
   ],
   search: {
+    id: "nextporn-search",
     title: "搜索 NextPorn",
     functionName: "searchVideos",
     params: [
@@ -404,19 +396,13 @@ function parseOwnedLink(raw) {
   return UUID_RE.test(uuid) ? uuid : null;
 }
 
-// 4xx 响应转可读错误:429/403 明确提示可能是站点风控,便于在 App 日志里区分
-function statusError(status, url) {
-  const s = Number(status);
-  const hint = s === 429 || s === 403 ? " (可能触发站点风控/限流)" : "";
-  return new Error("HTTP " + s + hint + ": " + url);
-}
-
+// 官方运行时契约:Widget.http 非 2xx 会直接抛异常(如 "HTTP 404: not found"),
+// 无需也无法自行检查 statusCode;空响应体在这里兜底
 async function fetchHtml(url, options) {
   const res = await Widget.http.get(url, Object.assign({ headers: { "User-Agent": UA } }, options || {}));
   if (!res || typeof res.data !== "string" || !res.data) {
     throw new Error("空响应: " + url);
   }
-  if (res.status && Number(res.status) >= 400) throw statusError(res.status, url);
   return res.data;
 }
 
@@ -521,7 +507,6 @@ const ARCHIVE_PAGE_SIZE = 24;
 
 async function fetchJson(url) {
   const res = await Widget.http.get(url, { headers: { "User-Agent": UA } });
-  if (res && res.status && Number(res.status) >= 400) throw statusError(res.status, url);
   const body = res && res.data;
   const json = typeof body === "string" ? JSON.parse(body) : body; // http 层可能已自动 parse
   if (!json || !json.success || !Array.isArray(json.data)) throw new Error("API 响应异常: " + url);
@@ -720,9 +705,12 @@ async function searchVideos(params) {
 }
 
 async function loadDetail(link) {
-  // loadDetail 接收 link 字符串（不是 params 对象）；未知/非本站 link 返回 null，不发请求
+  // loadDetail 接收 link 字符串（不是 params 对象）。
+  // 官方规范:无法识别的 link 抛出有意义错误(不要返回 null);请求失败/无结果时返回 []
   const uuid = parseOwnedLink(link);
-  if (!uuid) return null;
+  if (!uuid) {
+    throw new Error("无法识别的详情链接: 仅支持 " + LINK_PREFIX + "<视频uuid>（收到: " + String(link) + "）");
+  }
   try {
     const data = await fetchWatchData(uuid); // TTL 内复用缓存,与 loadResource 共享同一次抓取
     const ld = data.ld;
@@ -757,13 +745,13 @@ async function loadDetail(link) {
       item.peoples = [people];
     }
 
-    // 相关推荐（抓取时随页解析,已排除自身）
+    // 相关推荐（抓取时随页解析,已排除自身）—— 连播模式播完当前视频后按此列表接续
     if (data.related && data.related.length) item.relatedItems = data.related;
 
     return item;
   } catch (error) {
     console.error("[nextporn] loadDetail 失败:", error.message || error);
-    return null;
+    return []; // 官方规范:无结果返回 [],不返回 null
   }
 }
 
