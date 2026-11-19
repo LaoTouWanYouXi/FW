@@ -79,7 +79,7 @@
       "id": "a91porn",
       "title": "a91porn",
       "description": "",
-      "requiredVersion": "0.01",
+      "requiredVersion": "0.0.1",
       "version": "1.0.0",
       "author": "老头",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/a91porn.js"
@@ -88,10 +88,19 @@
       "id": "rex.nextporn",
       "title": "NextPorn",
       "description": "nextporn.com · AI 生成的成人短视频与完整场景（110 分类 / 71 标签 / 69 演员，SSR 直读，含搜索与详情推荐）",
-      "requiredVersion": "0.01",
+      "requiredVersion": "0.0.1",
       "version": "1.0.0",
       "author": "老头",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/nextporn.js"
+    },
+    {
+      "id": "javhd.rex",
+      "title": "JAVHD",
+      "description": "javhd.com 日本 AV 站：最新/热门/顶级/原生日语字幕四路片单 + 分类筛选 + 搜索 + 详情播放",
+      "requiredVersion": "0.01",
+      "version": "1.0.0",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/javhd.js"
     }
   ]
 }
