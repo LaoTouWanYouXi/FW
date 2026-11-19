@@ -564,7 +564,9 @@ WidgetMetadata = {
     "权威榜单 / LTX 最强 AI 破解 / 片库探索题材(≥60部) / 神作 / 女优战力；列表阶段获取高清横图，详情复用图片；磁力在相似作品栏显示 LTX破解 标识，点击转存光鸭；详情点演员可看作品。",
   author: "老头",
   site: "https://javranking.cc/",
-  icon: "https://javranking.cc/brand/javranking-logo-v3-header.webp",
+  // rex 只识别 iconurl/iconUrl/iconURL，icon 属未列字段会被忽略（官方 guide.md:81）
+  // 取站点 /zh-hans/ 页 <link rel="apple-touch-icon"> 的方形图标(180x180 PNG)，比站头横版 logo 更适合做图标
+  iconUrl: "https://javranking.cc/brand/apple-touch-icon-v3.png",
   detailCacheDuration: 300,
   globalParams: [
     {
