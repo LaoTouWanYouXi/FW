@@ -15,7 +15,7 @@ var WidgetMetadata = {
   title: "妻友社区",
   version: "0.1.0",
   requiredVersion: "0.0.1",
-  description: "妻友社区 视频/写真/社区聚合 (qy12a.cc)",
+  description: "妻友社区 视频聚合 (qy12a.cc)",
   author: "ZCode",
   site: "https://p2.qy12a.cc/",
   detailCacheDuration: 60,
@@ -109,18 +109,6 @@ var WidgetMetadata = {
       { name: "sort", title: "排序", type: "enumeration", enumOptions: [{ title: "默认", value: "0" }, { title: "最新", value: "1" }, { title: "最热", value: "2" }] },
       { name: "tagId", title: "分类ID", type: "constant", value: "696281" },
       { name: "mode", title: "ID用途", type: "enumeration", enumOptions: [{ title: "作为tagId", value: "tag" }, { title: "作为mediaType", value: "type" }] }
-    ] },
-    { id: "photo_cos", title: "写真·Cosplay", functionName: "loadPhoto", params: [
-      { name: "page", title: "页码", type: "page" },
-      { name: "categoryId", title: "分类ID", type: "constant", value: "12681" }
-    ] },
-    { id: "photo_av", title: "写真·AV女优", functionName: "loadPhoto", params: [
-      { name: "page", title: "页码", type: "page" },
-      { name: "categoryId", title: "分类ID", type: "constant", value: "12581" }
-    ] },
-    { id: "community", title: "社区·妻友大厅", functionName: "loadCommunity", params: [
-      { name: "page", title: "页码", type: "page" },
-      { name: "categoryId", title: "分类ID", type: "constant", value: "714311" }
     ] }
   ],
   search: {
@@ -509,9 +497,10 @@ function unwrap(j) {
 }
 
 // guest 登录, 带重试(服务端对新设备可能延迟返回数据)
-async function ensureSession() {
+// force=true 时丢弃缓存会话强制重新登录(模拟 app 的 1000→re-login→retry 行为)
+async function ensureSession(force) {
   var saved = Widget.storage.get("qysq_auth") || {};
-  if (saved.cred && saved.exp && Date.now() < saved.exp) return saved;
+  if (!force && saved.cred && saved.exp && Date.now() < saved.exp) return saved;
   var devID = saved.devID || FALLBACK_DEV;
   for (var attempt = 0; attempt < 3; attempt++) {
     try {
@@ -547,8 +536,22 @@ async function ensureSession() {
   throw new Error("guest 登录失败(服务端未返回token, 站点可能临时异常)");
 }
 
+// 带会话请求: 1000 时自动重新登录并重试一次(与 app 客户端行为一致)
 async function apiCall(path, body, cred, method) {
   method = method || (body ? "POST" : "GET");
+  var j = await _rawCall(path, body, cred, method);
+  if (j && j.code === 1000 && cred) {
+    console.log("收到1000, 重新登录后重试:", path);
+    try { await ensureSession(true); } catch (e) { /* 重新登录失败则返回原响应 */ }
+    var fresh = Widget.storage.get("qysq_auth") || {};
+    if (fresh.cred && fresh.cred !== cred) {
+      j = await _rawCall(path, body, fresh.cred, method);
+    }
+  }
+  return j;
+}
+
+async function _rawCall(path, body, cred, method) {
   var headers = baseHeaders(cred);
   headers["x-api-key"] = makeApiKey(path, cred || "");
   if (body) headers["Content-Type"] = "application/json;charset=UTF-8";
@@ -647,12 +650,15 @@ async function loadList(params) {
     pageSize: 20
   };
   var j = await apiCall("/api/app/media/video/list", body, auth.cred);
+  if (!j || j.code !== 200) {
+    throw new Error("站点接口异常 code=" + ((j && j.code) || "?") + " (服务端临时故障/风控, 稍后重试)");
+  }
   var data = (j && j.data) || {};
   var list = data.list || data.videos || data.records || [];
   return list.map(toVideoItem).filter(Boolean);
 }
 
-// 写真列表
+// 写真列表(暂未启用入口: 站点专注视频, 恢复时把入口加回 WidgetMetadata.modules)
 async function loadPhoto(params) {
   var auth = await ensureSession();
   var page = Number(params.page) || 1;
@@ -671,7 +677,7 @@ async function loadPhoto(params) {
   }).filter(Boolean);
 }
 
-// 社区帖子列表
+// 社区帖子列表(暂未启用入口: 同上)
 async function loadCommunity(params) {
   var auth = await ensureSession();
   var page = Number(params.page) || 1;
