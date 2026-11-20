@@ -101,15 +101,6 @@
       "version": "1.0.0",
       "author": "老头",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/javhd.js"
-    },
-    {
-      "id": "qysq",
-      "title": "qysq",
-      "description": "妻友社区",
-      "requiredVersion": "0.01",
-      "version": "1.0.0",
-      "author": "老头",
-      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/qysq.js"
     }
   ]
 }
