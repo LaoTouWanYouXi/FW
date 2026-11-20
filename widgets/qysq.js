@@ -19,6 +19,14 @@ var WidgetMetadata = {
   author: "ZCode",
   site: "https://p2.qy12a.cc/",
   detailCacheDuration: 60,
+  globalParams: [
+    { name: "userName", title: "账号", type: "input",
+      description: "妻友社区账号(留空则走游客模式)",
+      placeholders: [{ title: "用户名", value: "" }] },
+    { name: "password", title: "密码", type: "input",
+      description: "账号密码(与账号同时填写才启用账号登录)",
+      placeholders: [{ title: "密码", value: "" }] }
+  ],
   modules: [
     { id: "home_new", title: "最新", functionName: "loadList", params: [
       { name: "page", title: "页码", type: "page" },
@@ -497,11 +505,7 @@ function unwrap(j) {
 }
 
 // guest 登录, 带重试(服务端对新设备可能延迟返回数据)
-// force=true 时丢弃缓存会话强制重新登录(模拟 app 的 1000→re-login→retry 行为)
-async function ensureSession(force) {
-  var saved = Widget.storage.get("qysq_auth") || {};
-  if (!force && saved.cred && saved.exp && Date.now() < saved.exp) return saved;
-  var devID = saved.devID || FALLBACK_DEV;
+async function guestLogin(devID) {
   for (var attempt = 0; attempt < 3; attempt++) {
     try {
       var r = await Widget.http.post(API_HOST + "/api/app/login/guest",
@@ -512,28 +516,113 @@ async function ensureSession(force) {
           }) });
       var j = unwrap(r.data);
       console.log("guest登录", attempt, "code=", j && j.code);
-      if (j && j.code === 200 && j.data && j.data.token) {
-        var auth = {
-          devID: devID,
-          token: j.data.token,
-          cred: "cred0:" + j.data.token,
-          // JWT exp - 10min 兜底
-          exp: (function () {
-            try {
-              var mid = j.data.token.split(".")[1];
-              var payload = JSON.parse(bytesToUtf8(b64ToBytes(mid.replace(/-/g,"+").replace(/_/g,"/"))));
-              return (payload.exp ? payload.exp * 1000 : Date.now() + 86400000) - 600000;
-            } catch (e) { return Date.now() + 86400000; }
-          })()
-        };
-        Widget.storage.set("qysq_auth", auth);
-        return auth;
-      }
+      if (j && j.code === 200 && j.data && j.data.token) return j.data;
     } catch (e) {
       console.log("guest登录异常", e && e.message);
     }
   }
-  throw new Error("guest 登录失败(服务端未返回token, 站点可能临时异常)");
+  return null;
+}
+
+function jwtExp(token) {
+  try {
+    var mid = token.split(".")[1];
+    var payload = JSON.parse(bytesToUtf8(b64ToBytes(mid.replace(/-/g,"+").replace(/_/g,"/"))));
+    return (payload.exp ? payload.exp * 1000 : Date.now() + 86400000) - 600000;
+  } catch (e) { return Date.now() + 86400000; }
+}
+
+// 账号登录(升级会话): 需已有游客会话。
+// body 字段名 web 端未使用(app专用端点), 依次尝试候选字段名; 成功后缓存字段名。
+var ACC_FIELDS = [
+  ["userName", "password"], ["account", "password"], ["userAccount", "password"],
+  ["phone", "password"], ["mobile", "password"], ["name", "password"]
+];
+async function accountLogin(guestCred, user, pwd) {
+  var cached = Widget.storage.get("qysq_accfield");
+  var pairs = (cached && cached[0]) ? [cached].concat(ACC_FIELDS.filter(function (f) {
+    return f[0] !== cached[0];
+  })) : ACC_FIELDS;
+  for (var i = 0; i < pairs.length; i++) {
+    var body = {};
+    body[pairs[i][0]] = user;
+    body[pairs[i][1]] = pwd;
+    var j = await _rawCall("/api/app/login/account/login", body, guestCred, "POST");
+    var code = j && j.code;
+    console.log("账号登录尝试", pairs[i][0], "code=", code, (j && (j.msg || j.tip)) || "");
+    if (code === 200 && j.data && (j.data.token || (j.data.user && j.data.user.token))) {
+      Widget.storage.set("qysq_accfield", pairs[i]);
+      return j.data.token || j.data.user.token;
+    }
+    if (code === 1000) {
+      // 会话层拒绝(服务端故障), 换字段名无意义
+      console.log("账号登录被会话层拒绝(code=1000), 停止尝试");
+      return null;
+    }
+    if (code === 1001) continue;  // 参数错误 → 字段名不对, 尝试下一个
+    if (code !== 200) {
+      // 其他业务反馈(如密码错误) → 字段名已正确, 停止
+      console.log("账号登录业务反馈, 停止尝试");
+      return null;
+    }
+  }
+  return null;
+}
+
+// 同步用户输入的账号配置(loadList/search 等能拿到 params 的入口调用)
+async function syncAccount(params) {
+  var u = params && params.userName ? String(params.userName).trim() : "";
+  var p = params && params.password ? String(params.password) : "";
+  var cur = Widget.storage.get("qysq_account") || null;
+  if (u && p) {
+    if (!cur || cur.u !== u || cur.p !== p) {
+      Widget.storage.set("qysq_account", { u: u, p: p });
+      Widget.storage.remove("qysq_auth");
+      console.log("账号配置已更新:", u);
+    }
+  } else if (cur && (!u || !p)) {
+    Widget.storage.remove("qysq_account");
+    Widget.storage.remove("qysq_auth");
+    console.log("账号配置已清空, 回退游客模式");
+  }
+}
+
+// 会话获取: 先游客登录, 若配置了账号则升级为账号会话
+// force=true 时丢弃缓存强制重登(模拟 app 的 1000→re-login→retry 行为)
+async function ensureSession(force) {
+  var saved = Widget.storage.get("qysq_auth") || {};
+  var acc = Widget.storage.get("qysq_account") || null;
+  var key = acc ? acc.u + ":" + acc.p : "guest";
+  if (!force && saved.cred && saved.exp && Date.now() < saved.exp && saved.key === key) return saved;
+  var devID = saved.devID || FALLBACK_DEV;
+  var guest = await guestLogin(devID);
+  if (!guest || !guest.token) {
+    throw new Error("guest 登录失败(服务端未返回token, 站点可能临时异常)");
+  }
+  var auth = {
+    devID: devID,
+    token: guest.token,
+    cred: "cred0:" + guest.token,
+    exp: jwtExp(guest.token),
+    key: "guest",
+    acc: false
+  };
+  // 账号升级
+  if (acc) {
+    var atk = await accountLogin(auth.cred, acc.u, acc.p);
+    if (atk) {
+      auth.token = atk;
+      auth.cred = "cred0:" + atk;
+      auth.exp = jwtExp(atk);
+      auth.key = key;
+      auth.acc = true;
+      console.log("账号会话建立成功:", acc.u);
+    } else {
+      console.log("账号登录未成功, 继续使用游客会话");
+    }
+  }
+  Widget.storage.set("qysq_auth", auth);
+  return auth;
 }
 
 // 带会话请求: 1000 时自动重新登录并重试一次(与 app 客户端行为一致)
@@ -636,6 +725,7 @@ function toPostItem(p) {
 
 // 视频分类列表
 async function loadList(params) {
+  await syncAccount(params);
   var auth = await ensureSession();
   var page = Number(params.page) || 1;
   var tagId = Number(params.tagId) || 0;
@@ -696,6 +786,7 @@ async function loadCommunity(params) {
 
 // 搜索
 async function search(params) {
+  await syncAccount(params);
   var auth = await ensureSession();
   var page = Number(params.page) || 1;
   var body = {
@@ -706,6 +797,9 @@ async function search(params) {
     pageSize: 20
   };
   var j = await apiCall("/api/app/search/details", body, auth.cred);
+  if (!j || j.code !== 200) {
+    throw new Error("搜索接口异常 code=" + ((j && j.code) || "?") + " (服务端临时故障/风控, 稍后重试)");
+  }
   var data = (j && j.data) || {};
   var list = data.list || data.videos || data.records || [];
   return list.map(function (v) {
