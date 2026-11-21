@@ -1,5 +1,5 @@
 /**
- * 海角爱 · Rex 本机版 v3.0.5
+ * 海角爱 · Rex 本机版 v1.0.0
  * 列表/搜索/详情直连站点；播放全程本机完成：播放页 datas 本机解密 →
  * sora 分片地址本机铸造（纯 JS 令牌）→ fMP4 内存清单下发，播放器直拉分片。
  * 无需任何中转/Worker，无设置项。
@@ -35,10 +35,10 @@ for (var ci = 0; ci < CATS.length; ci++) CAT_IDS[CATS[ci].id] = 1;
 WidgetMetadata = {
   id: "forward.haijiao",
   title: "海角爱",
-  version: "3.0.5",
+  version: "1.0.0",
   requiredVersion: "0.0.1",
   description: "海角爱资源站（本机解析版，无需代理）",
-  author: "Merlin",
+  author: "老头",
   site: HOST,
   iconUrl: HOST + "/wp-content/uploads/2024/10/cropped-googlelogo.png",
   detailCacheDuration: 300,
@@ -1208,7 +1208,28 @@ async function loadDetail(arg) {
   if (!episodes.length) throw new Error("这个页面没有播放源");
 
   if (!pic && allPics.length) pic = allPics[0];
-  var backdropList = allPics.length ? allPics : (pic ? [pic] : []);
+  var MAX_BACKDROPS = 10;
+  var backdropList = [], bdSeen = {};
+  function addBd(u) {
+    if (!u || bdSeen[u] || backdropList.length >= MAX_BACKDROPS) return;
+    bdSeen[u] = 1;
+    backdropList.push(u);
+  }
+  // 顶层剧照从各集均匀抽样并限制总数，避免几十张大图并发请求拖慢详情页
+  var round = 0, progressed = true;
+  while (backdropList.length < MAX_BACKDROPS && progressed) {
+    progressed = false;
+    for (var ei = 0; ei < episodes.length; ei++) {
+      var epPicsArr = episodes[ei].pics;
+      if (epPicsArr && round < epPicsArr.length) {
+        progressed = true;
+        addBd(epPicsArr[round]);
+      }
+    }
+    round++;
+  }
+  for (var ai = 0; ai < allPics.length && backdropList.length < MAX_BACKDROPS; ai++) addBd(allPics[ai]);
+  if (!backdropList.length && pic) addBd(pic);
 
   var epItems = episodes.map(function (ep, i) {
     var l = "hj:p:" + ep.code;
@@ -1218,7 +1239,10 @@ async function loadDetail(arg) {
     var epDesc = ep.descParts.length
       ? ep.descParts.join("\n")
       : ("第" + (i + 1) + "集 · 共 " + episodes.length + " 集");
-    var epPic = (ep.pics && ep.pics.length ? ep.pics[0] : "") || pic;
+    var epBackdrops = ep.pics && ep.pics.length
+      ? ep.pics.slice(0, MAX_BACKDROPS)
+      : (pic ? [pic] : []);
+    var epPic = (epBackdrops.length ? epBackdrops[0] : "") || pic;
     return {
       id: l,
       link: l,
@@ -1227,6 +1251,8 @@ async function loadDetail(arg) {
       description: epDesc,
       posterPath: epPic,
       coverUrl: epPic,
+      backdropPath: epBackdrops[0] || pic,
+      backdropPaths: epBackdrops,
       episode: i + 1,
       season: 1,
       playerType: "app"
