@@ -1,5 +1,5 @@
 /**
- * 海角爱 · Rex 本机版 v1.0.0
+ * 海角爱 · Rex 本机版 v1.0.1
  * 列表/搜索/详情直连站点；播放全程本机完成：播放页 datas 本机解密 →
  * sora 分片地址本机铸造（纯 JS 令牌）→ fMP4 内存清单下发，播放器直拉分片。
  * 无需任何中转/Worker，无设置项。
@@ -35,7 +35,7 @@ for (var ci = 0; ci < CATS.length; ci++) CAT_IDS[CATS[ci].id] = 1;
 WidgetMetadata = {
   id: "forward.haijiao",
   title: "海角爱",
-  version: "1.0.0",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   description: "海角爱资源站（本机解析版，无需代理）",
   author: "老头",
@@ -1239,10 +1239,7 @@ async function loadDetail(arg) {
     var epDesc = ep.descParts.length
       ? ep.descParts.join("\n")
       : ("第" + (i + 1) + "集 · 共 " + episodes.length + " 集");
-    var epBackdrops = ep.pics && ep.pics.length
-      ? ep.pics.slice(0, MAX_BACKDROPS)
-      : (pic ? [pic] : []);
-    var epPic = (epBackdrops.length ? epBackdrops[0] : "") || pic;
+    var epPic = (ep.pics && ep.pics.length ? ep.pics[0] : "") || pic;
     return {
       id: l,
       link: l,
@@ -1251,8 +1248,6 @@ async function loadDetail(arg) {
       description: epDesc,
       posterPath: epPic,
       coverUrl: epPic,
-      backdropPath: epBackdrops[0] || pic,
-      backdropPaths: epBackdrops,
       episode: i + 1,
       season: 1,
       playerType: "app"
@@ -1515,13 +1510,28 @@ async function _stRemove(k) {
 }
 
 async function loadResource(arg) {
-  var link = _unwrap(arg);
-  var code = _parseEpLink(link);
+  var code = null;
+  if (typeof arg === "string") {
+    code = _parseEpLink(arg);
+  } else if (arg && typeof arg === "object") {
+    code = _parseEpLink(arg.link) || _parseEpLink(arg.id) || _parseEpLink(arg.videoUrl);
+  }
   if (!code) {
-    var post = _parsePostLink(link);
+    var link = _unwrap(arg);
+    var post = _parsePostLink(link) || (arg && typeof arg === "object" ? _parsePostLink(arg.id) : null);
     if (post) {
-      var detail = await loadDetail(link);
-      if (detail && detail.episodeItems && detail.episodeItems.length) code = _parseEpLink(detail.episodeItems[0].link);
+      var detail = await loadDetail(_postLink(post.cat, post.id));
+      if (detail && detail.episodeItems && detail.episodeItems.length) {
+        var epIdx = 0;
+        var reqEp = (arg && typeof arg === "object" && arg.episode != null) ? Number(arg.episode) : 0;
+        if (reqEp > 0) {
+          for (var ei = 0; ei < detail.episodeItems.length; ei++) {
+            if (Number(detail.episodeItems[ei].episode) === reqEp) { epIdx = ei; break; }
+          }
+          if (epIdx === 0 && reqEp <= detail.episodeItems.length) epIdx = reqEp - 1;
+        }
+        code = _parseEpLink(detail.episodeItems[epIdx].link);
+      }
     }
   }
   if (!code) return [];
