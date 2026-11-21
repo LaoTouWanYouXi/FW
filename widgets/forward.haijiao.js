@@ -1,5 +1,5 @@
 /**
- * 海角爱 · Rex 本机版 v3.0.4
+ * 海角爱 · Rex 本机版 v3.0.5
  * 列表/搜索/详情直连站点；播放全程本机完成：播放页 datas 本机解密 →
  * sora 分片地址本机铸造（纯 JS 令牌）→ fMP4 内存清单下发，播放器直拉分片。
  * 无需任何中转/Worker，无设置项。
@@ -35,11 +35,12 @@ for (var ci = 0; ci < CATS.length; ci++) CAT_IDS[CATS[ci].id] = 1;
 WidgetMetadata = {
   id: "forward.haijiao",
   title: "海角爱",
-  version: "3.0.4",
+  version: "3.0.5",
   requiredVersion: "0.0.1",
   description: "海角爱资源站（本机解析版，无需代理）",
   author: "Merlin",
   site: HOST,
+  iconUrl: HOST + "/wp-content/uploads/2024/10/cropped-googlelogo.png",
   detailCacheDuration: 300,
   modules: [
     { id: "loadCat_zjgx", title: "最近更新", type: "video", functionName: "loadCat_zjgx", cacheDuration: 120, params: [{ name: "page", title: "页码", type: "page" }] },
@@ -1119,12 +1120,21 @@ function _playerCode(iframeUrl) {
   var m = /player\.abyssplayer\.com\/([A-Za-z0-9_-]{4,40})/.exec(String(iframeUrl || ""));
   return m ? m[1] : null;
 }
+function _cleanText(html) {
+  return _deEnt(String(html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+}
+function _isContentPic(u) {
+  if (!u || u.indexOf("data:image") === 0) return false;
+  if (/logo1(-?\d+x\d+)?\.jpg$/i.test(u)) return false;
+  if (/googlelogo|gravatar\.com|\/themes\/astra\//i.test(u)) return false;
+  return true;
+}
 async function loadDetail(arg) {
   var info = _parsePostLink(_unwrap(arg));
-  if (!info) return null;
+  if (!info) return [];
   var url = HOST + "/" + info.cat + "/" + info.id + ".html";
   var page = await _getText(url);
-  if (!page) return null;
+  if (!page) return [];
 
   var title = info.id;
   var m = page.match(/<h1[^>]*class="entry-title"[^>]*>([^<]+)<\/h1>/);
@@ -1133,42 +1143,117 @@ async function loadDetail(arg) {
     m = page.match(/<title>([^<]+)<\/title>/);
     if (m) title = _deEnt(m[1].split("–")[0].split("-")[0].trim());
   }
+  var metaDesc = "";
+  m = page.match(/<meta[^>]*name="description"[^>]*content="([^"]+)"/i) ||
+      page.match(/<meta[^>]*property="og:description"[^>]*content="([^"]+)"/i);
+  if (m) metaDesc = _deEnt(m[1].trim());
+
   var pic = "";
   m = page.match(/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/) ||
       page.match(/class="[^"]*attachment-large[^"]*"[^>]*src="([^"]+)"/) ||
       page.match(/wp-post-image[^>]*src="([^"]+)"/);
   if (m) pic = _fixPic(m[1]);
-  if (/logo1(-300x300)?\.jpg$/i.test(pic)) pic = ""; // 无封面帖的 og:image 是站点 logo，不当封面
+  if (!_isContentPic(pic)) pic = "";
 
-  var codes = [], seen = {}, re = /<iframe[^>]*src="([^"]+)"/g, mm;
-  while ((mm = re.exec(page))) {
-    var code = _playerCode(_absolute(mm[1]));
-    if (code && !seen[code]) { seen[code] = 1; codes.push(code); }
+  var startIdx = page.indexOf('data-elementor-type="wp-post"');
+  if (startIdx < 0) startIdx = page.indexOf('class="entry-content');
+  if (startIdx < 0) startIdx = 0;
+  var endIdx = page.indexOf("猜你喜欢:", startIdx);
+  if (endIdx < 0) endIdx = page.indexOf('class="post-tags', startIdx);
+  if (endIdx < 0) endIdx = page.indexOf("</article>", startIdx);
+  if (endIdx < 0) endIdx = page.length;
+  var body = page.slice(startIdx, endIdx);
+
+  var allPics = [], allPicSeen = {};
+  function addPic(raw, arr, seen) {
+    var u = _fixPic(raw);
+    if (!_isContentPic(u)) return;
+    if (arr && seen && !seen[u]) { seen[u] = 1; arr.push(u); }
+    if (!allPicSeen[u]) { allPicSeen[u] = 1; allPics.push(u); }
   }
-  if (!codes.length) throw new Error("这个页面没有播放源");
+
+  var cur = { title: "", descParts: [], pics: [], picSeen: {} };
+  var episodes = [], seenCodes = {}, titleCounts = {};
+  var tokRe = /(<h3[^>]*>[\s\S]*?<\/h3>)|(<h4[^>]*>[\s\S]*?<\/h4>)|(<p[^>]*>[\s\S]*?<\/p>)|<a[^>]*e-gallery-item[^>]*href="([^"]+)"|data-thumbnail="([^"]+)"|<img[^>]+(?:data-src|src)="([^"]+)"|<iframe[^>]*src="([^"]+)"/gi;
+  var mm;
+  while ((mm = tokRe.exec(body))) {
+    if (mm[1]) {
+      var ht = _cleanText(mm[1]);
+      if (ht && ht !== "猜你喜欢:") {
+        cur = { title: ht, descParts: [], pics: [], picSeen: {} };
+      }
+    } else if (mm[2] || mm[3]) {
+      var pt = _cleanText(mm[2] || mm[3]);
+      if (pt && pt !== "猜你喜欢:") cur.descParts.push(pt);
+    } else if (mm[4] || mm[5] || mm[6]) {
+      addPic(mm[4] || mm[5] || mm[6], cur.pics, cur.picSeen);
+    } else if (mm[7]) {
+      var code = _playerCode(_absolute(mm[7]));
+      if (code && !seenCodes[code]) {
+        seenCodes[code] = 1;
+        var baseTitle = cur.title;
+        if (baseTitle) {
+          titleCounts[baseTitle] = (titleCounts[baseTitle] || 0) + 1;
+        }
+        episodes.push({
+          code: code,
+          rawTitle: baseTitle,
+          seqInTitle: baseTitle ? titleCounts[baseTitle] : 0,
+          descParts: cur.descParts.slice(),
+          pics: cur.pics.slice()
+        });
+      }
+    }
+  }
+  if (!episodes.length) throw new Error("这个页面没有播放源");
+
+  if (!pic && allPics.length) pic = allPics[0];
+  var backdropList = allPics.length ? allPics : (pic ? [pic] : []);
+
+  var epItems = episodes.map(function (ep, i) {
+    var l = "hj:p:" + ep.code;
+    var epTitle = ep.rawTitle
+      ? (titleCounts[ep.rawTitle] > 1 ? (ep.rawTitle + " (" + ep.seqInTitle + ")") : ep.rawTitle)
+      : ("第" + (i + 1) + "集");
+    var epDesc = ep.descParts.length
+      ? ep.descParts.join("\n")
+      : ("第" + (i + 1) + "集 · 共 " + episodes.length + " 集");
+    var epPic = (ep.pics && ep.pics.length ? ep.pics[0] : "") || pic;
+    return {
+      id: l,
+      link: l,
+      type: "url",
+      title: epTitle,
+      description: epDesc,
+      posterPath: epPic,
+      coverUrl: epPic,
+      episode: i + 1,
+      season: 1,
+      playerType: "app"
+    };
+  });
+
+  var detailDescParts = [];
+  if (metaDesc) detailDescParts.push(metaDesc);
+  for (var j = 0; j < epItems.length; j++) {
+    var it = epItems[j];
+    var headLine = "【第" + (j + 1) + "集】" + it.title;
+    var hasBody = episodes[j].descParts.length > 0;
+    detailDescParts.push(hasBody ? (headLine + "\n" + it.description) : headLine);
+  }
 
   return {
     id: info.id,
     type: "url",
     title: title,
-    description: codes.length + " 集 · 海角爱",
+    description: detailDescParts.join("\n\n"),
     posterPath: pic,
     coverUrl: pic,
-    mediaType: codes.length > 1 ? "tv" : "movie",
+    backdropPath: backdropList[0] || pic,
+    backdropPaths: backdropList,
+    mediaType: episodes.length > 1 ? "tv" : "movie",
     link: _postLink(info.cat, info.id),
-    episodeItems: codes.map(function (code, i) {
-      var l = "hj:p:" + code;
-      return {
-        id: l,
-        link: l,
-        type: "url",
-        title: "第" + (i + 1) + "集",
-        description: "共 " + codes.length + " 集",
-        episodeNumber: i + 1,
-        seasonNumber: 1,
-        playerType: "app"
-      };
-    })
+    episodeItems: epItems
   };
 }
 
