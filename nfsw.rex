@@ -101,6 +101,15 @@
       "version": "1.0.0",
       "author": "老头",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/javhd.js"
+    },
+    {
+      "id": "forward.haijiao",
+      "title": "海角爱",
+      "description": "海角爱资源站（本机解析版，无需代理）",
+      "requiredVersion": "0.0.1",
+      "version": "3.0.4",
+      "author": "Merlin",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/forward.haijiao.js"
     }
   ]
 }
