@@ -43,13 +43,14 @@
 WidgetMetadata = {
   id: "javverse.catalog", // 保持不变，避免已订阅用户失效；站点已换成 javcosmos
   title: "JAV Cosmos",
-  version: "2026.11.23.1",
+  version: "2026.11.23.2",
   requiredVersion: "0.0.1",
   description:
     "JAV Cosmos：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存 / 账号登录（手动 Cookie 优先）。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javcosmos.com/",
   icon: "https://javcosmos.com/apple-icon.png",
+  iconUrl: "https://javcosmos.com/apple-icon.png",
   detailCacheDuration: 600,
   globalParams: [
     {
@@ -3471,6 +3472,10 @@ async function handleGuangyaMagnetSave(hash, params) {
  *   * 列表/抽一部/搜索/类别补齐/磁力/播放会话本来就已经是 API，不动
  *   * 类别页仍走 /genre/{id} RSC/HTML + /api/cards 补齐；搜索仍按
  *     random-pool 本地过滤（没有服务端搜索 API 可换）
+ * 2026.11.23 / 1.5.2 — WidgetMetadata 增加 iconUrl（站点 logo，
+ *   与 icon 同值 https://javcosmos.com/apple-icon.png），供 Module Hub
+ *   上传时解析模块图标；聚合进 nfsw.rex 只需做一次，以后改动只同步
+ *   上传仓库即可，不用重复聚合
  * - 待核查：/login 真实 endpoint、gate cookie 名、
  *   Widget.http 能否读 Set-Cookie、cosmos 是否有 Cloudflare 质询
  */
