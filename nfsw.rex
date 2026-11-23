@@ -110,6 +110,15 @@
       "version": "3.0.4",
       "author": "Merlin",
       "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/forward.haijiao.js"
+    },
+    {
+      "id": "javverse.catalog",
+      "title": "JAV Cosmos",
+      "description": "JAV Cosmos：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存 / 账号登录（手动 Cookie 优先）。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+      "requiredVersion": "",
+      "version": "2026.11.23.1",
+      "author": "老头",
+      "url": "https://raw.githubusercontent.com/LaoTouWanYouXi/FW/main/widgets/javcosmos.js"
     }
   ]
 }
