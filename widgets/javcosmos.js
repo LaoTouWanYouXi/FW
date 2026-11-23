@@ -26,27 +26,31 @@
  * - 首页/类别/详情/女优/片商页都是服务端渲染 HTML，首屏不调 /api/；
  *   站内搜索页自己的作品结果在站内也加载失败（两次 0 部），
  *   所以搜索目前只能按 random-pool 在本地过滤，没有服务端搜索 API 可换。
- * 因此：类别页仍按需抓 /genre/{id}（RSC 优先，HTML 回退），
+ * 因此：类别页仍按需抓 /genre/{id}（HTML 直连优先，RSC 回退），
  * 详情仍拉 /work/{id}（HTML，女优/类别/剧照），但先吃尽 API 给的数据：
  * cards 的 actresses/makers 表（有就用）、random-pool 缓存里的 actress。
+ * 1.0.1 去掉了 HTML 代理 Worker：类别/详情全部直连，不再经过第三方 Worker；
+ * 直连 403 时靠 WebView 门禁（softBrowseGate）重试一次，仍过不去就填
+ * 含 cf_clearance 的站点 Cookie。
  *
  * 请求强度（1.5.0 / 2026.11.23，降低对站点的压力）：
  * - 作品池本地缓存 30 分钟；「抽一部/搜索补拉」5 分钟内复用池，不再强制刷新
- * - 403 冷却 90 秒：被拦期间跳过「门禁+重试」和代理请求，快速失败不放大请求
+ * - 403 冷却 90 秒：被拦期间跳过「门禁+重试」，快速失败不放大请求
  * - 类别页拿到 ≥1 张卡片即停（不再换路径重打）；完全为空才补 RSC
  * - 类别 /api/cards 只补当前页展示条目（原固定 48 条）
  * - 新增全局节流：所有站点请求最小间隔默认 400ms（globalParams request_min_interval_ms 可调），
  *   并发请求串行化；random-pool 去掉 ?t= 时间戳缓存破坏；作品池 / cards 批量加单飞去重
- * - 429 按 Retry-After 退避（默认 120s），与 403 同走硬拦截冷却；代理模式默认只试 browse+html，不再试第三种 fetch
+ * - 429 按 Retry-After 退避（默认 120s），与 403 同走硬拦截冷却；
+ *   代理 Worker 已去掉，不再有代理模式重试
  * - 详情仍并行拉 HTML+磁力，但 probe 只做一次且 10 分钟内复用结果
  */
 WidgetMetadata = {
   id: "javverse.catalog", // 保持不变，避免已订阅用户失效；站点已换成 javcosmos
   title: "JAV Cosmos",
-  version: "1.0.0",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   description:
-    "JAV Cosmos：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存 / 账号登录（手动 Cookie 优先）。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+    "JAV Cosmos：作品池 / 抽一部 / 千级类别（直连）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存 / 账号登录（手动 Cookie 优先）。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javcosmos.com/",
   icon: "https://javcosmos.com/apple-icon.png",
@@ -91,14 +95,6 @@ WidgetMetadata = {
       type: "input",
       value: "400",
       description: "两次站点请求最小间隔，防风控；0=不节流，默认 400ms。被 429/403 后会自动延长冷却，不用手动调大",
-    },
-    {
-      name: "html_proxy_worker",
-      title: "HTML 代理 Worker（可选）",
-      type: "input",
-      value: "",
-      placeholder: "https://javverse-html-proxy.<你的子域>.workers.dev",
-      description: "对齐 missav：直连 403 时走 /browse|/html 过 Cloudflare；留空用内置默认",
     },
     {
       name: "page_size",
@@ -407,9 +403,7 @@ var _cardsInflight = {};
 var _probeCache = {};
 var _loginAttemptAt = 0;
 var LOGIN_RETRY_MS = 10 * 60 * 1000;
-// 对齐 missav：直连 CF 403 时走 Cloudflare Worker（/browse 真浏览器过盾，/html 边缘拉取）
-var HTML_PROXY_WORKER_DEFAULT = "https://javverse-html-proxy.laotou-bcd.workers.dev"; // 注意：此 Worker 名仍是旧站的，上游可能仍指向 javverse.com；如为 cosmos 自建代理，请在 html_proxy_worker 里填新地址
-var HTML_PROXY_TIMEOUT_MS = 55000;
+// 1.0.1：HTML 代理 Worker 已去掉，类别/详情改为直连（403 时走 WebView 门禁重试一次）
 var GENRE_TITLE_MAP = {"25":"拘束","27":"辱め","28":"羞耻","35":"女性向け","38":"舔阴","48":"制服","81":"複数話","102":"美乳","514":"アクション・格闘","524":"義母","553":"学園もの","555":"恋愛","567":"鬼畜","1001":"OL","1007":"スチュワーデス","1008":"メイド","1013":"护士","1014":"熟女","1015":"女医","1016":"女教师","1018":"女子校生","1019":"女大学生","1020":"少妻","1022":"家庭教師","1025":"未亡人","1026":"职业","1027":"美少女","1028":"黒人男優","1031":"痴女","1032":"お母さん","1033":"姐姐系","1034":"辣妹","1036":"风俗娘","1039":"人妻・主妇","1069":"出轨","1082":"女戦士","2001":"巨乳","2002":"長身","2003":"小柄","2004":"めがね","2005":"贫乳","2006":"苗条","2007":"丰满","2008":"ミニ系","2012":"白人女优","2024":"巨尻","3001":"体操着・ブルマ","3002":"和服・浴衣","3003":"セーラー服","3006":"连裤袜","3007":"ミニスカ","3008":"泳装","3009":"競泳・スクール水着","3011":"学生服","3014":"内衣","3029":"即ハメ","3035":"レオタード","3036":"女装・男の娘","4001":"SM","4002":"近親相姦","4005":"乱交","4006":"搭讪","4007":"企划","4008":"腿控","4009":"乳控","4010":"其他恋物","4011":"臀控","4013":"女同","4014":"处男","4015":"ニューハーフ","4016":"内裤走光","4017":"特写","4018":"スカトロ","4019":"无毛","4020":"户外・露出","4021":"偷拍・偷窥","4022":"西洋・进口","4023":"纪实","4024":"素人","4025":"单体作品","4026":"カーセックス","4028":"妄想","4030":"淫乱・激烈","4031":"角色扮演","4034":"特撮","4057":"姉・妹","4059":"接吻","4096":"スポーツ","4098":"セクシー","4106":"骑乘位","4111":"NTR","4114":"剧情","4116":"着エロ","4118":"偶像・艺人","4119":"美容按摩","4120":"逆ナン","4122":"イタズラ","4123":"情侣","4124":"按摩","4140":"温泉","5001":"中出","5002":"口交","5003":"大量颜射","5004":"手交","5005":"肛交","5006":"振动棒","5008":"自慰","5009":"吞精","5010":"監禁","5011":"放尿・失禁","5012":"飲尿","5013":"脱糞","5014":"浣腸","5015":"ドラッグ","5016":"潮吹","5017":"玩具","5018":"ローター","5019":"乳交","5020":"69","5021":"縛り・緊縛","5022":"3P・4P","5023":"颜射","5025":"淫语","5048":"足コキ","5053":"手指插入","5057":"润滑・精油","5059":"拷問","5060":"母乳","5062":"女同接吻","5063":"POV","5066":"按摩棒","5067":"顔面騎乗","5068":"深喉","5069":"くすぐり","5071":"ハーレム","5073":"巨根","5074":"男性M","5075":"汗だく","5076":"アナルセックス","6002":"POV自拍","6003":"精选・总集篇","6004":"数码马赛克","6005":"投稿","6006":"出道","6012":"4小时以上","6014":"写真偶像","6017":"薄马赛克","6063":"独立制作","6149":"超巨乳","6164":"ビッチ","6533":"高清","6548":"独家配信","6566":"FANZA配信限定","6608":"女优精选","6609":"16時間以上作品","6793":"VR专用","6925":"高画质VR","6937":"ヘルス・ソープ","6941":"ディルド","6945":"女上司","6958":"后入","6967":"M女","6968":"高潮","6995":"妄想族","6996":"エマニエル","7267":"セット商品","79015":"4K","307935":"8K VR","309021":"アナルセックス（男の娘）"};
 var lastRequestParams = null;
 var memoryPool = { at: 0, works: [] };
@@ -685,35 +679,6 @@ function rememberParams(params) {
     if (minMb !== "" && Widget.storage && typeof Widget.storage.set === "function") {
       Widget.storage.set("jv.magnet_min_video_mb", minMb);
     }
-    var proxyBase =
-      getText(params && params.html_proxy_worker) ||
-      getText(params && params.htmlProxyWorker) ||
-      "";
-    if (!proxyBase && params && params.global) {
-      proxyBase =
-        getText(params.global.html_proxy_worker) || getText(params.global.htmlProxyWorker) || "";
-    }
-    if (!proxyBase && params && params.globalParams) {
-      if (Array.isArray(params.globalParams)) {
-        for (var px = 0; px < params.globalParams.length; px++) {
-          var itP = params.globalParams[px];
-          if (!itP) continue;
-          var nP = getText(itP.name || itP.key);
-          if (nP === "html_proxy_worker" || nP === "htmlProxyWorker") {
-            proxyBase = getText(itP.value != null ? itP.value : itP.val);
-            if (proxyBase) break;
-          }
-        }
-      } else {
-        proxyBase =
-          getText(params.globalParams.html_proxy_worker) ||
-          getText(params.globalParams.htmlProxyWorker) ||
-          "";
-      }
-    }
-    if (proxyBase && Widget.storage && typeof Widget.storage.set === "function") {
-      Widget.storage.set("jv.html_proxy_worker", proxyBase.replace(/\/+$/, ""));
-    }
   } catch (e) {}
 }
 
@@ -925,123 +890,13 @@ function isCloudflareChallenge(html) {
 
 function forbidHint(url) {
   return (
-    "请求被拦截(HTTP 403)。可填站点 Cookie，或配置 html_proxy_worker 后重试。url=" + url
+    "请求被拦截(HTTP 403)。请填入含 cf_clearance 的站点 Cookie 后重试。url=" + url
   );
 }
 
-function getHtmlProxyWorkerBase() {
-  var base = "";
-  try {
-    base =
-      getText(lastRequestParams && lastRequestParams.html_proxy_worker) ||
-      getText(Widget.storage && Widget.storage.get("jv.html_proxy_worker")) ||
-      getText(Widget.storage && Widget.storage.get("javdb.global.htmlProxyWorker")) ||
-      "";
-  } catch (e) {}
-  if (!base) base = HTML_PROXY_WORKER_DEFAULT;
-  return String(base || "").replace(/\/+$/, "");
-}
-
-function buildHtmlProxyUrl(targetUrl, mode) {
-  var base = getHtmlProxyWorkerBase();
-  if (!base) return "";
-  var path = mode === "browse" ? "/browse" : mode === "fetch" ? "/fetch" : "/html";
-  return base + path + "?url=" + encodeURIComponent(String(targetUrl || ""));
-}
-
-function isProxyErrorPayload(body) {
-  var text = String(body || "").trim();
-  if (!text || text.charAt(0) !== "{") return false;
-  try {
-    var data = JSON.parse(text);
-    return !!(data && data.error);
-  } catch (e) {
-    return false;
-  }
-}
-
-function isUsableProxyHtml(html) {
-  var text = String(html || "");
-  if (!text || text.length < 200) return false;
-  if (isProxyErrorPayload(text) || isCloudflareChallenge(text)) return false;
-  return /work-card|workId|\/work\/\d+|og:title|<html[\s>]/i.test(text);
-}
-
-async function fetchViaHtmlProxy(targetUrl, mode) {
-  var proxyUrl = buildHtmlProxyUrl(targetUrl, mode || "html");
-  if (!proxyUrl) throw new Error("html proxy base missing");
-  var headers = {
-    Accept: "text/html,application/json,*/*",
-    "User-Agent": UA,
-  };
-  var cookie = mergeCookieJar("");
-  if (cookie) headers["X-Upstream-Cookie"] = cookie;
-  // browse 也可把 cookie 挂到 query，兼容 move-html-proxy
-  if ((mode === "browse" || !mode) && cookie) {
-    proxyUrl += "&cookie=" + encodeURIComponent(cookie);
-  }
-  var got = await safeGet(proxyUrl, headers, { timeout: HTML_PROXY_TIMEOUT_MS });
-  var body = typeof got.body === "string" ? got.body : String(got.body || "");
-  if (isProxyErrorPayload(body)) {
-    var msg = "proxy error";
-    try {
-      var pj = JSON.parse(body);
-      msg = pj.message || pj.error || msg;
-    } catch (e2) {}
-    throw new Error(String(msg));
-  }
-  // 代理侧可能透传上游 403，但 body 已是可用 HTML/RSC
-  if ((got.status >= 400 || (got.error && isForbiddenError(got.error))) && !isUsableProxyHtml(body) && body.indexOf("workId") === -1) {
-    throw new Error("proxy HTTP " + (got.status || errorStatus(got.error) || "?") + " via " + (mode || "html"));
-  }
-  if (!isUsableProxyHtml(body) && body.indexOf("workId") === -1) {
-    throw new Error("proxy returned unusable body via " + (mode || "html"));
-  }
-  return body;
-}
-
-async function fetchViaProxyModes(url, preferModes) {
-  var modes = preferModes && preferModes.length ? preferModes : ["browse", "html"]; // 1.5.0：去掉第三种 fetch，最坏情况从 3 次代理降到 2 次
-  // 冷却期内不打代理（所有代理模式都失败会计入冷却，防止连环重试）
-  if (inHardBlockBackoff()) {
-    throw new Error("拦截冷却中（剩 " + hardBlockRemainSec() + "s），跳过代理: " + url);
-  }
-  var lastErr = null;
-  for (var i = 0; i < modes.length; i++) {
-    try {
-      var body = await fetchViaHtmlProxy(url, modes[i]);
-      console.log("[javcosmos] proxy ok via", modes[i], "len=", body.length);
-      return body;
-    } catch (e) {
-      lastErr = e;
-      console.log("[javcosmos] proxy", modes[i], "fail:", (e && e.message) || e);
-    }
-  }
-  markHardBlock();
-  throw lastErr || new Error(forbidHint(url));
-}
-
-async function fetchHtmlWithProxyFallback(pathOrUrl, referer, opt) {
-  opt = opt || {};
-  var url = /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : SITE + pathOrUrl;
-  if (!opt.proxyOnly) {
-    try {
-      return await fetchHtml(url, referer);
-    } catch (directErr) {
-      if (
-        !isForbiddenError(directErr) &&
-        !/403|challenge|拦截/i.test(String((directErr && directErr.message) || directErr))
-      ) {
-        throw directErr;
-      }
-      console.log(
-        "[javcosmos] direct HTML blocked, try proxy:",
-        (directErr && directErr.message) || directErr
-      );
-    }
-  }
-  return fetchViaProxyModes(url);
-}
+// 1.0.1：HTML 代理 Worker 已去掉（getHtmlProxyWorkerBase / buildHtmlProxyUrl /
+// fetchViaHtmlProxy / fetchViaProxyModes / fetchHtmlWithProxyFallback 全部删除）；
+// 类别/详情改为直连，403 时由 fetchHtml / fetchGenreRsc 里的 WebView 门禁重试一次。
 
 async function safeGet(url, headers, opt) {
   opt = opt || {};
@@ -1366,15 +1221,24 @@ function genrePathCandidates(genreId, page) {
 }
 
 async function fetchGenreRsc(genreId, page) {
-  // 仅作 HTML 代理不足时的补刀；同样不直连 javcosmos.com
+  // 1.0.1：直连取 RSC（Next.js 客户端导航同款），不再走代理 Worker；
+  // 403 时走一次 WebView 门禁再试（与 fetchHtml 同款逻辑）
   var path = buildGenreRscPath(genreId, page);
+  var url = SITE + path;
+  var nextUrl = "/genre/" + encodeURIComponent(genreId);
   try {
-    var body = await fetchViaProxyModes(SITE + path, ["html", "browse"]);
+    var got = await safeGet(url, rscHeaders(SITE + "/", nextUrl));
+    if (isBlockedResponse(got)) {
+      if (!inHardBlockBackoff() && (await softBrowseGate(true))) {
+        got = await safeGet(url, rscHeaders(SITE + "/", nextUrl));
+      }
+    }
+    var body = typeof got.body === "string" ? got.body : String(got.body || "");
     if (!body || body.length < 80 || body.indexOf("workId") === -1) return null;
     var items = parseGenreRscPayload(body);
     return items.length ? items : null;
   } catch (e) {
-    console.log("[javcosmos] genre RSC proxy skip:", path, (e && e.message) || e);
+    console.log("[javcosmos] genre RSC direct skip:", path, (e && e.message) || e);
     return null;
   }
 }
@@ -1854,7 +1718,8 @@ function parseGenreWorkCards(html) {
 }
 
 async function fetchGenreHtmlCards(genreId, page) {
-  // 1.5.0：类别页也缓存 30 分钟，同一类别+页码短时间内不再打代理
+  // 1.0.1：类别页缓存 30 分钟；代理 Worker 已去掉，改为直连拉 HTML
+  // （403 时 fetchHtml 会走 WebView 门禁重试一次）
   var _genreCacheKey = "jc.genre." + genreId + "." + page;
   try {
     var _raw = Widget.storage && Widget.storage.get(_genreCacheKey);
@@ -1863,25 +1728,24 @@ async function fetchGenreHtmlCards(genreId, page) {
       if (_obj && Array.isArray(_obj.items) && Date.now() - Number(_obj.at || 0) < 30 * 60 * 1000) return _obj.items;
     }
   } catch (e) {}
-  // 类别：优先单次 /browse 代理；失败再 html/fetch，且默认只打主路径，减少无效请求
+  // 直连：先打主路径，失败再试 /zh-CN/ 前缀路径
   var paths = genrePathCandidates(genreId, page);
   var best = [];
   for (var j = 0; j < paths.length; j++) {
-    var modes = j === 0 ? ["browse", "html"] : ["browse"];
     try {
-      var proxied = await fetchViaProxyModes(SITE + paths[j], modes);
-      var proxiedCards = parseGenreWorkCards(proxied);
-      if (!proxiedCards.length && proxied.indexOf("workId") !== -1) {
-        proxiedCards = parseGenreRscPayload(proxied);
+      var html = await fetchHtml(paths[j], SITE + "/");
+      var htmlCards = parseGenreWorkCards(html);
+      if (!htmlCards.length && html.indexOf("workId") !== -1) {
+        htmlCards = parseGenreRscPayload(html);
       }
-      if (proxiedCards.length > best.length) best = proxiedCards;
+      if (htmlCards.length > best.length) best = htmlCards;
       // 拿到 ≥1 张即收手：末页/小类目本来就可能只有几条，不再换路径重打
       if (best.length > 0) {
         try { Widget.storage.set(_genreCacheKey, JSON.stringify({ at: Date.now(), items: best })); } catch (e4) {}
         return best;
       }
     } catch (e3) {
-      console.log("[javcosmos] genre proxy skip:", paths[j], (e3 && e3.message) || e3);
+      console.log("[javcosmos] genre direct skip:", paths[j], (e3 && e3.message) || e3);
     }
   }
   return best.length ? best : null;
@@ -1999,33 +1863,31 @@ async function loadGenreWorks(params) {
     var page = pageNum(params);
     var cards = null;
 
-    // 类别页：直接走 CF 代理（不再先打 javcosmos.com 直连/RSC，避免前置一串 403）
+    // 类别页：直连拉取（代理 Worker 已去掉）；403 时靠 fetchHtml 的 WebView 门禁重试
     try {
       cards = await fetchGenreHtmlCards(genreId, page);
       console.log(
-        "[javcosmos] genre proxy HTML id=",
+        "[javcosmos] genre direct HTML id=",
         genreId,
         "page=",
         page,
         "n=",
-        cards ? cards.length : 0,
-        "via=",
-        getHtmlProxyWorkerBase()
+        cards ? cards.length : 0
       );
     } catch (e2) {
-      console.log("[javcosmos] genre proxy HTML skip:", (e2 && e2.message) || e2);
+      console.log("[javcosmos] genre direct HTML skip:", (e2 && e2.message) || e2);
     }
 
-    // 完全没拿到卡片才补代理 RSC（原先 <8 条就补，末页只有几条时会白打代理）
+    // 完全没拿到卡片才补直连 RSC（原先 <8 条就补，末页只有几条时会白打请求）
     if (!cards || !cards.length) {
       try {
         var rscCards = await fetchGenreRsc(genreId, page);
         if (rscCards && rscCards.length > (cards ? cards.length : 0)) {
           cards = rscCards;
-          console.log("[javcosmos] genre proxy RSC id=", genreId, "n=", cards.length);
+          console.log("[javcosmos] genre direct RSC id=", genreId, "n=", cards.length);
         }
       } catch (e) {
-        console.log("[javcosmos] genre proxy RSC skip:", (e && e.message) || e);
+        console.log("[javcosmos] genre direct RSC skip:", (e && e.message) || e);
       }
     }
 
@@ -2038,9 +1900,7 @@ async function loadGenreWorks(params) {
           genreTitleById(genreId) +
           ") 第 " +
           page +
-          " 页代理加载失败。请确认 html_proxy_worker=" +
-          getHtmlProxyWorkerBase() +
-          "，或填入含 cf_clearance 的站点 Cookie 后重试。"
+          " 页直连加载失败（代理 Worker 已去掉）。请填入含 cf_clearance 的站点 Cookie 后重试，或等拦截冷却过去。"
       );
     }
 
@@ -2118,6 +1978,13 @@ async function searchJavverse(params) {
 //  3) site_login_path 默认留空 = 不自动登录，因为 javcosmos 的真实登录 endpoint 未经核查，
 //     不要把 /api/auth/login 当成定论；核查方法：浏览器打开 /auth/login，看 form action / 网络请求
 // 密码只从当次 params 读，绝不写 storage；用户名/登录路径可持久化到 storage。
+// Scrapling（2026-11-23 已查 D4Vinci/Scrapling 文档）：它的 Turnstile 是靠
+// StealthyFetcher（Playwright 真浏览器 + solve_cloudflare=True）过的，
+// 纯 HTTP 的 Fetcher 只能做 TLS 指纹伪装，过不了 Turnstile。Forward 模块是 JS
+// 沙箱，没有 Python、没有真浏览器，Widget.http 也发不出 Turnstile token，
+// 所以 Scrapling 的代码不能在模块里跑；能用的办法是在电脑上跑 Scrapling 脚本
+// （见 workspace/javcosmos/scrapling_login.py）登录并导出 Cookie，再填进
+// site_cookie——等于把“真浏览器过验证”这一步挪到模块外面做。
 async function trySiteLoginOnce() {
   var now = Date.now();
   if (now - _loginAttemptAt < LOGIN_RETRY_MS) return null;
@@ -3451,7 +3318,7 @@ async function handleGuangyaMagnetSave(hash, params) {
  *     提交 endpoint 与登录后凭证名、gate cookie 名均未确认，不猜测
  *     填之前请先在浏览器核查 /login 的 form action / 网络请求
  *   * gate cookie 同时带 jc-gate/jc-adult + 旧 jv-gate/jv-adult，cosmos 是否改名待核查；
- *     HTML 代理 Worker 默认仍是旧站的 javverse-html-proxy，如为 cosmos 自建请改 html_proxy_worker
+ *     HTML 代理 Worker 默认曾是旧站的 javverse-html-proxy（1.0.1 已去掉，不用再配）
  * 2026.11.23 / 1.5.1 — API 优先（用户要求“改成 API 请求”）
  * - 逐个核查（2026-11-23 浏览器只读 + 直接读接口）：
  *   * 存在且返回 JSON：GET /api/works/random-pool、GET /api/cards?w=
@@ -3477,6 +3344,16 @@ async function handleGuangyaMagnetSave(hash, params) {
  *   上传时解析模块图标；聚合进 nfsw.rex 只需做一次，以后改动只同步
  *   上传仓库即可，不用重复聚合
  * - 版本号按用户要求改为 1.0.0（此前为日期版 2026.11.23.2）
+ * 2026.11.23 / 1.0.1 — 去掉 HTML 代理 Worker + Scrapling 登录研究
+ * - 删除：globalParam html_proxy_worker、HTML_PROXY_WORKER_DEFAULT、
+ *   getHtmlProxyWorkerBase / fetchViaHtmlProxy / fetchViaProxyModes /
+ *   fetchHtmlWithProxyFallback；类别/详情改为直连，403 时由 fetchHtml /
+ *   fetchGenreRsc 里的 WebView 门禁重试一次；仍过不去请填含 cf_clearance 的 Cookie
+ * - Scrapling 结论：Turnstile 靠 StealthyFetcher（Playwright 真浏览器 +
+ *   solve_cloudflare=True）过，纯 HTTP 过不了；模块是 JS 沙箱跑不了 Python，
+ *   所以登录仍以手动 Cookie 为主；另附电脑上跑的 Scrapling 取 Cookie 脚本
+ *   workspace/javcosmos/scrapling_login.py（登录页填账号密码、自动过 Turnstile、
+ *   导出 Cookie 填 site_cookie）
  * - 待核查：/login 真实 endpoint、gate cookie 名、
  *   Widget.http 能否读 Set-Cookie、cosmos 是否有 Cloudflare 质询
  */
