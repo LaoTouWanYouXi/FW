@@ -2,10 +2,11 @@
  * JAV Cosmos ForwardWidget / rex 模块
  * 站点: https://javcosmos.com/
  * 由 javverse.com 1.4.8 迁移而来（2026-11-23，见底部 CHANGELOG）
- * 注意：javcosmos 登录 endpoint / gate cookie 名未经官方文档确认，
- * 本文件登录走“手动 Cookie 优先 + 可配置登录接口”方案，不要把未验证的
- * endpoint 当成定论；已核查：真实登录页是 /auth/login（/login 404），字段只有
- * 用户名+密码，带 Cloudflare Turnstile；提交 endpoint 与登录后凭证名未确认。
+ * 1.0.2 已去掉账号登录功能（globalParams 的 site_cookie / site_username /
+ * site_password / site_login_path 与 accountLogin 模块全部删除）；登录页是
+ * /auth/login（/login 404），带 Cloudflare Turnstile，本模块不再处理登录。
+ * 门禁 Cookie 名已确认（2026-11-23 用户 DevTools 截图）：site-gate=1、
+ * __Host-site-gate（JWT）、__Host-site-browse（JWT）、sb-…（Supabase 登录会话）。
  * modules.rexnow.app 只是测试器，不是文档站，
  * 真正文档见 InchStudio/ForwardWidgets README。
  *
@@ -30,8 +31,7 @@
  * 详情仍拉 /work/{id}（HTML，女优/类别/剧照），但先吃尽 API 给的数据：
  * cards 的 actresses/makers 表（有就用）、random-pool 缓存里的 actress。
  * 1.0.1 去掉了 HTML 代理 Worker：类别/详情全部直连，不再经过第三方 Worker；
- * 直连 403 时靠 WebView 门禁（softBrowseGate）重试一次，仍过不去就填
- * 含 cf_clearance 的站点 Cookie。
+ * 直连 403 时靠 WebView 门禁（softBrowseGate）重试一次，仍过不去就等拦截冷却过去。
  *
  * 请求强度（1.5.0 / 2026.11.23，降低对站点的压力）：
  * - 作品池本地缓存 30 分钟；「抽一部/搜索补拉」5 分钟内复用池，不再强制刷新
@@ -47,48 +47,16 @@
 WidgetMetadata = {
   id: "javverse.catalog", // 保持不变，避免已订阅用户失效；站点已换成 javcosmos
   title: "JAV Cosmos",
-  version: "1.0.1",
+  version: "1.0.2",
   requiredVersion: "0.0.1",
   description:
-    "JAV Cosmos：作品池 / 抽一部 / 千级类别（直连）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存 / 账号登录（手动 Cookie 优先）。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
+    "JAV Cosmos：作品池 / 抽一部 / 千级类别（直连）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
   author: "老头",
   site: "https://javcosmos.com/",
   icon: "https://javcosmos.com/apple-icon.png",
   iconUrl: "https://javcosmos.com/apple-icon.png",
   detailCacheDuration: 600,
   globalParams: [
-    {
-      name: "site_cookie",
-      title: "站点 Cookie（可选）",
-      type: "input",
-      value: "",
-      placeholder: "jc-gate=1; jv-gate=1; __suvt=...; __nuvt=...",
-      description: "API/类别页 403 时再填；一般可留空。登录后从浏览器复制 Cookie 填这里是最稳的登录方式",
-    },
-    {
-      name: "site_username",
-      title: "站点账号（可选）",
-      type: "input",
-      value: "",
-      placeholder: "邮箱或用户名",
-      description: "账号登录用；仅在 site_login_path 已填且无有效 Cookie 时才尝试登录",
-    },
-    {
-      name: "site_password",
-      title: "站点密码（可选）",
-      type: "input",
-      value: "",
-      placeholder: "密码",
-      description: "注意：Forward 的 input 是明文框，密码会以明文存在模块设置里；不放心就只用 site_cookie 登录，留空密码",
-    },
-    {
-      name: "site_login_path",
-      title: "登录接口路径（可选）",
-      type: "input",
-      value: "",
-      placeholder: "留空",
-      description: "登录 API 路径，未验证，默认留空=不自动登录。已核查：真实登录页是 /auth/login（不是 /login，/login 会 404），字段只有用户名+密码，无邮箱，带 Cloudflare Turnstile，按钮初始 disabled；提交 endpoint 在页面上看不到，Turnstile 会拦自动化登录，所以最稳仍是手动 Cookie",
-    },
     {
       name: "request_min_interval_ms",
       title: "请求最小间隔 ms",
@@ -363,13 +331,6 @@ WidgetMetadata = {
       ],
     },
     {
-      id: "accountLogin",
-      title: "账号登录",
-      functionName: "loadAccountLogin",
-      cacheDuration: 0,
-      params: [],
-    },
-    {
       id: "loadResource",
       title: "播放资源",
       functionName: "loadResource",
@@ -401,7 +362,6 @@ var _throttleChain = Promise.resolve();
 var _poolInflight = null;
 var _cardsInflight = {};
 var _probeCache = {};
-var _loginAttemptAt = 0;
 var LOGIN_RETRY_MS = 10 * 60 * 1000;
 // 1.0.1：HTML 代理 Worker 已去掉，类别/详情改为直连（403 时走 WebView 门禁重试一次）
 var GENRE_TITLE_MAP = {"25":"拘束","27":"辱め","28":"羞耻","35":"女性向け","38":"舔阴","48":"制服","81":"複数話","102":"美乳","514":"アクション・格闘","524":"義母","553":"学園もの","555":"恋愛","567":"鬼畜","1001":"OL","1007":"スチュワーデス","1008":"メイド","1013":"护士","1014":"熟女","1015":"女医","1016":"女教师","1018":"女子校生","1019":"女大学生","1020":"少妻","1022":"家庭教師","1025":"未亡人","1026":"职业","1027":"美少女","1028":"黒人男優","1031":"痴女","1032":"お母さん","1033":"姐姐系","1034":"辣妹","1036":"风俗娘","1039":"人妻・主妇","1069":"出轨","1082":"女戦士","2001":"巨乳","2002":"長身","2003":"小柄","2004":"めがね","2005":"贫乳","2006":"苗条","2007":"丰满","2008":"ミニ系","2012":"白人女优","2024":"巨尻","3001":"体操着・ブルマ","3002":"和服・浴衣","3003":"セーラー服","3006":"连裤袜","3007":"ミニスカ","3008":"泳装","3009":"競泳・スクール水着","3011":"学生服","3014":"内衣","3029":"即ハメ","3035":"レオタード","3036":"女装・男の娘","4001":"SM","4002":"近親相姦","4005":"乱交","4006":"搭讪","4007":"企划","4008":"腿控","4009":"乳控","4010":"其他恋物","4011":"臀控","4013":"女同","4014":"处男","4015":"ニューハーフ","4016":"内裤走光","4017":"特写","4018":"スカトロ","4019":"无毛","4020":"户外・露出","4021":"偷拍・偷窥","4022":"西洋・进口","4023":"纪实","4024":"素人","4025":"单体作品","4026":"カーセックス","4028":"妄想","4030":"淫乱・激烈","4031":"角色扮演","4034":"特撮","4057":"姉・妹","4059":"接吻","4096":"スポーツ","4098":"セクシー","4106":"骑乘位","4111":"NTR","4114":"剧情","4116":"着エロ","4118":"偶像・艺人","4119":"美容按摩","4120":"逆ナン","4122":"イタズラ","4123":"情侣","4124":"按摩","4140":"温泉","5001":"中出","5002":"口交","5003":"大量颜射","5004":"手交","5005":"肛交","5006":"振动棒","5008":"自慰","5009":"吞精","5010":"監禁","5011":"放尿・失禁","5012":"飲尿","5013":"脱糞","5014":"浣腸","5015":"ドラッグ","5016":"潮吹","5017":"玩具","5018":"ローター","5019":"乳交","5020":"69","5021":"縛り・緊縛","5022":"3P・4P","5023":"颜射","5025":"淫语","5048":"足コキ","5053":"手指插入","5057":"润滑・精油","5059":"拷問","5060":"母乳","5062":"女同接吻","5063":"POV","5066":"按摩棒","5067":"顔面騎乗","5068":"深喉","5069":"くすぐり","5071":"ハーレム","5073":"巨根","5074":"男性M","5075":"汗だく","5076":"アナルセックス","6002":"POV自拍","6003":"精选・总集篇","6004":"数码马赛克","6005":"投稿","6006":"出道","6012":"4小时以上","6014":"写真偶像","6017":"薄马赛克","6063":"独立制作","6149":"超巨乳","6164":"ビッチ","6533":"高清","6548":"独家配信","6566":"FANZA配信限定","6608":"女优精选","6609":"16時間以上作品","6793":"VR专用","6925":"高画质VR","6937":"ヘルス・ソープ","6941":"ディルド","6945":"女上司","6958":"后入","6967":"M女","6968":"高潮","6995":"妄想族","6996":"エマニエル","7267":"セット商品","79015":"4K","307935":"8K VR","309021":"アナルセックス（男の娘）"};
@@ -584,10 +544,7 @@ function readMagnetCache(hash) {
 
 function rememberParams(params) {
   if (params && typeof params === "object") lastRequestParams = params;
-  if (params && getText(params.site_cookie)) persistSiteCookie(params.site_cookie);
   try {
-    if (params && getText(params.site_username)) Widget.storage.set("jc.site_username", getText(params.site_username));
-    if (params && getText(params.site_login_path)) Widget.storage.set("jc.site_login_path", getText(params.site_login_path));
     if (params && getText(params.request_min_interval_ms) !== "") Widget.storage.set("jc.request_min_interval_ms", getText(params.request_min_interval_ms));
   } catch (e) {}
   // 列表请求时把全局光鸭参数落到 storage，供 loadDetail(仅 link) 转存使用
@@ -682,28 +639,8 @@ function rememberParams(params) {
   } catch (e) {}
 }
 
-function getSiteCookie() {
-  var fromParams = (lastRequestParams && getText(lastRequestParams.site_cookie)) || "";
-  if (fromParams) return fromParams;
-  try {
-    var v = getText(Widget.storage && Widget.storage.get("jc_site_cookie"));
-    if (v) return v;
-    // 兼容旧站迁移：读旧 key，读到后顺手迁到新 key
-    var old = getText(Widget.storage && Widget.storage.get("jv_site_cookie"));
-    if (old) persistSiteCookie(old);
-    return old;
-  } catch (e) {
-    return "";
-  }
-}
-
-function persistSiteCookie(cookie) {
-  cookie = getText(cookie);
-  if (!cookie || !Widget.storage || typeof Widget.storage.set !== "function") return;
-  Widget.storage.set("jc_site_cookie", cookie);
-}
-
-/** 合并 Cookie，并确保带上门禁 jv-gate / jv-adult */
+/** 合并 Cookie：只补门禁 site-gate=1（真名，已确认）；__Host-* 是 JWT 不能凭空补。
+ *  1.0.2 已去掉登录功能，不再读 site_cookie。 */
 function mergeCookieJar(extra) {
   var map = {};
   function eat(str) {
@@ -721,38 +658,13 @@ function mergeCookieJar(extra) {
         map[k] = v;
       });
   }
-  eat(getSiteCookie());
   eat(extra);
-  if (!map["jv-gate"]) map["jv-gate"] = "1";
-  if (!map["jv-adult"]) map["jv-adult"] = "1";
-  // cosmos 是否改名未确认：同时带 jc-*，旧站兼容，新站若认 jc-* 也能过门禁
-  if (!map["jc-gate"]) map["jc-gate"] = "1";
-  if (!map["jc-adult"]) map["jc-adult"] = "1";
+  if (!map["site-gate"]) map["site-gate"] = "1";
   var out = [];
   for (var k in map) {
     if (Object.prototype.hasOwnProperty.call(map, k)) out.push(k + "=" + map[k]);
   }
   return out.join("; ");
-}
-
-function persistCookiesFromResponse(res) {
-  try {
-    var headers = (res && (res.headers || res.header || res.responseHeaders)) || {};
-    var setCookie = headers["set-cookie"] || headers["Set-Cookie"] || headers["SET-COOKIE"] || "";
-    if (Array.isArray(setCookie)) setCookie = setCookie.join("\n");
-    setCookie = String(setCookie || "");
-    if (!setCookie) return;
-    var pairs = [];
-    String(setCookie)
-      .split(/\r?\n|, (?=[^;]+=)/)
-      .forEach(function (line) {
-        var first = getText(String(line || "").split(";")[0]);
-        if (first && first.indexOf("=") > 0) pairs.push(first);
-      });
-    if (!pairs.length) return;
-    var merged = mergeCookieJar(pairs.join("; "));
-    persistSiteCookie(merged);
-  } catch (e) {}
 }
 
 function requestMinIntervalMs() {
@@ -785,23 +697,6 @@ function throttleOriginRequest() {
   });
   _throttleChain = run.catch(function () {});
   return run;
-}
-
-function getAccountUsername() {
-  var v = getText(lastRequestParams && lastRequestParams.site_username) || "";
-  if (v) return v;
-  try { return getText(Widget.storage && Widget.storage.get("jc.site_username")); } catch (e) { return ""; }
-}
-
-function getAccountPassword() {
-  // 密码只从当次 params 读，绝不写 storage，避免明文落盘
-  return getText(lastRequestParams && lastRequestParams.site_password) || "";
-}
-
-function getLoginPath() {
-  var v = getText(lastRequestParams && lastRequestParams.site_login_path) || "";
-  if (v) return v;
-  try { return getText(Widget.storage && Widget.storage.get("jc.site_login_path")); } catch (e) { return ""; }
 }
 
 function apiHeaders(extra) {
@@ -890,7 +785,7 @@ function isCloudflareChallenge(html) {
 
 function forbidHint(url) {
   return (
-    "请求被拦截(HTTP 403)。请填入含 cf_clearance 的站点 Cookie 后重试。url=" + url
+    "请求被拦截(HTTP 403)。直连被 Cloudflare 拦截，等拦截冷却过去再试。url=" + url
   );
 }
 
@@ -909,7 +804,6 @@ async function safeGet(url, headers, opt) {
     };
     if (opt.requiresWebView) httpOpts.requiresWebView = true;
     var res = await Widget.http.get(url, httpOpts);
-    persistCookiesFromResponse(res);
     return {
       ok: true,
       res: res,
@@ -939,7 +833,6 @@ async function safePost(url, body, headers, opt) {
     };
     if (opt.requiresWebView) httpOpts.requiresWebView = true;
     var res = await Widget.http.post(url, body == null ? {} : body, httpOpts);
-    persistCookiesFromResponse(res);
     return {
       ok: true,
       res: res,
@@ -1061,7 +954,7 @@ async function fetchJson(pathOrUrl, opt) {
     )
   );
 
-  // 不再每次前置门禁；Cookie 已带 jv-gate。仅 403 时补门禁再试一次。
+  // 不再每次前置门禁；Cookie 已带 site-gate。仅 403 时补门禁再试一次。
   var got =
     opt.method === "POST"
       ? await safePost(url, opt.body == null ? {} : opt.body, headers)
@@ -1084,18 +977,8 @@ async function fetchJson(pathOrUrl, opt) {
   }
 
   if (got.status === 401) {
-    // 401：若配了账号+登录接口，10 分钟内只自动登录一次，重试一次；否则直接报未登录
-    var _triedLogin = await trySiteLoginOnce();
-    if (_triedLogin) {
-      got = opt.method === "POST"
-        ? await safePost(url, opt.body == null ? {} : opt.body, headers)
-        : await safeGet(url, headers);
-      if (!isBlockedResponse(got) && got.status !== 401) {
-        var _json2 = responseJson(got.res || { data: got.body });
-        if (_json2) return _json2;
-      }
-    }
-    throw new Error("站点未登录（HTTP 401）。先打开「账号登录」模块，或在浏览器登录后把 Cookie 填到 site_cookie。url=" + url);
+    // 1.0.2：已去掉账号登录功能，401 直接报错，不再尝试自动登录
+    throw new Error("站点要求登录（HTTP 401），本模块已去掉登录功能。url=" + url);
   }
 
   if (isBlockedResponse(got)) {
@@ -1552,8 +1435,28 @@ async function fetchMagnets(workId) {
     var json = await fetchJson("/api/works/" + encodeURIComponent(workId) + "/magnets", {
       referer: SITE + "/work/" + workId,
     });
-    if (!json || !Array.isArray(json.items)) return [];
-    return json.items;
+    // 响应结构未核实过（匿名测到 403，没见过真 JSON）：兼容多种包法与字段名
+    var list = null;
+    if (Array.isArray(json)) list = json;
+    else if (json && Array.isArray(json.items)) list = json.items;
+    else if (json && Array.isArray(json.data)) list = json.data;
+    else if (json && Array.isArray(json.results)) list = json.results;
+    else if (json && Array.isArray(json.magnets)) list = json.magnets;
+    if (!list) return [];
+    return list
+      .map(function (it) {
+        it = it || {};
+        var m = getText(it.magnet || it.magnet_link || it.magnetLink || it.url || it.link);
+        if (!m) {
+          var h = getText(it.hash || it.infohash || it.id);
+          if (/^[0-9a-fA-F]{32,40}$/.test(h)) m = "magnet:?xt=urn:btih:" + h.toLowerCase();
+        }
+        if (m) it.magnet = m;
+        return it;
+      })
+      .filter(function (it) {
+        return !!getText(it.magnet);
+      });
   } catch (e) {
     console.log("[javcosmos] magnets skip:", (e && e.message) || e);
     return [];
@@ -1900,7 +1803,7 @@ async function loadGenreWorks(params) {
           genreTitleById(genreId) +
           ") 第 " +
           page +
-          " 页直连加载失败（代理 Worker 已去掉）。请填入含 cf_clearance 的站点 Cookie 后重试，或等拦截冷却过去。"
+          " 页直连加载失败（代理 Worker 已去掉）。直连被 Cloudflare 拦截（HTTP 403），等拦截冷却过去再试。"
       );
     }
 
@@ -1967,97 +1870,6 @@ async function searchJavverse(params) {
   }
 }
 
-
-// ========================= 站点账号登录（1.5.0，javcosmos） =========================
-// 官方文档无登录章节，这里是“globalParams + Widget.storage + 手动 Cookie”拼法：
-//  1) 最稳：浏览器登录 javcosmos 后，把 Cookie 复制到 globalParams site_cookie（已存在的功能）
-//  2) 自动：填 site_username + site_password + site_login_path，模块在 401 时尝试登录一次，
-//     注意：/auth/login 带 Cloudflare Turnstile，自动化 POST 大概率被拦，自动登录只是尽力一试，
-//     失败时请走手动 Cookie；不要反复重试，以免触发风控
-//     成功后把 Set-Cookie 存到 jc_site_cookie，后续请求自动带上
-//  3) site_login_path 默认留空 = 不自动登录，因为 javcosmos 的真实登录 endpoint 未经核查，
-//     不要把 /api/auth/login 当成定论；核查方法：浏览器打开 /auth/login，看 form action / 网络请求
-// 密码只从当次 params 读，绝不写 storage；用户名/登录路径可持久化到 storage。
-// Scrapling（2026-11-23 已查 D4Vinci/Scrapling 文档）：它的 Turnstile 是靠
-// StealthyFetcher（Playwright 真浏览器 + solve_cloudflare=True）过的，
-// 纯 HTTP 的 Fetcher 只能做 TLS 指纹伪装，过不了 Turnstile。Forward 模块是 JS
-// 沙箱，没有 Python、没有真浏览器，Widget.http 也发不出 Turnstile token，
-// 所以 Scrapling 的代码不能在模块里跑；能用的办法是在电脑上跑 Scrapling 脚本
-// （见 workspace/javcosmos/scrapling_login.py）登录并导出 Cookie，再填进
-// site_cookie——等于把“真浏览器过验证”这一步挪到模块外面做。
-async function trySiteLoginOnce() {
-  var now = Date.now();
-  if (now - _loginAttemptAt < LOGIN_RETRY_MS) return null;
-  _loginAttemptAt = now;
-  var username = getAccountUsername();
-  var password = getAccountPassword();
-  var loginPath = getLoginPath();
-  if (!username || !password || !loginPath) return null;
-  var url = /^https?:\/\//i.test(loginPath) ? loginPath : SITE + (loginPath.charAt(0) === "/" ? loginPath : "/" + loginPath);
-  try {
-    var got = await safePost(url, { username: username, password: password }, apiHeaders({ "Content-Type": "application/json", Accept: "application/json" }), { timeout: 20000 });
-    persistCookiesFromResponse(got.res);
-    var cookie = getSiteCookie();
-    if (cookie && cookie.indexOf("=") !== -1) return cookie;
-    var body = responseJson(got.res || { data: got.body });
-    if (body && (body.token || body.accessToken || body.session)) {
-      try { Widget.storage.set("jc.site_token", String(body.token || body.accessToken || body.session)); } catch (e) {}
-      return cookie || "token";
-    }
-    return null;
-  } catch (e) {
-    console.log("[javcosmos] login try skip:", (e && e.message) || e);
-    return null;
-  }
-}
-
-async function checkSiteLoginStatus() {
-  var cookie = getSiteCookie();
-  if (!cookie) return { loggedIn: false, reason: "未填 Cookie / 未登录" };
-  try {
-    var got = await safeGet(SITE + "/", htmlHeaders(SITE + "/"));
-    var html = typeof got.body === "string" ? got.body : "";
-    if (got.status === 401 || got.status === 403) return { loggedIn: false, reason: "Cookie 已失效（HTTP " + got.status + "）" };
-    if (/\/auth\/login/i.test(html) && /登录|Sign in/i.test(html) && html.indexOf("work-card") === -1) return { loggedIn: false, reason: "疑似被重定向到登录页，Cookie 可能失效" };
-    return { loggedIn: true, reason: "Cookie 有效（首页可达）" };
-  } catch (e) {
-    return { loggedIn: false, reason: String((e && e.message) || e) };
-  }
-}
-
-async function loadAccountLogin(params) {
-  try {
-    params = params || {};
-    rememberParams(params);
-    // 已有 Cookie 先校验；401 时若配了账号+登录接口，尝试自动登录一次
-    var status = await checkSiteLoginStatus();
-    if (!status.loggedIn) {
-      var tried = await trySiteLoginOnce();
-      if (tried) status = await checkSiteLoginStatus();
-    }
-    var username = getAccountUsername();
-    var desc = [];
-    desc.push(status.loggedIn ? "状态：已登录" : "状态：未登录");
-    desc.push("原因：" + status.reason);
-    if (username) desc.push("账号：" + username);
-    desc.push("最稳登录：浏览器登录 " + SITE + " 后，把 Cookie 复制到全局参数 site_cookie");
-    if (!getLoginPath()) desc.push("自动登录未开启：site_login_path 留空（需先核查 /auth/login 的真实提交地址）");
-    else desc.push("自动登录接口：" + getLoginPath());
-    desc.push("节流：请求最小间隔 " + requestMinIntervalMs() + "ms；403 冷却 90s，429 冷却 120s");
-    return [{
-      id: "account-login",
-      type: "url",
-      mediaType: "movie",
-      title: status.loggedIn ? "账号登录：已登录" : "账号登录：未登录",
-      description: desc.join("\n"),
-      link: SITE + "/auth/login",
-      coverUrl: SITE + "/apple-icon.png",
-    }];
-  } catch (error) {
-    console.error("[javcosmos/loadAccountLogin] 失败:", error.message || error);
-    throw error;
-  }
-}
 
 async function loadMagnetDetail(owned, params) {
   if (typeof handleGuangyaMagnetSave === "function") {
@@ -2360,8 +2172,6 @@ function playHeaders(workId) {
     Accept: "*/*",
     "X-Forward-Skip-Redirect-Probe": "1",
   };
-  var ck = getSiteCookie();
-  if (ck) headers.Cookie = ck;
   return headers;
 }
 
@@ -3315,9 +3125,13 @@ async function handleGuangyaMagnetSave(hash, params) {
  *     带 Cloudflare Turnstile，登录按钮初始 disabled；注册 /auth/sign-up，
  *     找回密码 /auth/forgot-password（用户名+恢复代码+新密码）；
  *     /account 未登录会重定向到 /auth/login?next=%2Faccount；
- *     提交 endpoint 与登录后凭证名、gate cookie 名均未确认，不猜测
+ *     提交 endpoint 与登录后凭证名均未确认，不猜测
  *     填之前请先在浏览器核查 /login 的 form action / 网络请求
- *   * gate cookie 同时带 jc-gate/jc-adult + 旧 jv-gate/jv-adult，cosmos 是否改名待核查；
+ *   * gate cookie 名已确认（2026-11-23 用户 DevTools 截图）：
+ *     site-gate=1、__Host-site-gate（JWT）、__Host-site-browse（JWT）、
+ *     sb-…（Supabase 登录会话）；1.0.2 起 mergeCookieJar 只补 site-gate=1，
+ *     不再发猜测的 jc-gate/jv-gate/jc-adult/jv-adult；__Host-* 是 JWT 不能凭空补，
+ *     靠用户粘贴的完整 Cookie 自带；
  *     HTML 代理 Worker 默认曾是旧站的 javverse-html-proxy（1.0.1 已去掉，不用再配）
  * 2026.11.23 / 1.5.1 — API 优先（用户要求“改成 API 请求”）
  * - 逐个核查（2026-11-23 浏览器只读 + 直接读接口）：
@@ -3354,6 +3168,25 @@ async function handleGuangyaMagnetSave(hash, params) {
  *   所以登录仍以手动 Cookie 为主；另附电脑上跑的 Scrapling 取 Cookie 脚本
  *   workspace/javcosmos/scrapling_login.py（登录页填账号密码、自动过 Turnstile、
  *   导出 Cookie 填 site_cookie）
- * - 待核查：/login 真实 endpoint、gate cookie 名、
+ * - 待核查：/login 真实 endpoint、
  *   Widget.http 能否读 Set-Cookie、cosmos 是否有 Cloudflare 质询
+ * - 1.0.2 — 门禁 Cookie 名按实测修正：site-gate 替代猜测的 jc-gate/jv-gate，
+ *   另见上条；其余逻辑与 1.0.1 相同，只需仓库同步上传覆盖，无需重新聚合。
+ * 2026.11.23 / 1.0.2 — 去掉账号登录功能 + 磁力容错（用户要求）
+ * - 删除：globalParams 的 site_cookie / site_username / site_password /
+ *   site_login_path、accountLogin 模块（loadAccountLogin）、
+ *   getSiteCookie / persistSiteCookie / persistCookiesFromResponse /
+ *   getAccountUsername / getAccountPassword / getLoginPath /
+ *   trySiteLoginOnce / checkSiteLoginStatus；401 不再自动登录，直接报错；
+ *   playHeaders 不再带 Cookie；403/类别报错文案不再提填 Cookie
+ * - 类别 403 实测：匿名 curl 测到 /genre/{id}、/work/{id}、
+ *   /api/works/{id}/magnets 均为 403，/api/works/random-pool 与
+ *   /api/cards?w= 均为 200；类别无公开 JSON API，仍走 HTML 直连 + RSC 回退，
+ *   门禁只补实测确认的 site-gate=1；直连仍被拦时只能等冷却
+ * - 磁力：功能本来就有（fetchMagnets 拉 /api/works/{id}/magnets，
+ *   详情「相似作品区」出磁力条目，点进转存光鸭）；因该接口匿名 403、
+ *   真实 JSON 结构从没见过，这次只做容错：兼容 items/data/results/
+ *   magnets/顶层数组五种包法与 magnet/magnet_link/url/link/裸 hash
+ *   多种字段名；接口仍 403 时磁力为空，不阻塞详情
+ * - 版本号已是 1.0.2（门禁修正时已升版），这次改完同步上传覆盖即可，无需重新聚合
  */
