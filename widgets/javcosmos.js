@@ -43,7 +43,7 @@
 WidgetMetadata = {
   id: "javverse.catalog", // 保持不变，避免已订阅用户失效；站点已换成 javcosmos
   title: "JAV Cosmos",
-  version: "2026.11.23.2",
+  version: "1.0.0",
   requiredVersion: "0.0.1",
   description:
     "JAV Cosmos：作品池 / 抽一部 / 千级类别（CF 代理）/ 详情加速（门禁复用 + HTML/磁力并行）/ 光鸭按目录转存 / 账号登录（手动 Cookie 优先）。站点在线流含私有 HLS Token，外置播放器不可播故不返回播放源。",
@@ -3476,6 +3476,7 @@ async function handleGuangyaMagnetSave(hash, params) {
  *   与 icon 同值 https://javcosmos.com/apple-icon.png），供 Module Hub
  *   上传时解析模块图标；聚合进 nfsw.rex 只需做一次，以后改动只同步
  *   上传仓库即可，不用重复聚合
+ * - 版本号按用户要求改为 1.0.0（此前为日期版 2026.11.23.2）
  * - 待核查：/login 真实 endpoint、gate cookie 名、
  *   Widget.http 能否读 Set-Cookie、cosmos 是否有 Cloudflare 质询
  */
